@@ -30,6 +30,7 @@ enum {
     UI_WIRE_SIZE_SURFACE_CLOSE = 8,      // surface
     UI_WIRE_SIZE_SET_TIMER = 16,         // id u32, reserved u32, deadline_ns u64
     UI_WIRE_SIZE_TIMER_FIRED = 24,       // id u32, reserved u32, deadline_ns u64, now_ns u64
+    UI_WIRE_SIZE_SET_CLIP = 12,          // node, flags u32 (bit 0: clip)
 };
 
 // set_text: fixed header, then spans, the family-name region (NUL-terminated names,

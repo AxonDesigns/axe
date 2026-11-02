@@ -168,6 +168,14 @@ ui_result ui_cmd_set_color(ui_cmd_writer *w, ui_handle node, float r, float g, f
     return UI_OK;
 }
 
+ui_result ui_cmd_set_clip(ui_cmd_writer *w, ui_handle node, bool clip) {
+    uint8_t *p = ui_wire_buf_op(&w->buf, UI_OP_SET_CLIP, UI_WIRE_SIZE_SET_CLIP);
+    if (!p) return UI_ERR_OUT_OF_MEMORY;
+    p = ui_wire_put_handle(p, node);
+    ui_wire_put_u32(p, clip ? 1u : 0u);
+    return UI_OK;
+}
+
 ui_result ui_cmd_start_spring(ui_cmd_writer *w, ui_handle node, ui_property property,
                               const float *target, float stiffness, float damping) {
     uint32_t n = ui_property_components(property);

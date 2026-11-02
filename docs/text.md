@@ -207,7 +207,7 @@ build, 2026-11-02):
 - Justification stretches spaces only; CJK text without spaces is not justified.
 - Without an explicit line height, a fallback font with tall metrics, such as Arabic, makes
   its lines taller (as in browsers). Set `line_height` for even spacing.
-- No clipping: text taller than its node overflows the node.
+- Clipping (`set_clip`) is rectangular: rounded corners don't clip.
 - No color glyphs (the atlas format field is ready for RGBA
   pages). No vertical text, hyphenation or dictionary breaking for Thai, Lao, Khmer and
   Myanmar.

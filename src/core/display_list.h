@@ -31,12 +31,20 @@ typedef enum ui_dl_kind {
     UI_DL_GLYPHS,
 } ui_dl_kind;
 
+// A scissor rectangle in physical pixels. UI_DL_NO_CLIP covers everything.
+typedef struct ui_dl_clip {
+    int32_t x, y, width, height;
+} ui_dl_clip;
+
+#define UI_DL_NO_CLIP ((ui_dl_clip){0, 0, INT32_MAX, INT32_MAX})
+
 // Paint order: batches draw in sequence; each covers a contiguous range of rects or of
 // glyphs (all on one atlas page).
 typedef struct ui_dl_batch {
     uint16_t kind;  // ui_dl_kind
     uint16_t page;  // glyph batches: atlas page
     uint32_t first, count;
+    ui_dl_clip clip;
 } ui_dl_batch;
 
 typedef struct ui_display_list {
@@ -59,6 +67,7 @@ typedef struct ui_display_list {
     ui_dl_glyph *glyphs;
     uint32_t batch_count, batch_capacity;
     ui_dl_batch *batches;
+    ui_dl_clip clip;      // applies to what is pushed next (a new clip starts a new batch)
 } ui_display_list;
 
 void ui_display_list_reset(ui_display_list *dl);

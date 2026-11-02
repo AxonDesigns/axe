@@ -116,3 +116,12 @@ target_compile_definitions(test_text_hittest PRIVATE UI_TEST_FONTS="${CMAKE_CURR
 target_link_libraries(test_text_hittest PRIVATE ui m)
 ui_target_warnings(test_text_hittest)
 add_test(NAME text_hittest COMMAND test_text_hittest)
+
+# Clipping text and descendants to a node.
+add_executable(test_clip test_clip.c)
+target_include_directories(test_clip PRIVATE ${PROJECT_SOURCE_DIR}/src)
+target_compile_definitions(test_clip PRIVATE _DEFAULT_SOURCE UI_TEST_FONTS="${CMAKE_CURRENT_SOURCE_DIR}/fonts")
+target_link_libraries(test_clip PRIVATE ui m)
+ui_target_warnings(test_clip)
+add_test(NAME clip COMMAND test_clip)
+set_tests_properties(clip PROPERTIES ENVIRONMENT "UI_GPU=software" TIMEOUT 120)

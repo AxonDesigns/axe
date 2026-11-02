@@ -67,6 +67,7 @@ A handle is 8 bytes: `u32 index`, `u32 generation`.
 | 7 | `set_timer` | `u32 id`, `u32` reserved (0), `u64 deadline_ns` (animation clock; `UINT64_MAX` disarms) | 16 |
 | 8 | `set_text` | see [Text](#text) | 72 + variable |
 | 9 | `append_text` | node, `u32 chunk_bytes`, chunk (padded to 4) | 12 + chunk |
+| 10 | `set_clip` | node, `u32 flags` (bit 0: clip; other bits must be 0) | 12 |
 
 ### Properties for `start_spring`
 
@@ -83,6 +84,14 @@ rate.
   current position and velocity**.
 - A `set_*` op on a property stops that property's spring.
 - `count` must equal the property's component count; stiffness must be > 0 and damping ≥ 0.
+
+### Clipping
+
+`set_clip` with bit 0 set clips the node's text and all of its descendants to the node's
+rect; a node inside another clipped node is clipped to the intersection. The clip is
+rectangular, in whole physical pixels: rounded corners are not clipped, and the node's own
+background is not affected. Text and rects entirely outside the clip are culled before
+they reach the display list, so clipped-away glyphs are never rasterized.
 
 ### Timers
 

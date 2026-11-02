@@ -70,6 +70,17 @@ milestone first.
     zero-initialized C struct) means the default language.
   - The writer accepts tags of ASCII letters, digits and hyphens, at most 35 bytes.
   - Language is part of the shaping style: a change splits runs.
+- **Clipping** (`set_clip`, opcode 10): a node's text and descendants are drawn only inside
+  its rect, intersected with its ancestors' clips.
+  - The scene keeps a clip per tree level while it walks, and every batch carries its
+    clip. The renderer turns it into a scissor rect (whole pixels, rounded outward, clamped
+    to the target), so the result is rectangular: rounded clipping needs the compositing
+    layers that come later.
+  - Rects and glyphs entirely outside the clip are culled before reaching the display
+    list. Culled glyphs are never rasterized, so a long clipped paragraph costs only its
+    visible lines.
+  - The node's own background is not clipped (it lies inside its rect anyway).
+  - `test_clip` checks pixels against the same scene without the clip.
 
 ### Unicode layer
 - **Version: Unicode 18.0.0.** This is the UCD that the pinned HarfBuzz 15.0.0 ships
@@ -287,8 +298,8 @@ milestone first.
   Loading fonts at runtime comes with assets and HMR.
 - **Scene:** a node may own a `ui_paragraph`.
   - It is laid out at the node's width × scale when its surface's list is built.
-  - Draw order is background, then text, then children. There is no clipping yet: text
-    overflowing the node's height is drawn.
+  - Draw order is background, then text, then children. Overflowing text is drawn unless
+    the node clips (see the follow-ups above).
   - Destroying a node frees its paragraph.
 - **Glyph placement:** pen x is floored to a pixel and the remainder picks one of 4 bins
   (rounding to the nearest bin; bin 4 carries into the next pixel). Baselines round to

@@ -35,6 +35,7 @@ void ui_scene_destroy(ui_scene *s) {
     ui_handle_table_destroy(&s->handles);
     free(s->nodes);
     free(s->scratch);
+    free(s->clips);
     memset(s, 0, sizeof *s);
 }
 
@@ -133,6 +134,7 @@ static ui_result validate(const uint8_t *data, size_t size) {
         case UI_OP_SET_CORNER_RADIUS: expected = UI_WIRE_SIZE_SET_CORNER_RADIUS; break;
         case UI_OP_SET_COLOR: expected = UI_WIRE_SIZE_SET_COLOR; break;
         case UI_OP_SET_TIMER: expected = UI_WIRE_SIZE_SET_TIMER; break;
+        case UI_OP_SET_CLIP: expected = UI_WIRE_SIZE_SET_CLIP; break;
         case UI_OP_START_SPRING:
             if (op.payload_size < UI_WIRE_SIZE_START_SPRING_BASE) return UI_ERR_MALFORMED;
             expected = UI_WIRE_SIZE_START_SPRING_BASE + 4u * ui_wire_get_u16(op.payload + 10);
@@ -269,6 +271,13 @@ static bool apply_node_op(ui_scene *s, const ui_wire_op *op, uint64_t now_ns) {
         n->color[3] = fminf(fmaxf(v[3], 0.f), 1.f);
         n->springs[UI_SPRING_COLOR].active = false;
         return true;
+    case UI_OP_SET_CLIP: {
+        if (!n) return drop(s, "set_clip", h);
+        uint32_t flags = ui_wire_get_u32(p + 8);
+        if (flags & ~1u) return drop(s, "set_clip (flags)", h);
+        n->clip = flags & 1u;
+        return true;
+    }
     case UI_OP_START_SPRING: {
         if (!n) return drop(s, "start_spring", h);
         ui_property prop = (ui_property)ui_wire_get_u16(p + 8);
@@ -561,7 +570,7 @@ ui_scene_root *ui_scene_root_of(ui_scene *s, ui_handle surface) { return find_ro
 
 // Appends the glyphs of a node's text. ox, oy: the node's origin in physical px.
 static ui_result build_text(ui_paragraph *p, float ox, float oy, float width, float scale,
-                            ui_display_list *dl, const ui_scene_text *t) {
+                            const float clip[4], ui_display_list *dl, const ui_scene_text *t) {
     ui_result res;
     const ui_paragraph_layout *l = ui_paragraph_layout_get(p, t->ctx, scale, width, &res);
     if (!l) return res == UI_ERR_WRONG_STATE ? UI_OK : res; // no fonts: nothing to draw
@@ -581,10 +590,19 @@ static ui_result build_text(ui_paragraph *p, float ox, float oy, float width, fl
                 px += 1;
             }
             float py = roundf(oy + g->y);
+            // Cull by line: a glyph is never further than a few em from its pen position.
+            float reach = (float)run->font.size_q / 64.f * 4;
+            if (px + reach < clip[0] || px - reach > clip[2] || py + reach < clip[1] ||
+                py - reach > clip[3])
+                continue;
             ui_glyph_key key = {run->font, g->glyph, bin};
             const ui_atlas_glyph *ag = ui_atlas_get(t->atlas, t->raster, font, key);
             if (!ag) return UI_ERR_OUT_OF_MEMORY;
             if (!ag->width) continue;
+            float gx0 = px + ag->left, gy0 = py + ag->top;
+            if (gx0 >= clip[2] || gy0 >= clip[3] || gx0 + ag->width <= clip[0] ||
+                gy0 + ag->height <= clip[1])
+                continue; // entirely outside the clip
             const ui_text_style *st = g->style ? &p->spans[g->style - 1].style : &p->base;
             float a = st->color[3];
             ui_dl_glyph dg = {
@@ -600,21 +618,43 @@ static ui_result build_text(ui_paragraph *p, float ox, float oy, float width, fl
     return UI_OK;
 }
 
+static ui_dl_clip scissor_of(const float c[4]) {
+    if (!isfinite(c[0]) && !isfinite(c[2])) return UI_DL_NO_CLIP;
+    float x0 = floorf(fmaxf(c[0], 0)), y0 = floorf(fmaxf(c[1], 0));
+    float x1 = ceilf(fminf(c[2], 1e9f)), y1 = ceilf(fminf(c[3], 1e9f));
+    return (ui_dl_clip){(int32_t)x0, (int32_t)y0, (int32_t)fmaxf(x1 - x0, 0),
+                        (int32_t)fmaxf(y1 - y0, 0)};
+}
+
+static void intersect(float out[4], const float c[4], float x0, float y0, float x1, float y1) {
+    out[0] = fmaxf(c[0], x0);
+    out[1] = fmaxf(c[1], y0);
+    out[2] = fminf(c[2], x1);
+    out[3] = fminf(c[3], y1);
+}
+
 ui_result ui_scene_build(ui_scene *s, ui_handle surface, ui_display_list *dl,
                          const ui_scene_text *text) {
     ui_scene_root *root = find_root(s, surface);
     if (!root) return UI_ERR_STALE_HANDLE;
     float scale = (float)dl->scale_120 / 120.f;
-    // Iterative pre-order walk; origins accumulate down the tree.
-    uint32_t slot = root->first_child;
+    // Iterative pre-order walk; origins accumulate down the tree, and so do clips: clip is
+    // what applies to the current node, s->clips[depth] what applied to its parent's level.
+    uint32_t slot = root->first_child, depth = 0;
     float ox = 0, oy = 0;
+    float clip[4] = {-INFINITY, -INFINITY, INFINITY, INFINITY};
     while (slot != UI_NO_SLOT) {
         ui_node *n = &s->nodes[slot];
         float x = ox + n->rect[0], y = oy + n->rect[1];
-        if (n->rect[2] > 0 && n->rect[3] > 0 && n->color[3] > 0) {
+        float px0 = x * scale, py0 = y * scale;
+        float px1 = px0 + n->rect[2] * scale, py1 = py0 + n->rect[3] * scale;
+        dl->clip = scissor_of(clip);
+        bool visible = px1 + 1 > clip[0] && px0 - 1 < clip[2] && py1 + 1 > clip[1] &&
+                       py0 - 1 < clip[3]; // 1 px: the rect shader's anti-aliasing margin
+        if (n->rect[2] > 0 && n->rect[3] > 0 && n->color[3] > 0 && visible) {
             float a = n->color[3];
             ui_dl_rect r = {
-                .x = x * scale, .y = y * scale,
+                .x = px0, .y = py0,
                 .width = n->rect[2] * scale, .height = n->rect[3] * scale,
                 .radius = n->radius * scale,
                 .color = {n->color[0] * a, n->color[1] * a, n->color[2] * a, a},
@@ -622,23 +662,32 @@ ui_result ui_scene_build(ui_scene *s, ui_handle surface, ui_display_list *dl,
             ui_result res = ui_display_list_push_rect(dl, &r);
             if (res != UI_OK) return res;
         }
+        // What the node's text and children see.
+        float inner[4] = {clip[0], clip[1], clip[2], clip[3]};
+        if (n->clip) intersect(inner, clip, px0, py0, px1, py1);
         if (n->text && text) {
-            ui_result res = build_text(n->text, x * scale, y * scale, n->rect[2] * scale, scale,
-                                       dl, text);
+            dl->clip = scissor_of(inner);
+            ui_result res = build_text(n->text, px0, py0, n->rect[2] * scale, scale, inner, dl,
+                                       text);
             if (res != UI_OK) return res;
         }
         if (n->first_child != UI_NO_SLOT) {
+            if (ui_grow((void **)&s->clips, &s->clip_capacity, depth + 1, sizeof *s->clips) != UI_OK)
+                return UI_ERR_OUT_OF_MEMORY;
+            memcpy(s->clips[depth++], clip, sizeof clip);
+            memcpy(clip, inner, sizeof clip);
             ox = x;
             oy = y;
             slot = n->first_child;
             continue;
         }
-        // Climb until a node has a next sibling, restoring the parent origin on the way.
+        // Climb until a node has a next sibling, restoring the parent origin and clip.
         while (slot != UI_NO_SLOT && s->nodes[slot].next_sibling == UI_NO_SLOT) {
             slot = s->nodes[slot].parent;
             if (slot != UI_NO_SLOT) {
                 ox -= s->nodes[slot].rect[0];
                 oy -= s->nodes[slot].rect[1];
+                memcpy(clip, s->clips[--depth], sizeof clip);
             }
         }
         if (slot != UI_NO_SLOT) slot = s->nodes[slot].next_sibling;

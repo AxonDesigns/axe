@@ -25,6 +25,7 @@ typedef enum ui_op {
     UI_OP_SET_TIMER = 7,
     UI_OP_SET_TEXT = 8,
     UI_OP_APPEND_TEXT = 9, // continues a set_text whose text is longer than one op holds
+    UI_OP_SET_CLIP = 10,
 } ui_op;
 
 // Animatable node properties and their component counts.
@@ -88,6 +89,9 @@ ui_result ui_cmd_set_rect(ui_cmd_writer *w, ui_handle node, float x, float y, fl
                           float height);
 ui_result ui_cmd_set_corner_radius(ui_cmd_writer *w, ui_handle node, float radius);
 ui_result ui_cmd_set_color(ui_cmd_writer *w, ui_handle node, float r, float g, float b, float a);
+// With `clip`, the node's text and its descendants are drawn only inside its rect
+// (rectangular: rounded corners are not clipped; the node's own background is unaffected).
+ui_result ui_cmd_set_clip(ui_cmd_writer *w, ui_handle node, bool clip);
 // Starts or retargets a spring (mass 1) on `property`; `target` has
 // ui_property_components(property) floats. A running spring keeps its velocity.
 ui_result ui_cmd_start_spring(ui_cmd_writer *w, ui_handle node, ui_property property,

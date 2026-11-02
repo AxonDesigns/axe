@@ -6,13 +6,19 @@ void ui_display_list_reset(ui_display_list *dl) {
     dl->rect_count = 0;
     dl->glyph_count = 0;
     dl->batch_count = 0;
+    dl->clip = UI_DL_NO_CLIP;
+}
+
+static bool same_clip(ui_dl_clip a, ui_dl_clip b) {
+    return a.x == b.x && a.y == b.y && a.width == b.width && a.height == b.height;
 }
 
 // Extends the last batch when it continues the same kind (and page), else starts one.
 static ui_result batch(ui_display_list *dl, ui_dl_kind kind, uint16_t page, uint32_t index) {
     if (dl->batch_count) {
         ui_dl_batch *last = &dl->batches[dl->batch_count - 1];
-        if (last->kind == kind && last->page == page && last->first + last->count == index) {
+        if (last->kind == kind && last->page == page && last->first + last->count == index &&
+            same_clip(last->clip, dl->clip)) {
             last->count++;
             return UI_OK;
         }
@@ -20,7 +26,7 @@ static ui_result batch(ui_display_list *dl, ui_dl_kind kind, uint16_t page, uint
     ui_result r = ui_grow((void **)&dl->batches, &dl->batch_capacity, dl->batch_count + 1,
                           sizeof *dl->batches);
     if (r != UI_OK) return r;
-    dl->batches[dl->batch_count++] = (ui_dl_batch){(uint16_t)kind, page, index, 1};
+    dl->batches[dl->batch_count++] = (ui_dl_batch){(uint16_t)kind, page, index, 1, dl->clip};
     return UI_OK;
 }
 

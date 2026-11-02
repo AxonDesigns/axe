@@ -630,8 +630,24 @@ static ui_result encode(ui_render *r, render_surface *s, const ui_display_list *
     wgpuRenderPassEncoderSetBindGroup(pass, 0, s->bind_group, 0, NULL);
     int bound = -1; // which pipeline is set: UI_DL_RECTS or UI_DL_GLYPHS
     int32_t page = -1;
+    uint32_t scissor[4] = {0, 0, dl->width, dl->height}; // the pass starts unclipped
     for (uint32_t i = 0; i < dl->batch_count; i++) {
         const ui_dl_batch *b = &dl->batches[i];
+        // The batch's clip, clamped to the target (a scissor must lie inside it).
+        int64_t cx0 = b->clip.x, cy0 = b->clip.y;
+        int64_t cx1 = cx0 + b->clip.width, cy1 = cy0 + b->clip.height;
+        uint32_t x0 = (uint32_t)(cx0 < 0 ? 0 : cx0 > dl->width ? dl->width : cx0);
+        uint32_t y0 = (uint32_t)(cy0 < 0 ? 0 : cy0 > dl->height ? dl->height : cy0);
+        uint32_t x1 = (uint32_t)(cx1 < x0 ? x0 : cx1 > dl->width ? dl->width : cx1);
+        uint32_t y1 = (uint32_t)(cy1 < y0 ? y0 : cy1 > dl->height ? dl->height : cy1);
+        if (x1 == x0 || y1 == y0) continue; // clipped away entirely
+        if (x0 != scissor[0] || y0 != scissor[1] || x1 - x0 != scissor[2] || y1 - y0 != scissor[3]) {
+            wgpuRenderPassEncoderSetScissorRect(pass, x0, y0, x1 - x0, y1 - y0);
+            scissor[0] = x0;
+            scissor[1] = y0;
+            scissor[2] = x1 - x0;
+            scissor[3] = y1 - y0;
+        }
         if (b->kind == UI_DL_GLYPHS) {
             const atlas_page *ap = b->page < UI_ATLAS_MAX_PAGES ? &r->atlas[b->page] : NULL;
             if (!ap || !ap->bind_group) continue; // never sent: nothing to draw from

@@ -25,6 +25,7 @@ typedef struct ui_node {
     float color[4];        // linear, straight alpha
     ui_spring springs[UI_SPRING_COUNT];
     ui_paragraph *text;    // NULL when the node has no text
+    bool clip;             // text and descendants are clipped to the rect
 } ui_node;
 
 typedef struct ui_scene_root {
@@ -58,6 +59,8 @@ typedef struct ui_scene {
     ui_scene_stats stats;
     uint32_t *scratch; // traversal stack
     uint32_t scratch_capacity;
+    float (*clips)[4]; // build: the clip of each ancestor level (x0, y0, x1, y1, physical px)
+    uint32_t clip_capacity;
     ui_scene_timer_fn timer_fn;
     void *timer_user;
 } ui_scene;
