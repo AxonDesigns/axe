@@ -20,6 +20,52 @@ milestone first.
   crate rebuilds.
 - On failure, the test log and any golden-diff PNGs are uploaded as artifacts.
 
+### Unicode layer
+- **Version: Unicode 18.0.0.** This is the UCD that the pinned HarfBuzz 15.0.0 ships
+  (`hb-ucd-table.hh`). HarfBuzz's built-in UCD drives shaping and our tables drive
+  segmentation, bidi and script runs, so the two never disagree about a character.
+  `tools/unicode/fetch.sh` pins the source files by sha256.
+- **Tables are generated and committed:** `tools/unicode/gen_tables.py` (Python 3, stdlib,
+  run as `python3 -I`) writes `src/unicode/ucd_tables.{h,c}`.
+  - Each code point maps to one 8-byte record: line break class, bidi class, grapheme
+    break, general category, script, flags (Extended_Pictographic, East Asian, InCB,
+    Default_Ignorable) and a Script_Extensions index.
+  - 1,154 distinct records are found through a two-stage table with blocks of 128, about
+    110 KB in all.
+  - Enum values are fixed in the generator, not taken from file order, so a version bump
+    doesn't renumber them.
+- **The algorithms work on code point arrays.** Callers keep a parallel byte-offset array,
+  so every later stage still speaks UTF-8 byte offsets.
+  - Line breaking and bidi take a reusable context and allocate only when they grow.
+  - Grapheme breaking allocates nothing.
+- **Conformance: 100%, no deviations, nothing skipped.** BidiCharacterTest (91,707 cases),
+  LineBreakTest (19,346) and GraphemeBreakTest (853) run as the CTest tests
+  `unicode_bidi`, `unicode_linebreak` and `unicode_grapheme`. The files are committed under
+  `tests/unicode/` (about 10 MB, Unicode License v3) so tests run offline.
+- **Changes in 18.0 that the code follows:**
+  - LB12a no longer allows a break between BA and GL.
+  - U+00AD is HH, and U+2012/U+2013 are BA.
+  - GB9c is `\p{InCB=Linker} \p{InCB=Extend}* × \p{InCB=Consonant}`.
+- **Line breaking groups LB9 units first.** A base character plus the combining marks it
+  absorbs is one unit, and the rules are then evaluated in order between adjacent units.
+  - A CM that starts a unit becomes AL with the properties of U+0041 (LB10).
+  - SA characters resolve by general category (LB1). There is no dictionary breaking for
+    Thai, Lao, Khmer or Myanmar, so those lines break only at spaces and punctuation.
+- **Bidi keeps removed (X9) characters in place and skips them.** Level runs and isolating
+  run sequences are lists of kept indices.
+  - I1–I2 run once per paragraph after all sequences, so sos and eos see explicit levels.
+  - Removed characters render at the level of the character before them.
+  - BD16 pairs are unbounded per sequence; only the 63-deep opening stack is limited, as
+    the spec requires.
+- **Script runs (UAX #24):**
+  - Common and Inherited join the surrounding run; leading ones join the first real script.
+  - Script_Extensions narrow a run's candidate set. A character starts a new run only when
+    the intersection would be empty.
+  - A closing bracket takes its opener's script.
+  - All-Common text resolves to Zyyy.
+- **UTF-8 policy:** one U+FFFD per maximal subpart (Unicode §3.9, as in WHATWG).
+  `ui_utf8_sanitize` returns the replacement count, which the wire counts in stats.
+
 ## Milestone 0.2: hardening before M1
 
 ### Idle frames

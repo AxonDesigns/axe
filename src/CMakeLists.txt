@@ -26,7 +26,14 @@ add_library(ui STATIC
     platform/headless/headless.c
     platform/wayland/pacing.c
     platform/wayland/wayland.c
-    render/render.c)
+    render/render.c
+    unicode/bidi.c
+    unicode/grapheme.c
+    unicode/linebreak.c
+    unicode/script.c
+    unicode/ucd.c
+    unicode/ucd_tables.c
+    unicode/utf8.c)
 target_include_directories(ui
     PUBLIC ${PROJECT_SOURCE_DIR}/include
     PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})

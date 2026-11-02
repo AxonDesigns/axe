@@ -33,3 +33,23 @@ foreach(name IN ITEMS backpressure stall)
     add_test(NAME ${name} COMMAND test_${name})
     set_tests_properties(${name} PROPERTIES ENVIRONMENT "UI_GPU=software" TIMEOUT 120)
 endforeach()
+
+# The Unicode layer: unit tests, then the official conformance files (Unicode 18.0).
+add_executable(test_unicode test_unicode.c)
+target_include_directories(test_unicode PRIVATE ${PROJECT_SOURCE_DIR}/src)
+target_link_libraries(test_unicode PRIVATE ui m)
+ui_target_warnings(test_unicode)
+add_test(NAME unicode COMMAND test_unicode)
+
+add_executable(test_unicode_conformance test_unicode_conformance.c)
+target_include_directories(test_unicode_conformance PRIVATE ${PROJECT_SOURCE_DIR}/src)
+target_link_libraries(test_unicode_conformance PRIVATE ui m)
+ui_target_warnings(test_unicode_conformance)
+foreach(kind_file IN ITEMS "bidi:BidiCharacterTest" "linebreak:LineBreakTest"
+                           "grapheme:GraphemeBreakTest")
+    string(REPLACE ":" ";" kind_file "${kind_file}")
+    list(GET kind_file 0 kind)
+    list(GET kind_file 1 file)
+    add_test(NAME unicode_${kind}
+             COMMAND test_unicode_conformance ${kind} ${CMAKE_CURRENT_SOURCE_DIR}/unicode/${file}.txt)
+endforeach()
