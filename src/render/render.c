@@ -72,15 +72,20 @@ struct ui_render {
 
 // ---- Thread check ------------------------------------------------------------------------
 
+#ifndef NDEBUG
 // Depth of render-actor execution on this thread. WebGPU may only be called while > 0.
 static thread_local int render_scope;
+#define RENDER_SCOPE_ENTER() (render_scope++)
+#define RENDER_SCOPE_EXIT() (render_scope--)
 
-#ifndef NDEBUG
 void ui_gpu_check_thread(const char *fn) {
     if (render_scope > 0) return;
     fprintf(stderr, "webgpu call %s outside the render actor\n", fn);
     abort();
 }
+#else
+#define RENDER_SCOPE_ENTER() ((void)0)
+#define RENDER_SCOPE_EXIT() ((void)0)
 #endif
 
 // ---- Helpers -----------------------------------------------------------------------------
@@ -639,16 +644,16 @@ static void release_all(ui_render *r);
 
 static ui_result render_start(void *self) {
     ui_render *r = self;
-    render_scope++;
+    RENDER_SCOPE_ENTER();
     ui_result res = init_device(r);
     if (res != UI_OK) release_all(r); // stop() is not called after a failed start
-    render_scope--;
+    RENDER_SCOPE_EXIT();
     return res;
 }
 
 static void render_step(void *self) {
     ui_render *r = self;
-    render_scope++;
+    RENDER_SCOPE_ENTER();
     ui_msg msg;
     while (ui_queue_pop(&r->actor.queue, &msg)) {
         switch (msg.type) {
@@ -690,7 +695,7 @@ static void render_step(void *self) {
         else drawn = draw_window(r, s, dl);
         frame_done(r, s, dl->frame_id, !drawn);
     }
-    render_scope--;
+    RENDER_SCOPE_EXIT();
 }
 
 static void release_all(ui_render *r) {
@@ -719,9 +724,9 @@ static void release_all(ui_render *r) {
 }
 
 static void render_stop(void *self) {
-    render_scope++;
+    RENDER_SCOPE_ENTER();
     release_all(self);
-    render_scope--;
+    RENDER_SCOPE_EXIT();
 }
 
 ui_result ui_render_create(const ui_render_desc *desc, ui_render **out) {
