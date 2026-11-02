@@ -31,6 +31,7 @@ add_library(ui STATIC
     render/render.c
     text/atlas.c
     text/font_registry.c
+    text/hittest.c
     text/paragraph.c
     text/raster.c
     text/shape.c

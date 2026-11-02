@@ -282,6 +282,36 @@ milestone first.
   - A deliberately broken render, keeping only the newest queued update as a mailbox
     would, fails both variants.
 
+### Hit testing
+- **Internal C API** (`src/text/hittest.h`) over a paragraph's last layout. It becomes
+  public, and asynchronous for languages, when editing lands in the core.
+- **Data model:** per line, grapheme clusters in visual order with their byte range,
+  extent and direction.
+  - A cluster's logical end is the next cluster in logical order: the next glyph group to
+    the right in LTR runs, to the left in RTL runs.
+  - A glyph group covering several graphemes (a ligature) is split per grapheme, at GDEF
+    ligature carets when the font has them for that glyph, evenly otherwise. The "ffi"
+    ligature in "office" still gets a caret between each letter.
+  - Hard line breaks are not clusters, so a caret never sits after a newline on its own
+    line.
+  - Built lazily on the first query after a layout, and cached with it.
+- **Affinity:** DOWNSTREAM attaches the caret to the character after the offset, UPSTREAM
+  to the one before it.
+  - At a soft wrap, upstream is the end of the earlier line. After a hard break the next
+    line is used whatever the affinity.
+  - At a direction change, upstream is the trailing edge of the preceding character's run
+    and downstream the leading edge of the following one. Offset 4 in "abc אבג def" has
+    one caret at each end of the Hebrew run.
+- **Point to offset:** the line by y (clamped), then the cluster by x (clamped to the line
+  ends). The leading half (left in LTR, right in RTL) gives the cluster's start with
+  downstream affinity; the trailing half gives its end with upstream affinity.
+- **Selection rectangles:** per line, the clusters overlapping the range, merged where they
+  touch in visual order, at the full line-box height. A range across a direction change
+  gives several rectangles on one line.
+- **Carets** are centered on the boundary with the caller's width, spanning the line box.
+  An offset inside a cluster snaps to its start, and an empty line puts the caret at its
+  start edge.
+
 ## Milestone 0.2: hardening before M1
 
 ### Idle frames

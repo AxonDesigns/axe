@@ -89,6 +89,12 @@ typedef struct ui_paragraph {
     bool shaped_valid;
     ui_paragraph_layout layout;
     bool layout_valid;
+    // Hit-testing data of the current layout (text/hittest.h), built on first use.
+    struct ui_hit_cluster *clusters;
+    uint32_t cluster_count, cluster_capacity;
+    uint32_t *line_clusters;  // first cluster of each line, line_count + 1 entries
+    uint32_t line_cluster_capacity;
+    bool hits_valid;
     // How often each level was recomputed (tests, devtools).
     uint64_t shape_count, layout_count;
 } ui_paragraph;

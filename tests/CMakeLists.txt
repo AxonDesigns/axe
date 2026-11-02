@@ -108,3 +108,11 @@ target_include_directories(test_text_wire PRIVATE ${PROJECT_SOURCE_DIR}/src)
 target_link_libraries(test_text_wire PRIVATE ui m)
 ui_target_warnings(test_text_wire)
 add_test(NAME text_wire COMMAND test_text_wire)
+
+# Hit testing.
+add_executable(test_text_hittest test_text_hittest.c)
+target_include_directories(test_text_hittest PRIVATE ${PROJECT_SOURCE_DIR}/src)
+target_compile_definitions(test_text_hittest PRIVATE UI_TEST_FONTS="${CMAKE_CURRENT_SOURCE_DIR}/fonts")
+target_link_libraries(test_text_hittest PRIVATE ui m)
+ui_target_warnings(test_text_hittest)
+add_test(NAME text_hittest COMMAND test_text_hittest)

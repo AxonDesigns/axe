@@ -49,6 +49,8 @@ void ui_paragraph_free(ui_paragraph *p) {
     free(p->ellipsis);
     ui_shaped_paragraph_free(&p->shaped);
     ui_paragraph_layout_free(&p->layout);
+    free(p->clusters);
+    free(p->line_clusters);
     memset(p, 0, sizeof *p);
 }
 
@@ -93,6 +95,7 @@ ui_result ui_paragraph_set(ui_paragraph *p, const ui_paragraph_desc *d) {
     p->ellipsis_len = d->ellipsis_len;
     p->shaped_valid = false;
     p->layout_valid = false;
+    p->hits_valid = false;
     return UI_OK;
 }
 
@@ -508,6 +511,7 @@ const ui_paragraph_layout *ui_paragraph_layout_get(ui_paragraph *p, ui_text_cont
             return NULL;
         }
         p->layout_valid = true;
+        p->hits_valid = false;
         p->layout_count++;
     }
     return &p->layout;
