@@ -25,6 +25,10 @@ typedef struct ui_actor {
     ui_result start_result;
 } ui_actor;
 
+// A queue_capacity of UI_QUEUE_UNBOUNDED makes the actor's queue grow instead of refusing
+// messages (for inboxes whose messages must never be lost).
+#define UI_QUEUE_UNBOUNDED 0u
+
 // `waker` overrides the default (notify `signal`) for actors that sleep elsewhere, such as
 // the core, which sleeps in the platform's event wait.
 ui_result ui_actor_init(ui_actor *a, const char *name, void *self, ui_result (*start)(void *),

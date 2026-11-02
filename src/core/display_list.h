@@ -27,6 +27,8 @@ typedef struct ui_display_list {
     uint32_t scale_120;
     uint64_t platform_token; // platform state this size corresponds to (Wayland configure serial)
     float clear[4];
+    uint64_t epoch;      // core frame the list was built in (glyph eviction bound)
+    uint64_t atlas_seq;  // newest atlas update the list's glyphs need applied first
     uint32_t rect_count, rect_capacity;
     ui_dl_rect *rects;
 } ui_display_list;

@@ -9,6 +9,7 @@
 #include <threads.h>
 #include <time.h>
 
+#include "text/atlas.h"
 #include "webgpu_checked.h"
 
 #define MODULE "render"
@@ -42,6 +43,13 @@ typedef struct render_surface {
     uint64_t instance_bytes;
 } render_surface;
 
+// One atlas page texture. The core decides what goes where; this side only uploads.
+typedef struct atlas_page {
+    WGPUTexture texture;
+    WGPUTextureView view;
+    uint32_t size;
+} atlas_page;
+
 typedef struct pipeline_entry {
     WGPUTextureFormat format;
     WGPURenderPipeline pipeline;
@@ -61,6 +69,8 @@ struct ui_render {
     pipeline_entry pipelines[MAX_PIPELINES];
     uint32_t pipeline_count;
     render_surface surfaces[UI_MAX_SURFACES];
+    atlas_page atlas[UI_ATLAS_MAX_PAGES];
+    uint64_t atlas_seq; // newest atlas update applied
     // wgpu-native extensions, used only when available.
     struct {
         bool device_poll;
@@ -448,6 +458,77 @@ static ui_result ensure_offscreen(ui_render *r, render_surface *s, uint32_t widt
     return s->offscreen_view ? UI_OK : UI_ERR_GPU;
 }
 
+// ---- Atlas -------------------------------------------------------------------------------
+
+static void release_page(atlas_page *p) {
+    if (p->view) wgpuTextureViewRelease(p->view);
+    if (p->texture) {
+        wgpuTextureDestroy(p->texture);
+        wgpuTextureRelease(p->texture);
+    }
+    *p = (atlas_page){0};
+}
+
+static ui_result create_page(ui_render *r, atlas_page *p, uint32_t size, uint16_t format) {
+    release_page(p);
+    WGPUTextureDescriptor td = WGPU_TEXTURE_DESCRIPTOR_INIT;
+    td.label = sv("glyph atlas");
+    td.usage = WGPUTextureUsage_TextureBinding | WGPUTextureUsage_CopyDst;
+    td.size = (WGPUExtent3D){size, size, 1};
+    td.format = format == UI_ATLAS_RGBA8 ? WGPUTextureFormat_RGBA8Unorm : WGPUTextureFormat_R8Unorm;
+    p->texture = wgpuDeviceCreateTexture(r->device, &td);
+    p->view = p->texture ? wgpuTextureCreateView(p->texture, NULL) : NULL;
+    p->size = size;
+    if (!p->view) return UI_ERR_GPU;
+    // New pages start transparent (WebGPU zero-initializes, but say so explicitly: released
+    // and recreated slots must never show stale glyphs).
+    uint32_t bpp = format == UI_ATLAS_RGBA8 ? 4 : 1;
+    uint8_t *zeros = calloc((size_t)size * size, bpp);
+    if (!zeros) return UI_ERR_OUT_OF_MEMORY;
+    WGPUTexelCopyTextureInfo dst = WGPU_TEXEL_COPY_TEXTURE_INFO_INIT;
+    dst.texture = p->texture;
+    WGPUTexelCopyBufferLayout layout = WGPU_TEXEL_COPY_BUFFER_LAYOUT_INIT;
+    layout.bytesPerRow = size * bpp;
+    layout.rowsPerImage = size;
+    wgpuQueueWriteTexture(r->queue, &dst, zeros, (size_t)size * size * bpp, &layout,
+                          &(WGPUExtent3D){size, size, 1});
+    free(zeros);
+    return UI_OK;
+}
+
+// Applies one update: page creations and releases, then texel writes, in order. Runs only
+// between display lists (see the protocol in text/atlas.h), so a write is always queued
+// after every draw that was submitted before it.
+static ui_result apply_atlas_update(ui_render *r, const ui_atlas_update *u) {
+    for (uint32_t i = 0; i < u->page_op_count; i++) {
+        const ui_atlas_page_op *op = &u->page_ops[i];
+        if (op->page >= UI_ATLAS_MAX_PAGES) return UI_ERR_INVALID_ARGUMENT;
+        if (!op->size) {
+            release_page(&r->atlas[op->page]);
+        } else {
+            ui_result res = create_page(r, &r->atlas[op->page], op->size, op->format);
+            if (res != UI_OK) return res;
+        }
+    }
+    for (uint32_t i = 0; i < u->write_count; i++) {
+        const ui_atlas_write *w = &u->writes[i];
+        atlas_page *p = w->page < UI_ATLAS_MAX_PAGES ? &r->atlas[w->page] : NULL;
+        if (!p || !p->texture || w->x + w->width > p->size || w->y + w->height > p->size)
+            return UI_ERR_INVALID_ARGUMENT;
+        WGPUTexelCopyTextureInfo dst = WGPU_TEXEL_COPY_TEXTURE_INFO_INIT;
+        dst.texture = p->texture;
+        dst.origin = (WGPUOrigin3D){w->x, w->y, 0};
+        WGPUTexelCopyBufferLayout layout = WGPU_TEXEL_COPY_BUFFER_LAYOUT_INIT;
+        layout.bytesPerRow = w->width;
+        layout.rowsPerImage = w->height;
+        wgpuQueueWriteTexture(r->queue, &dst, u->pixels + w->offset,
+                              (size_t)w->width * w->height, &layout,
+                              &(WGPUExtent3D){w->width, w->height, 1});
+    }
+    r->atlas_seq = u->seq;
+    return UI_OK;
+}
+
 // ---- Frames ------------------------------------------------------------------------------
 
 static ui_result encode(ui_render *r, render_surface *s, const ui_display_list *dl,
@@ -651,38 +732,48 @@ static ui_result render_start(void *self) {
     return res;
 }
 
+static void handle_message(ui_render *r, ui_msg *msg) {
+    switch (msg->type) {
+    case UI_MSG_SURFACE_ADD: {
+        ui_result res = add_surface(r, msg->ptr);
+        if (res != UI_OK) {
+            UI_ERROR(r->log, MODULE, "cannot add surface: %s", ui_result_str(res));
+            report_failure(r, res);
+        }
+        break;
+    }
+    case UI_MSG_SURFACE_REMOVE: {
+        render_surface *s = find_surface(r, msg->surface);
+        if (s) release_surface(s);
+        break;
+    }
+    case UI_MSG_CAPTURE: {
+        ui_capture_request *req = msg->ptr;
+        render_surface *s = find_surface(r, req->surface);
+        req->result = s ? capture(r, s, req->image) : UI_ERR_STALE_HANDLE;
+        atomic_store(&req->done, true);
+        ui_signal_notify(r->desc.progress);
+        break;
+    }
+    case UI_MSG_ATLAS_UPDATE: {
+        ui_result res = apply_atlas_update(r, msg->ptr);
+        if (res != UI_OK) {
+            UI_ERROR(r->log, MODULE, "cannot apply atlas update: %s", ui_result_str(res));
+            report_failure(r, res);
+        }
+        break;
+    }
+    default:
+        break;
+    }
+    ui_msg_drop(msg);
+}
+
 static void render_step(void *self) {
     ui_render *r = self;
     RENDER_SCOPE_ENTER();
     ui_msg msg;
-    while (ui_queue_pop(&r->actor.queue, &msg)) {
-        switch (msg.type) {
-        case UI_MSG_SURFACE_ADD: {
-            ui_result res = add_surface(r, msg.ptr);
-            if (res != UI_OK) {
-                UI_ERROR(r->log, MODULE, "cannot add surface: %s", ui_result_str(res));
-                report_failure(r, res);
-            }
-            break;
-        }
-        case UI_MSG_SURFACE_REMOVE: {
-            render_surface *s = find_surface(r, msg.surface);
-            if (s) release_surface(s);
-            break;
-        }
-        case UI_MSG_CAPTURE: {
-            ui_capture_request *req = msg.ptr;
-            render_surface *s = find_surface(r, req->surface);
-            req->result = s ? capture(r, s, req->image) : UI_ERR_STALE_HANDLE;
-            atomic_store(&req->done, true);
-            ui_signal_notify(r->desc.progress);
-            break;
-        }
-        default:
-            break;
-        }
-        ui_msg_drop(&msg);
-    }
+    while (ui_queue_pop(&r->actor.queue, &msg)) handle_message(r, &msg);
 
     if (atomic_load(&r->device_lost)) report_failure(r, UI_ERR_GPU);
     for (uint32_t i = 0; i < UI_MAX_SURFACES && !r->failed; i++) {
@@ -690,6 +781,13 @@ static void render_step(void *self) {
         if (!s->used) continue;
         const ui_display_list *dl = ui_mailbox_take(s->mailbox);
         if (!dl) continue;
+        // The core pushed this list's atlas updates before publishing it, so they are in the
+        // inbox now; apply them (and anything queued before them) first.
+        while (r->atlas_seq < dl->atlas_seq && ui_queue_pop(&r->actor.queue, &msg))
+            handle_message(r, &msg);
+        if (r->atlas_seq < dl->atlas_seq)
+            UI_ERROR(r->log, MODULE, "frame %" PRIu64 " needs atlas update %" PRIu64 ", have %" PRIu64,
+                     dl->frame_id, dl->atlas_seq, r->atlas_seq);
         bool drawn = true;
         if (s->kind == UI_NATIVE_OFFSCREEN) draw_offscreen(r, s, dl);
         else drawn = draw_window(r, s, dl);
@@ -702,6 +800,7 @@ static void release_all(ui_render *r) {
     for (uint32_t i = 0; i < UI_MAX_SURFACES; i++) {
         if (r->surfaces[i].used) release_surface(&r->surfaces[i]);
     }
+    for (uint32_t i = 0; i < UI_ATLAS_MAX_PAGES; i++) release_page(&r->atlas[i]);
     for (uint32_t i = 0; i < r->pipeline_count; i++) wgpuRenderPipelineRelease(r->pipelines[i].pipeline);
     r->pipeline_count = 0;
     if (r->pipeline_layout) wgpuPipelineLayoutRelease(r->pipeline_layout);
@@ -736,7 +835,7 @@ ui_result ui_render_create(const ui_render_desc *desc, ui_render **out) {
     r->log = desc->log;
     atomic_init(&r->device_lost, false);
     ui_result res = ui_actor_init(&r->actor, "render", r, render_start, render_step, render_stop,
-                                  64, (ui_waker){0});
+                                  UI_QUEUE_UNBOUNDED, (ui_waker){0});
     if (res != UI_OK) {
         free(r);
         return res;

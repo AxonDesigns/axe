@@ -124,6 +124,59 @@ milestone first.
   - The subset is a Modified Version under the OFL. Its name doesn't use the declared
     Reserved Font Name "Source".
 
+### Rasterizer and atlas
+- **Coverage rasterizer** (`src/text/raster.c`). Outlines come from HarfBuzz's draw API
+  and are flattened adaptively: the segment count bounds the chord error |B''|h²/8 by
+  1/16 px, up to 128 segments per curve.
+  - Each line segment adds its exact trapezoid area to an accumulation buffer, in the
+    scheme of font-rs and stb_truetype 2. A row prefix sum then gives coverage =
+    min(1, |winding area|).
+  - This is exact for non-overlapping contours and for same-direction overlaps (variable
+    fonts overlap contours this way). Opposite-direction overlaps cancel.
+  - There is no supersampling. Tests check a 10×10 square at quarter-pixel offsets to
+    within 8-bit quantization, and a circle (cubic and quadratic) to within 0.5% of πr².
+  - Bounds come from the flattened segments, not from HarfBuzz extents, so a bitmap is
+    never clipped.
+  - Bitmaps larger than 4096 px per side are refused.
+- **Subpixel positioning:** 4 horizontal bins (0, ¼, ½, ¾ px), each rasterized at its
+  offset. There is no vertical bin because baselines snap to whole pixels.
+- **Cache key:** face, interned variation instance, physical size in 1/64 px, glyph ID and
+  bin. The table uses open addressing (linear probing with tombstones) and rehashes at
+  75% load.
+- **Pages:** 1024² R8 by default, up to 8 (`ui_atlas_desc`). Each page op carries a
+  format, so RGBA pages for color glyphs need no protocol change.
+  - Shelf packing: shelf heights round up to 4 px, and a glyph takes the shortest shelf
+    within +25% of its height. Freed columns are kept sorted and merged, and space next
+    to a shelf's bump pointer returns to it.
+  - An empty trailing shelf gives its rows back to the page.
+  - Glyphs need no padding because the shader reads texels with `textureLoad` at exact
+    integer positions.
+  - Glyphs larger than a quarter page are rejected and counted.
+- **Eviction.** A glyph is evicted once it has gone unused for `evict_frames` epochs
+  (default 300). An epoch is one core frame that draws, so an idle app doesn't age glyphs.
+  - A glyph used at or after the protect epoch is never evicted. The protect epoch is the
+    oldest epoch among the surfaces' newest unfinished display lists.
+  - Under pressure (no space and no new page allowed), every glyph that is not used this
+    frame and not protected is dropped at once, then placement is retried. Dropping
+    everything is blunt but simple and correct, and pressure needs a full atlas.
+  - A glyph that still doesn't fit is cached as empty (drawn as nothing, counted as
+    rejected), so it isn't retried every frame. It ages out like any other entry.
+  - Pages after the first are released once empty for the eviction window.
+- **Uploads survive mailbox replacement.** Atlas changes travel in `UI_MSG_ATLAS_UPDATE`
+  messages (one per frame, increasing `seq`) through the render actor's inbox. That inbox
+  is now **unbounded**, so it can't refuse or drop one.
+  - The core pushes a frame's update before publishing that frame's lists, and stamps
+    each list with `atlas_seq`.
+  - The render actor handles its inbox only between lists. After taking a list, it applies
+    queued updates until `atlas_seq` is reached, then draws.
+  - An update that belonged to a replaced (undrawn) list is still in the FIFO and is
+    applied before the next list.
+  - Every texture write is therefore queued after any submitted draw that could read the
+    old texels. With the protect epoch, no list still to be drawn references an evicted
+    region.
+  - A list whose `atlas_seq` the inbox can't satisfy is a protocol violation. It is logged
+    and drawn anyway.
+
 ## Milestone 0.2: hardening before M1
 
 ### Idle frames

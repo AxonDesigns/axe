@@ -17,7 +17,8 @@ ui_result ui_actor_init(ui_actor *a, const char *name, void *self, ui_result (*s
     ui_result r = ui_signal_init(&a->signal);
     if (r != UI_OK) return r;
     if (!waker.wake) waker = (ui_waker){ui_signal_wake_fn, &a->signal};
-    r = ui_queue_init(&a->queue, queue_capacity, waker);
+    r = queue_capacity == UI_QUEUE_UNBOUNDED ? ui_queue_init_unbounded(&a->queue, 64, waker)
+                                             : ui_queue_init(&a->queue, queue_capacity, waker);
     if (r != UI_OK) ui_signal_destroy(&a->signal);
     return r;
 }
@@ -32,6 +33,7 @@ void ui_msg_drop(ui_msg *msg) {
     case UI_MSG_CMD_BUFFER:
     case UI_MSG_EVENT_BUFFER:
     case UI_MSG_SURFACE_ADD:
+    case UI_MSG_ATLAS_UPDATE:
         free(msg->ptr);
         break;
     default:

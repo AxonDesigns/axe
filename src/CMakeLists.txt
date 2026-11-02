@@ -28,7 +28,9 @@ add_library(ui STATIC
     platform/wayland/pacing.c
     platform/wayland/wayland.c
     render/render.c
+    text/atlas.c
     text/font_registry.c
+    text/raster.c
     text/shape.c
     unicode/bidi.c
     unicode/grapheme.c

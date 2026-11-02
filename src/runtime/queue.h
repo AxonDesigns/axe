@@ -18,6 +18,7 @@ typedef enum ui_msg_type {
     UI_MSG_SURFACE_ADD,     // ptr: ui_render_surface_desc* (ownership moves)
     UI_MSG_SURFACE_REMOVE,  // surface
     UI_MSG_CAPTURE,         // ptr: ui_capture_request* (owned by the requester)
+    UI_MSG_ATLAS_UPDATE,    // ptr: ui_atlas_update* (malloc'd, ownership moves)
     // render -> core
     UI_MSG_FRAME_DONE,      // surface, u64: frame id
     UI_MSG_RENDER_FAILED,   // u64: ui_result
