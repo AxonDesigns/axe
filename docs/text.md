@@ -209,11 +209,12 @@ build, 2026-11-02):
 - Without an explicit line height, a fallback font with tall metrics, such as Arabic, makes
   its lines taller (as in browsers). Set `line_height` for even spacing.
 - Clipping (`set_clip`) is rectangular: rounded corners don't clip.
-- No color glyphs (the atlas format field is ready for RGBA
-  pages). No vertical text, hyphenation or dictionary breaking for Thai, Lao, Khmer and
-  Myanmar.
-- The first frame that shows new text pays for shaping and rasterization on the core
-  thread (about 60 ms for the example's paragraph with five scripts). Pre-warming and
-  rasterizing off-thread are future work.
+- Out of M1's scope: color glyphs (the atlas format field is ready for RGBA pages),
+  vertical text, hyphenation, and dictionary line breaking for Thai, Lao, Khmer and
+  Myanmar (those lines break only at spaces and punctuation).
+- New text is shaped and rasterized on the core thread in the frame that first shows it:
+  about 2 ms for the example's paragraph in five scripts (1.5 ms shaping, 0.5 ms
+  rasterizing), in any build. Rasterizing off-thread is future work.
+- Tab stops are fixed at 8 spaces.
 - `load_font` reads the file on the core thread at the frame boundary; off-thread loading
   comes with the asset system.
