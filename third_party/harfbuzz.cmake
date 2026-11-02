@@ -7,7 +7,11 @@ if(NOT EXISTS "${_hb_dir}/src/harfbuzz.cc")
     message(FATAL_ERROR "third_party/harfbuzz is missing: run `git submodule update --init`")
 endif()
 
-set(_hb_flags -fno-exceptions -fno-rtti -fno-threadsafe-statics -fvisibility-inlines-hidden)
+# Always optimized, even in debug presets (as wgpu-native is always built in release): an
+# unoptimized HarfBuzz shapes ~15x slower, which made a debug build's first text frame cost
+# tens of milliseconds. Debug info is kept; sanitizer flags still apply.
+set(_hb_flags -fno-exceptions -fno-rtti -fno-threadsafe-statics -fvisibility-inlines-hidden
+    -O2 -g)
 # pthread mutexes, so HarfBuzz needs no std::mutex from the C++ runtime.
 set(_hb_defs HAVE_PTHREAD HAVE_ATEXIT HAVE_UNISTD_H HAVE_SYS_MMAN_H HAVE_MMAP)
 

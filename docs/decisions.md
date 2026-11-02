@@ -20,6 +20,12 @@ milestone first.
   crate rebuilds.
 - On failure, the test log and any golden-diff PNGs are uploaded as artifacts.
 
+### Follow-ups after the first review
+- **HarfBuzz is always built with `-O2 -g`**, even in debug and asan presets, as wgpu-native
+  is always built in release. Unoptimized, the first shaping of the example paragraph took
+  21.7 ms; optimized it takes 1.5 ms. The "about 60 ms first frame" seen in the windowed
+  debug run was mostly this.
+
 ### Unicode layer
 - **Version: Unicode 18.0.0.** This is the UCD that the pinned HarfBuzz 15.0.0 ships
   (`hb-ucd-table.hh`). HarfBuzz's built-in UCD drives shaping and our tables drive
