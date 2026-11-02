@@ -106,7 +106,7 @@ drawn will read:
   render thread's frame-done messages. A replaced list is never drawn, so only the newest
   list of each surface matters.
 - Under pressure (no space and no page left to add), unprotected glyphs not used this
-  frame are dropped before placement is retried.
+  frame are evicted least recently used first until the new glyph fits.
 
 `tests/test_atlas_upload.c` checks all of this end to end. Under the single scheduler, a
 frame that introduces glyphs is replaced before render runs. Under the threaded scheduler,

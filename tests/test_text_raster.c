@@ -296,10 +296,29 @@ static void test_atlas_pressure_and_pages(void) {
     ui_atlas_get_stats(a, &st);
     CHECK_EQ_INT(st.rejected, 2);
     ui_atlas_end_frame(a);
+    // Unprotected, eviction goes least recently used first and stops once the glyph fits:
+    // glyph 0 is used again this frame and survives, and only a batch of 8 goes.
     ui_atlas_begin_frame(a, 3, UINT64_MAX);
+    CHECK(get_h(a, &f, 0)->width > 0);
     CHECK(get_h_bin(a, &f, 1, 1)->width > 0);
     ui_atlas_get_stats(a, &st);
-    CHECK(st.evicted > 0);
+    CHECK_EQ_INT(st.evicted, 8);
+    uint64_t rasterized = st.rasterized;
+    CHECK(get_h(a, &f, 0)->width > 0);
+    ui_atlas_get_stats(a, &st);
+    CHECK_EQ_INT(st.rasterized, rasterized); // still cached
+    ui_atlas_destroy(a);
+
+    // A glyph may fill most of a page (it used to be limited to a quarter page).
+    CHECK(ui_atlas_create(&(ui_atlas_desc){.page_size = 128, .max_pages = 1}, &a) == UI_OK);
+    ui_atlas_begin_frame(a, 1, UINT64_MAX);
+    ui_font_key big_key;
+    ui_font *big = ui_font_registry_font(f.fonts, 0, 120, 400, UI_FONT_NORMAL, &big_key);
+    const ui_atlas_glyph *bg = ui_atlas_get(a, &f.raster, big,
+                                            (ui_glyph_key){big_key, ui_font_glyph(big, 'H'), 0});
+    CHECK(bg && bg->height > 64 && bg->height <= 128);
+    ui_atlas_get_stats(a, &st);
+    CHECK_EQ_INT(st.rejected, 0);
     ui_atlas_destroy(a);
 
     // Two pages: the atlas grows to the second, and releases it once it stays empty.

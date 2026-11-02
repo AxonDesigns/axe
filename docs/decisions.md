@@ -33,6 +33,12 @@ milestone first.
   start. Line breaking and positioning use the same rule, and trailing tabs hang like
   spaces (CSS `pre-wrap`). In RTL lines, stops are measured from the line's left edge.
   There are no custom tab stops yet. Golden case `controls` covers this.
+- **Large glyphs:** a glyph may be as large as a page (1024 px by default) instead of a
+  quarter page. A 300 px heading at 1.5× used to be rejected and drawn as nothing. Larger
+  glyphs still need a larger `atlas_page_size`.
+- **Pressure eviction is least recently used first.** Unprotected glyphs not used in this
+  frame are sorted by last use and evicted in batches (8, or an eighth of them) until the
+  new glyph fits, instead of all at once.
 
 ### Unicode layer
 - **Version: Unicode 18.0.0.** This is the UCD that the pinned HarfBuzz 15.0.0 ships
@@ -165,14 +171,14 @@ milestone first.
   - An empty trailing shelf gives its rows back to the page.
   - Glyphs need no padding because the shader reads texels with `textureLoad` at exact
     integer positions.
-  - Glyphs larger than a quarter page are rejected and counted.
+  - Glyphs larger than a page are rejected and counted.
 - **Eviction.** A glyph is evicted once it has gone unused for `evict_frames` epochs
   (default 300). An epoch is one core frame that draws, so an idle app doesn't age glyphs.
   - A glyph used at or after the protect epoch is never evicted. The protect epoch is the
     oldest epoch among the surfaces' newest unfinished display lists.
-  - Under pressure (no space and no new page allowed), every glyph that is not used this
-    frame and not protected is dropped at once, then placement is retried. Dropping
-    everything is blunt but simple and correct, and pressure needs a full atlas.
+  - Under pressure (no space and no new page allowed), glyphs that are not used this frame
+    and not protected are evicted least recently used first, in batches, until placement
+    succeeds.
   - A glyph that still doesn't fit is cached as empty (drawn as nothing, counted as
     rejected), so it isn't retried every frame. It ages out like any other entry.
   - Pages after the first are released once empty for the eviction window.

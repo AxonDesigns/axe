@@ -31,6 +31,11 @@ typedef struct page {
 
 enum { SLOT_EMPTY = 0, SLOT_LIVE, SLOT_TOMBSTONE };
 
+typedef struct lru_entry {
+    uint64_t last_used;
+    uint32_t slot;
+} lru_entry;
+
 typedef struct entry {
     ui_glyph_key key;
     ui_atlas_glyph glyph;
@@ -52,6 +57,8 @@ struct ui_atlas {
     uint32_t write_count, write_capacity;
     uint8_t *pixels;
     uint32_t pixel_count, pixel_capacity;
+    lru_entry *lru; // scratch for pressure eviction
+    uint32_t lru_capacity;
     ui_atlas_stats stats;
 };
 
@@ -84,6 +91,7 @@ void ui_atlas_destroy(ui_atlas *a) {
         free(a->pages[p].shelves);
     }
     free(a->slots);
+    free(a->lru);
     free(a->ops);
     free(a->writes);
     free(a->pixels);
@@ -280,31 +288,50 @@ static bool evictable(const ui_atlas *a, const entry *e, bool pressure) {
     return pressure || e->last_used + a->evict_frames <= a->epoch;
 }
 
+static bool try_place(ui_atlas *a, uint16_t w, uint16_t h, uint16_t *pg_out, uint16_t *x,
+                      uint16_t *y) {
+    for (uint32_t p = 0; p < a->max_pages; p++) {
+        if (a->pages[p].live && alloc_in_page(a, &a->pages[p], w, h, x, y)) {
+            *pg_out = (uint16_t)p;
+            return true;
+        }
+    }
+    for (uint32_t p = 0; p < a->max_pages; p++) {
+        if (a->pages[p].live) continue;
+        if (!push_page_op(a, (ui_atlas_page_op){(uint16_t)p, UI_ATLAS_R8, a->page_size}))
+            return false;
+        a->pages[p].live = true;
+        a->pages[p].next_y = 0;
+        a->stats.pages++;
+        if (alloc_in_page(a, &a->pages[p], w, h, x, y)) {
+            *pg_out = (uint16_t)p;
+            return true;
+        }
+    }
+    return false;
+}
+
+static int lru_order(const void *x, const void *y) {
+    const lru_entry *a = x, *b = y;
+    return a->last_used < b->last_used ? -1 : a->last_used > b->last_used;
+}
+
 static bool place(ui_atlas *a, uint16_t w, uint16_t h, uint16_t *pg_out, uint16_t *x, uint16_t *y) {
-    for (int attempt = 0; attempt < 2; attempt++) {
-        for (uint32_t p = 0; p < a->max_pages; p++) {
-            if (a->pages[p].live && alloc_in_page(a, &a->pages[p], w, h, x, y)) {
-                *pg_out = (uint16_t)p;
-                return true;
-            }
-        }
-        for (uint32_t p = 0; p < a->max_pages; p++) {
-            if (a->pages[p].live) continue;
-            if (!push_page_op(a, (ui_atlas_page_op){(uint16_t)p, UI_ATLAS_R8, a->page_size}))
-                return false;
-            a->pages[p].live = true;
-            a->pages[p].next_y = 0;
-            a->stats.pages++;
-            if (alloc_in_page(a, &a->pages[p], w, h, x, y)) {
-                *pg_out = (uint16_t)p;
-                return true;
-            }
-        }
-        if (attempt) break;
-        // Pressure: drop everything not used this frame and not protected, then retry.
-        for (uint32_t i = 0; i < a->capacity; i++) {
-            if (evictable(a, &a->slots[i], true)) release_entry(a, &a->slots[i]);
-        }
+    if (try_place(a, w, h, pg_out, x, y)) return true;
+    // Pressure: evict glyphs not used this frame and not protected, least recently used
+    // first, in batches, until the new one fits.
+    uint32_t n = 0;
+    for (uint32_t i = 0; i < a->capacity; i++) {
+        if (!evictable(a, &a->slots[i], true)) continue;
+        if (ui_grow((void **)&a->lru, &a->lru_capacity, n + 1, sizeof *a->lru) != UI_OK) break;
+        a->lru[n++] = (lru_entry){a->slots[i].last_used, i};
+    }
+    qsort(a->lru, n, sizeof *a->lru, lru_order);
+    uint32_t batch = n / 8 > 8 ? n / 8 : 8;
+    for (uint32_t k = 0; k < n;) {
+        for (uint32_t end = k + batch < n ? k + batch : n; k < end; k++)
+            release_entry(a, &a->slots[a->lru[k].slot]);
+        if (try_place(a, w, h, pg_out, x, y)) return true;
     }
     return false;
 }
@@ -335,7 +362,7 @@ const ui_atlas_glyph *ui_atlas_get(ui_atlas *a, ui_raster *raster, ui_font *font
     if (res == UI_ERR_OUT_OF_MEMORY) return NULL;
     a->stats.rasterized++;
     entry fresh = {.key = key, .last_used = a->epoch, .state = SLOT_LIVE};
-    uint32_t limit = a->page_size / 4;
+    uint32_t limit = a->page_size; // a glyph may fill a page; larger ones need bigger pages
     if (res != UI_OK || bm.width > limit || bm.height > limit) {
         a->stats.rejected++;
     } else if (bm.width && bm.height) {

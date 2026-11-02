@@ -51,7 +51,7 @@ typedef struct ui_atlas_stats {
     uint32_t pages;        // allocated now
     uint64_t rasterized;   // total glyphs rasterized
     uint64_t evicted;
-    uint64_t rejected;     // larger than a quarter page, or no space left
+    uint64_t rejected;     // larger than a page, or no space left
     uint64_t updates;      // updates produced
 } ui_atlas_stats;
 
