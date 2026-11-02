@@ -114,6 +114,15 @@ typedef enum ui_text_direction {
     UI_TEXT_DIR_RTL = 2,
 } ui_text_direction;
 
+typedef enum ui_text_align {
+    UI_TEXT_ALIGN_START = 0, // left in LTR paragraphs, right in RTL ones
+    UI_TEXT_ALIGN_END = 1,
+    UI_TEXT_ALIGN_LEFT = 2,
+    UI_TEXT_ALIGN_RIGHT = 3,
+    UI_TEXT_ALIGN_CENTER = 4,
+    UI_TEXT_ALIGN_JUSTIFY = 5, // spaces stretch; a paragraph's last line is start-aligned
+} ui_text_align;
+
 typedef enum ui_text_slant {
     UI_TEXT_NORMAL = 0,
     UI_TEXT_ITALIC = 1,
@@ -144,6 +153,11 @@ typedef struct ui_text_desc {
     ui_text_direction direction;
     uint16_t max_lines;         // 0: unlimited
     const char *ellipsis;       // shown when max_lines cuts text; NULL: U+2026, "": none
+    ui_text_align align;
+    // Line box height as a multiple of style.size, e.g. 1.4. 0: from the fonts' metrics
+    // (lines with tall fallback fonts get taller). Otherwise every line is the same height
+    // and the baseline is placed by the default style's font. At most 100.
+    float line_height;
 } ui_text_desc;
 
 // Sets a node's text. It wraps to the node's width and is drawn over its background, in

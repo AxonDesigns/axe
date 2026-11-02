@@ -66,9 +66,11 @@ set_text (wire)  ──►  scene node owns a ui_paragraph (text, spans, familie
 - **Bidi lines.** Each line is cut into pieces (a shaped run, split again where L1 changes
   the level) and L2 orders the pieces. A piece that begins or ends inside a run is sliced
   when HarfBuzz marks the boundary safe and reshaped otherwise.
-- **Metrics.** The line box is `round(ascent + descent + line gap)` over the line's fonts.
-  Baselines are whole physical pixels at every scale. Lines align to the start of their
-  paragraph's direction.
+- **Metrics.** The line box is `round(ascent + descent + line gap)` over the line's fonts,
+  or, with an explicit line height, the same fixed box on every line. Baselines are whole
+  physical pixels at every scale.
+- **Alignment:** start, end, left, right, center or justify (spaces stretch; a paragraph's
+  last line stays start-aligned).
 - **Max lines** cuts the text, and the last kept line ends in an ellipsis (U+2026 by
   default, in the font of the run before it, at the logical end).
 - **Caching.** A width change, such as a resize or a spring, only re-breaks lines. A scale
@@ -201,10 +203,10 @@ build, 2026-11-02):
 
 ## Known limitations
 
-- Start alignment only. Line height comes from font metrics; there is no line-height
-  property. HarfBuzz's default language is used; there is no per-span language.
-- A fallback font with tall metrics, such as Arabic, makes its lines taller. That is what
-  browsers do too, but it shows in mixed paragraphs.
+- Justification stretches spaces only; CJK text without spaces is not justified.
+- HarfBuzz's default language is used; there is no per-span language.
+- Without an explicit line height, a fallback font with tall metrics, such as Arabic, makes
+  its lines taller (as in browsers). Set `line_height` for even spacing.
 - No clipping: text taller than its node overflows the node.
 - No color glyphs (the atlas format field is ready for RGBA
   pages). No vertical text, hyphenation or dictionary breaking for Thai, Lao, Khmer and

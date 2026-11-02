@@ -233,7 +233,9 @@ ui_result ui_cmd_set_text(ui_cmd_writer *w, ui_handle node, const ui_text_desc *
     if (!d || (d->length && !d->text) || d->length > UI_TEXT_MAX_BYTES ||
         d->span_count > UI_TEXT_MAX_SPANS || (d->span_count && !d->spans) ||
         d->family_count > UI_TEXT_MAX_FAMILIES || (d->family_count && !d->families) ||
-        d->direction > UI_TEXT_DIR_RTL || !valid_style(&d->style, d->family_count))
+        d->direction > UI_TEXT_DIR_RTL || d->align > UI_TEXT_ALIGN_JUSTIFY ||
+        !isfinite(d->line_height) || d->line_height < 0 || d->line_height > 100 ||
+        !valid_style(&d->style, d->family_count))
         return UI_ERR_INVALID_ARGUMENT;
     uint32_t prev_end = 0;
     for (uint32_t i = 0; i < d->span_count; i++) {
@@ -272,6 +274,11 @@ ui_result ui_cmd_set_text(ui_cmd_writer *w, ui_handle node, const ui_text_desc *
     *p++ = (uint8_t)d->direction;
     *p++ = d->ellipsis ? UI_WIRE_TEXT_CUSTOM_ELLIPSIS : 0;
     p = put_style(p, 0, 0, &d->style);
+    p = ui_wire_put_f32(p, d->line_height);
+    *p++ = (uint8_t)d->align;
+    *p++ = 0;
+    *p++ = 0;
+    *p++ = 0;
     for (uint32_t i = 0; i < d->span_count; i++)
         p = put_style(p, d->spans[i].start, d->spans[i].end, &d->spans[i].style);
     uint8_t *names = p;

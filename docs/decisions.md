@@ -49,6 +49,19 @@ milestone first.
   - Tests use `NotoSans-Regular-Static.ttf`, a 15 KB static Latin instance made by
     `tools/font_subset --static`. Golden case `styles` shows synthetic italic with axis
     weights.
+- **Alignment and line height** (the `set_text` header grows from 64 to 72 bytes; no
+  client outside this repo writes it yet, so the layout changed in place and the wire
+  stays v0).
+  - Align is start, end, left, right, center or justify. Start and end follow each line's
+    paragraph direction.
+  - Justify spreads the extra room evenly over the line's spaces (general category Zs, not
+    the hanging trailing ones). The last line of a paragraph (before a hard break or at the
+    end of the text), ellipsized lines and lines without spaces are start-aligned. There is
+    no inter-character justification for CJK yet.
+  - `line_height` > 0 makes every line box `round(line_height × size × scale)` px, with
+    half-leading around the default style's font, so a fallback font's tall metrics no
+    longer push lines apart. 0 keeps the metric-based lines.
+  - Golden cases `justify` and `center` cover this.
 
 ### Unicode layer
 - **Version: Unicode 18.0.0.** This is the UCD that the pinned HarfBuzz 15.0.0 ships
@@ -230,8 +243,8 @@ milestone first.
     line's runs, with the gap split evenly above and below.
   - Baselines are `round(top + gap/2 + ascent)`, and line tops accumulate rounded
     heights, so spacing is uniform and every baseline is a whole physical pixel.
-- **Alignment is start only:** left in LTR paragraphs, right in RTL ones. Each line uses
-  its own paragraph's level, since texts with paragraph separators can mix directions.
+- **Alignment** (start by default; see the follow-ups above for the others) uses each
+  line's own paragraph level, since texts with paragraph separators can mix directions.
   Unbounded layouts align to the widest line.
 - **Max lines and the ellipsis.**
   - When `max_lines` cuts text off, the last kept line is shortened to the longest prefix

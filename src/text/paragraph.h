@@ -8,6 +8,15 @@
 
 #include "text/shape.h"
 
+typedef enum ui_align {
+    UI_ALIGN_START = 0, // left in LTR paragraphs, right in RTL ones
+    UI_ALIGN_END,
+    UI_ALIGN_LEFT,
+    UI_ALIGN_RIGHT,
+    UI_ALIGN_CENTER,
+    UI_ALIGN_JUSTIFY,   // spaces stretch to fill the line; last lines start-aligned
+} ui_align;
+
 typedef struct ui_layout_glyph {
     uint32_t glyph;
     uint32_t cluster;  // byte offset of the glyph's first character
@@ -84,6 +93,8 @@ typedef struct ui_paragraph {
     uint32_t max_lines;    // 0 = unlimited
     uint8_t *ellipsis;     // UTF-8; empty = cut without an ellipsis
     uint32_t ellipsis_len;
+    ui_align align;
+    float line_height;     // multiple of the base size; 0 = from the fonts' metrics
 
     ui_shaped_paragraph shaped;
     bool shaped_valid;
@@ -112,6 +123,11 @@ typedef struct ui_paragraph_desc {
     uint32_t max_lines;
     const uint8_t *ellipsis;
     uint32_t ellipsis_len;
+    ui_align align;
+    // 0: each line is as tall as its fonts need. Otherwise every line is line_height ×
+    // base size, with the baseline placed by the base font's metrics, so fallback fonts with
+    // tall metrics no longer change the spacing.
+    float line_height;
 } ui_paragraph_desc;
 
 // Copies the description. Fails only on allocation (the paragraph keeps its old content).

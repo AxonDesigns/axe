@@ -233,6 +233,93 @@ static void test_reshape_at_unsafe_break(void) {
     ui_paragraph_free(&p);
 }
 
+static void set_para(ui_paragraph *p, const char *text, ui_align align, float line_height) {
+    static const uint32_t offsets[] = {0, 9};
+    ui_paragraph_desc d = {
+        .text = (const uint8_t *)text, .len = (uint32_t)strlen(text),
+        .base = {.family = 0, .weight = 400, .size = 16, .color = {0, 0, 0, 1}},
+        .families = "Noto Sans", .family_offsets = offsets, .family_count = 1,
+        .align = align, .line_height = line_height,
+    };
+    CHECK(ui_paragraph_set(p, &d) == UI_OK);
+}
+
+static void test_alignment(void) {
+    ui_paragraph p = {0};
+    const float W = 300;
+    set_para(&p, "short line", UI_ALIGN_CENTER, 0);
+    const ui_paragraph_layout *l = lay(&p, 1, W);
+    CHECK_NEAR(l->lines[0].x, (W - l->lines[0].width) / 2, 0.01);
+    CHECK_NEAR(l->glyphs[0].x, l->lines[0].x, 0.01);
+    set_para(&p, "short line", UI_ALIGN_RIGHT, 0);
+    l = lay(&p, 1, W);
+    CHECK_NEAR(l->lines[0].x + l->lines[0].width, W, 0.01);
+    set_para(&p, "short line", UI_ALIGN_END, 0); // LTR: end is right
+    CHECK_NEAR(lay(&p, 1, W)->lines[0].x + lay(&p, 1, W)->lines[0].width, W, 0.01);
+    // RTL: start is right, end and left are left.
+    set_para(&p, "\xD7\xA9\xD7\x9C\xD7\x95\xD7\x9D", UI_ALIGN_START, 0);
+    l = lay(&p, 1, W);
+    CHECK_NEAR(l->lines[0].x + l->lines[0].width, W, 0.01);
+    set_para(&p, "\xD7\xA9\xD7\x9C\xD7\x95\xD7\x9D", UI_ALIGN_END, 0);
+    CHECK_NEAR(lay(&p, 1, W)->lines[0].x, 0, 0.01);
+
+    // Justify: every line but the last fills the width; spaces take the extra room; the
+    // trailing (hanging) space of a line does not.
+    set_para(&p, LOREM, UI_ALIGN_JUSTIFY, 0);
+    l = lay(&p, 1, W);
+    CHECK(l->line_count >= 3);
+    for (uint32_t i = 0; i < l->line_count; i++) {
+        const ui_line *ln = &l->lines[i];
+        bool last = i + 1 == l->line_count;
+        CHECK_NEAR(ln->x, 0, 0.01);
+        if (!last) CHECK_NEAR(ln->width, W, 0.01);
+        else CHECK(ln->width < W - 1);
+        // The last visible glyph ends at the right edge.
+        if (!last) {
+            float right = 0;
+            for (uint32_t r = 0; r < ln->run_count; r++) {
+                const ui_layout_run *run = &l->runs[ln->run_start + r];
+                for (uint32_t g = 0; g < run->glyph_count; g++) {
+                    const ui_layout_glyph *gl = &l->glyphs[run->glyph_start + g];
+                    if (gl->cluster < ln->end - 1) right = fmaxf(right, gl->x + gl->advance);
+                }
+            }
+            CHECK_NEAR(right, W, 0.05);
+        }
+    }
+    // A line without spaces (an emergency break) is start-aligned, not stretched.
+    set_para(&p, "Supercalifragilisticexpialidocious", UI_ALIGN_JUSTIFY, 0);
+    l = lay(&p, 1, 80);
+    CHECK(l->lines[0].width < 80);
+    // A hard break ends a paragraph: the line before it is not justified.
+    set_para(&p, "a b\nc d e f", UI_ALIGN_JUSTIFY, 0);
+    l = lay(&p, 1, W);
+    CHECK(l->lines[0].width < W - 1);
+    ui_paragraph_free(&p);
+}
+
+static void test_line_height(void) {
+    ui_paragraph p = {0};
+    // Fixed line boxes: every line is round(1.5 * 16) px, even one with a Hebrew fallback
+    // word whose font has taller metrics, and baselines are evenly spaced.
+    set_para(&p, "Latin words here and then \xD7\xA9\xD7\x9C\xD7\x95\xD7\x9D more words to wrap", UI_ALIGN_START, 1.5f);
+    const ui_paragraph_layout *l = lay(&p, 1, 120);
+    CHECK(l->line_count >= 3);
+    for (uint32_t i = 0; i < l->line_count; i++) {
+        CHECK_EQ_INT(l->lines[i].height, 24);
+        if (i) CHECK_EQ_INT(l->lines[i].baseline - l->lines[i - 1].baseline, 24);
+        CHECK(l->lines[i].baseline == roundf(l->lines[i].baseline));
+    }
+    CHECK_EQ_INT(l->height, 24 * l->line_count);
+    // At 1.25x the box scales with the font.
+    l = lay(&p, 1.25f, 150);
+    CHECK_EQ_INT(l->lines[0].height, 30);
+    // Empty text gets the same box.
+    set_para(&p, "", UI_ALIGN_START, 2.f);
+    CHECK_EQ_INT(lay(&p, 1, 100)->lines[0].height, 32);
+    ui_paragraph_free(&p);
+}
+
 static void test_controls(void) {
     // Line breaks and other controls draw nothing and take no width (fonts map them to
     // .notdef, which would draw a box); a tab advances to the next stop, 8 spaces apart.
@@ -294,6 +381,8 @@ int main(void) {
     RUN(test_bidi_lines);
     RUN(test_ellipsis);
     RUN(test_reshape_at_unsafe_break);
+    RUN(test_alignment);
+    RUN(test_line_height);
     RUN(test_controls);
     RUN(test_cache);
     ui_text_context_free(&ctx);

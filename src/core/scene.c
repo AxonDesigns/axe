@@ -310,6 +310,11 @@ static bool apply_node_op(ui_scene *s, const ui_wire_op *op, uint64_t now_ns) {
 
 // ---- set_text ----------------------------------------------------------------------------
 
+static_assert((int)UI_TEXT_ALIGN_START == (int)UI_ALIGN_START &&
+                  (int)UI_TEXT_ALIGN_JUSTIFY == (int)UI_ALIGN_JUSTIFY &&
+                  (int)UI_TEXT_ALIGN_CENTER == (int)UI_ALIGN_CENTER,
+              "wire and layout alignment values match");
+
 static bool read_style(const uint8_t *p, uint32_t family_count, ui_text_style *out,
                        uint32_t *start, uint32_t *end) {
     *start = ui_wire_get_u32(p);
@@ -370,6 +375,8 @@ static bool apply_set_text(ui_scene *s, const ui_wire_op *op, ui_wire_reader *r)
     uint32_t fam_bytes = ui_wire_get_u16(p + 20), ell_len = ui_wire_get_u16(p + 22);
     uint32_t max_lines = ui_wire_get_u16(p + 24);
     uint8_t dir = p[26], flags = p[27];
+    float line_height = ui_wire_get_f32(p + 64);
+    uint8_t align = p[68];
     const uint8_t *spans_p = p + UI_WIRE_SIZE_SET_TEXT_HEADER;
     const uint8_t *fam_p = spans_p + span_count * UI_WIRE_SIZE_TEXT_SPAN;
     const uint8_t *ell_p = fam_p + fam_bytes;
@@ -400,6 +407,9 @@ static bool apply_set_text(ui_scene *s, const ui_wire_op *op, ui_wire_reader *r)
     }
     ui_node *n = node_of(s, h);
     const char *why = !n ? "set_text" : !ok ? "set_text (size)" : have < total ? "set_text (incomplete)" : NULL;
+    if (!why && (!isfinite(line_height) || line_height < 0 || line_height > 100 ||
+                 align > UI_TEXT_ALIGN_JUSTIFY))
+        why = "set_text (paragraph)";
     if (!why && (dir > UI_TEXT_DIR_RTL || span_count > UI_TEXT_MAX_SPANS ||
                  family_count > UI_TEXT_MAX_FAMILIES || ell_len > UI_TEXT_MAX_ELLIPSIS))
         why = "set_text (limits)";
@@ -475,6 +485,8 @@ static bool apply_set_text(ui_scene *s, const ui_wire_op *op, ui_wire_reader *r)
         .max_lines = max_lines,
         .ellipsis = custom ? ell_p : (const uint8_t *)"\xE2\x80\xA6",
         .ellipsis_len = custom ? ell_len : 3,
+        .align = (ui_align)align, // the wire and layout enums share values
+        .line_height = line_height,
     };
     bool applied = n->text && ui_paragraph_set(n->text, &desc) == UI_OK;
     free_parts(&t);

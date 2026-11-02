@@ -61,6 +61,8 @@ static void test_basic(void) {
     d.span_count = 2;
     d.direction = UI_TEXT_DIR_RTL;
     d.max_lines = 3;
+    d.align = UI_TEXT_ALIGN_JUSTIFY;
+    d.line_height = 1.4f;
     CHECK(ui_cmd_set_text(w, node, &d) == UI_OK);
     CHECK_EQ_INT(ui_cmd_writer_op_count(w), 1);
     CHECK(apply(&s, w) == UI_OK);
@@ -79,6 +81,8 @@ static void test_basic(void) {
         CHECK(!memcmp(p->families + p->family_offsets[1], "Mono", 4));
         CHECK_EQ_INT(p->dir, UI_BIDI_RTL);
         CHECK_EQ_INT(p->max_lines, 3);
+        CHECK_EQ_INT(p->align, UI_ALIGN_JUSTIFY);
+        CHECK_NEAR(p->line_height, 1.4, 1e-6);
         CHECK(p->ellipsis_len == 3 && !memcmp(p->ellipsis, "\xE2\x80\xA6", 3)); // default
     }
     // A custom ellipsis, including "none".
@@ -191,6 +195,13 @@ static void test_validation(void) {
     d.style.weight = 400;
     d.style.family = 5;
     CHECK(ui_cmd_set_text(w, node, &d) == UI_ERR_INVALID_ARGUMENT);
+    d.style.family = 0;
+    d.align = (ui_text_align)9;
+    CHECK(ui_cmd_set_text(w, node, &d) == UI_ERR_INVALID_ARGUMENT);
+    d.align = UI_TEXT_ALIGN_START;
+    d.line_height = -1;
+    CHECK(ui_cmd_set_text(w, node, &d) == UI_ERR_INVALID_ARGUMENT);
+    d.line_height = 0;
     CHECK_EQ_INT(ui_cmd_writer_op_count(w), 0);
 
     // The core re-checks what a writer could get wrong: patch a valid op into an overlap.

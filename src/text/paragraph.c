@@ -93,6 +93,8 @@ ui_result ui_paragraph_set(ui_paragraph *p, const ui_paragraph_desc *d) {
     p->max_lines = d->max_lines;
     p->ellipsis = ellipsis;
     p->ellipsis_len = d->ellipsis_len;
+    p->align = d->align;
+    p->line_height = d->line_height > 0 && isfinite(d->line_height) ? d->line_height : 0;
     p->shaped_valid = false;
     p->layout_valid = false;
     p->hits_valid = false;
@@ -167,6 +169,9 @@ typedef struct builder {
     ui_paragraph_layout *out;
     ui_piece *pieces;
     uint32_t piece_count;
+    // Fixed line boxes (line_height > 0): height, and the base font's ascent and descent.
+    bool fixed;
+    float fixed_height, fixed_ascent, fixed_descent;
 } builder;
 
 static ui_result push_glyphs(builder *b, const ui_glyph_pos *g, uint32_t count, bool reverse,
@@ -382,6 +387,13 @@ static ui_result build_line(builder *b, uint32_t lcs, uint32_t lce, uint32_t met
     float visible = fmaxf(pen - trailing, 0);
     float height = roundf(asc + desc + gap);
     float baseline = roundf(top + gap * 0.5f + asc);
+    if (b->fixed) {
+        // Half-leading around the base font: the same box and baseline on every line.
+        asc = b->fixed_ascent;
+        desc = b->fixed_descent;
+        height = b->fixed_height;
+        baseline = roundf(top + (height - asc - desc) * 0.5f + asc);
+    }
     o->lines[o->line_count++] = (ui_line){
         .start = lb, .end = le, .top = top, .height = height, .ascent = asc, .descent = desc,
         .baseline = baseline, .x = (para_level & 1) ? -trailing : 0, .width = visible,
@@ -409,6 +421,51 @@ static uint32_t ellipsis_cut(const ui_shaped_paragraph *p, const float *adv, uin
     return best;
 }
 
+// Justification: stretches the spaces of a line (not its hanging trailing whitespace) so its
+// visible content fills `avail`. The last line of a paragraph, an ellipsized line and a line
+// without spaces are not justified (false). Glyph positions are still relative to the line.
+static bool justify_line(const ui_paragraph *p, ui_paragraph_layout *o, ui_line *ln, float avail) {
+    const ui_shaped_paragraph *sp = &p->shaped;
+    float extra = avail - ln->width;
+    if (ln->ellipsized || ln->end <= ln->start || ln->end >= p->len || !(extra > EPS)) return false;
+    uint32_t last = ui_shaped_cp_at(sp, ln->end - 1);
+    uint8_t lb = ui_ucd(sp->cps[last])->lb;
+    if (lb == UI_LB_BK || lb == UI_LB_CR || lb == UI_LB_LF || lb == UI_LB_NL) return false;
+    uint32_t ts = ui_shaped_cp_at(sp, ln->end); // trailing whitespace starts at offsets[ts]
+    while (ts > 0 && sp->offsets[ts - 1] >= ln->start && hangs(sp->cps[ts - 1])) ts--;
+    uint32_t visible_end = sp->offsets[ts];
+    uint32_t spaces = 0;
+    for (uint32_t k = 0; k < ln->run_count; k++) {
+        const ui_layout_run *lr = &o->runs[ln->run_start + k];
+        for (uint32_t g = 0; g < lr->glyph_count; g++) {
+            const ui_layout_glyph *gl = &o->glyphs[lr->glyph_start + g];
+            if (!lr->ellipsis && gl->cluster < visible_end &&
+                ui_ucd(sp->cps[ui_shaped_cp_at(sp, gl->cluster)])->gc == UI_GC_ZS)
+                spaces++;
+        }
+    }
+    if (!spaces) return false;
+    float per = extra / (float)spaces, shift = 0;
+    for (uint32_t k = 0; k < ln->run_count; k++) {
+        ui_layout_run *lr = &o->runs[ln->run_start + k];
+        lr->x += shift;
+        float grown = 0;
+        for (uint32_t g = 0; g < lr->glyph_count; g++) {
+            ui_layout_glyph *gl = &o->glyphs[lr->glyph_start + g];
+            gl->x += shift;
+            if (!lr->ellipsis && gl->cluster < visible_end &&
+                ui_ucd(sp->cps[ui_shaped_cp_at(sp, gl->cluster)])->gc == UI_GC_ZS) {
+                gl->advance += per;
+                shift += per;
+                grown += per;
+            }
+        }
+        lr->width += grown;
+    }
+    ln->width = avail;
+    return true;
+}
+
 static ui_result layout(ui_paragraph *p, ui_text_context *c, float max_w) {
     ui_shaped_paragraph *sp = &p->shaped;
     ui_paragraph_layout *o = &p->layout;
@@ -426,10 +483,11 @@ static ui_result layout(ui_paragraph *p, ui_text_context *c, float max_w) {
     }
     o->para_level = n ? sp->bidi.para_level[0] : (p->dir == UI_BIDI_RTL);
 
-    builder b = {p, c, input_of(p), o, c->pieces, 0};
+    builder b = {p, c, input_of(p), o, c->pieces, 0, false, 0, 0, 0};
     float top = 0;
-    if (n == 0) {
-        // One empty line in the base font, so carets have somewhere to go.
+    // The base style's font: metrics for empty text and for fixed line boxes.
+    ui_font_metrics base = {0};
+    if (n == 0 || p->line_height > 0) {
         ui_text_style *st = &p->base;
         const char *fam;
         uint32_t fam_len;
@@ -441,14 +499,23 @@ static ui_result layout(ui_paragraph *p, ui_text_context *c, float max_w) {
         ui_font *font = ui_font_registry_font(c->fonts, face, st->size * sp->scale, st->weight,
                                               (ui_font_style)st->style, NULL);
         if (!font) return UI_ERR_OUT_OF_MEMORY;
-        ui_font_metrics m;
-        ui_font_get_metrics(font, &m);
+        ui_font_get_metrics(font, &base);
+    }
+    if (p->line_height > 0) {
+        b.fixed = true;
+        b.fixed_height = fmaxf(roundf(p->line_height * p->base.size * sp->scale), 1);
+        b.fixed_ascent = base.ascent;
+        b.fixed_descent = base.descent;
+    }
+    if (n == 0) {
+        // One empty line in the base font, so carets have somewhere to go.
         if (ui_grow((void **)&o->lines, &o->line_capacity, 1, sizeof *o->lines) != UI_OK)
             return UI_ERR_OUT_OF_MEMORY;
-        float h = roundf(m.ascent + m.descent + m.line_gap);
-        o->lines[o->line_count++] = (ui_line){.height = h, .ascent = m.ascent,
-                                              .descent = m.descent,
-                                              .baseline = roundf(m.line_gap * 0.5f + m.ascent)};
+        float h = b.fixed ? b.fixed_height : roundf(base.ascent + base.descent + base.line_gap);
+        float lead = b.fixed ? (h - base.ascent - base.descent) * 0.5f : base.line_gap * 0.5f;
+        o->lines[o->line_count++] = (ui_line){.height = h, .ascent = base.ascent,
+                                              .descent = base.descent,
+                                              .baseline = roundf(lead + base.ascent)};
         top = h;
     }
     uint32_t ls = 0, lines = 0;
@@ -487,8 +554,7 @@ static ui_result layout(ui_paragraph *p, ui_text_context *c, float max_w) {
         }
     }
 
-    // Alignment: start of the line in the paragraph's direction. Unbounded layouts align
-    // to the widest line.
+    // Alignment. Unbounded layouts align to the widest line.
     float width = 0;
     for (uint32_t i = 0; i < o->line_count; i++) width = fmaxf(width, o->lines[i].width);
     float avail = isfinite(max_w) ? max_w : width;
@@ -497,9 +563,18 @@ static ui_result layout(ui_paragraph *p, ui_text_context *c, float max_w) {
         uint8_t level = ln->end > ln->start && n
                             ? sp->bidi.para_level[ui_shaped_cp_at(sp, ln->start)]
                             : o->para_level;
-        // ln->x was -trailing for RTL (trailing whitespace sits on the left): the pen origin.
-        float origin = (level & 1) ? avail - ln->width + ln->x : 0;
-        ln->x = (level & 1) ? avail - ln->width : 0;
+        bool rtl = level & 1;
+        ui_align align = p->align;
+        if (align == UI_ALIGN_JUSTIFY && !justify_line(p, o, ln, avail)) align = UI_ALIGN_START;
+        if (align == UI_ALIGN_START) align = rtl ? UI_ALIGN_RIGHT : UI_ALIGN_LEFT;
+        else if (align == UI_ALIGN_END) align = rtl ? UI_ALIGN_LEFT : UI_ALIGN_RIGHT;
+        float x = align == UI_ALIGN_RIGHT    ? avail - ln->width
+                  : align == UI_ALIGN_CENTER ? (avail - ln->width) * 0.5f
+                                             : 0;
+        // ln->x holds the pen origin relative to the visible start: -trailing in RTL lines,
+        // whose hanging whitespace sits on the left.
+        float origin = x + ln->x;
+        ln->x = x;
         for (uint32_t k = 0; k < ln->run_count; k++) {
             ui_layout_run *lr = &o->runs[ln->run_start + k];
             lr->x += origin;

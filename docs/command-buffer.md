@@ -65,7 +65,7 @@ A handle is 8 bytes: `u32 index`, `u32 generation`.
 | 5 | `set_color` | node, `f32 r, g, b, a` (sRGB, straight alpha, clamped to [0, 1]) | 24 |
 | 6 | `start_spring` | node, `u16 property`, `u16 count`, `f32 stiffness`, `f32 damping`, `f32 target[count]` | 20 + 4·count |
 | 7 | `set_timer` | `u32 id`, `u32` reserved (0), `u64 deadline_ns` (animation clock; `UINT64_MAX` disarms) | 16 |
-| 8 | `set_text` | see [Text](#text) | 64 + variable |
+| 8 | `set_text` | see [Text](#text) | 72 + variable |
 | 9 | `append_text` | node, `u32 chunk_bytes`, chunk (padded to 4) | 12 + chunk |
 
 ### Properties for `start_spring`
@@ -114,7 +114,10 @@ whenever the width or the surface scale changes.
 | 26 | u8 | direction: 0 auto (first strong character, per paragraph), 1 LTR, 2 RTL |
 | 27 | u8 | flags: bit 0 = the ellipsis bytes replace the default U+2026 (0 bytes = none) |
 | 28 | style | the default style (36 bytes, below; `start` and `end` are 0) |
-| 64 | style[] | `span_count` spans |
+| 64 | f32 | `line_height`: line box height as a multiple of the default size; 0 = from font metrics; ≤ 100 |
+| 68 | u8 | align: 0 start, 1 end, 2 left, 3 right, 4 center, 5 justify |
+| 69 | u8[3] | reserved (0) |
+| 72 | style[] | `span_count` spans |
 | … | bytes | family region: `family_count` NUL-terminated UTF-8 names, zero-padded |
 | … | bytes | ellipsis, padded to 4 |
 | … | bytes | the first `chunk_bytes` of text, padded to 4 |
@@ -132,6 +135,12 @@ A style or span is 36 bytes:
 | 16 | f32 | size, logical px, in (0, 4096] |
 | 20 | f32[4] | color: sRGB, straight alpha, clamped to [0, 1] |
 
+- **Alignment** is relative to the paragraph's direction for start and end. Justify
+  stretches the spaces of every line except the last line of a paragraph (and lines
+  without spaces, which stay start-aligned).
+- **Line height** 0 lets each line be as tall as its fonts need. Otherwise every line is
+  `line_height × size × scale` px, rounded, with the baseline placed by the default style's
+  font, so fallback fonts with tall metrics don't change the spacing.
 - Each family entry is a CSS-style list (`"Noto Sans, sans-serif"`), tried in order
   against registered fonts and then the system's. Bytes no span covers use the default
   style.
@@ -155,8 +164,8 @@ Example: `set_text(node {1,1}, "Hi")` with the default style (16 px, weight 400,
 the family list "Noto Sans", and no spans:
 
 ```
-55 49 43 42  00 00 00 00  64 00 00 00  01 00 00 00   header: UICB v0, 100 bytes, 1 op
-08 00 54 00  01 00 00 00  01 00 00 00                set_text, 84 bytes, node {1,1}
+55 49 43 42  00 00 00 00  6C 00 00 00  01 00 00 00   header: UICB v0, 108 bytes, 1 op
+08 00 5C 00  01 00 00 00  01 00 00 00                set_text, 92 bytes, node {1,1}
 02 00 00 00  02 00 00 00                             text_bytes 2, chunk_bytes 2
 00 00 01 00  0C 00 00 00  00 00 00 00                0 spans, 1 family, 12-byte region,
                                                      no ellipsis, max_lines 0, auto, flags 0
@@ -164,6 +173,7 @@ the family list "Noto Sans", and no spans:
                                                      weight 400, normal, reserved
 00 00 80 41  00 00 80 3F  00 00 80 3F  00 00 80 3F   size 16, r 1, g 1, b 1
 00 00 80 3F                                          a 1
+00 00 00 00  00 00 00 00                             line_height 0, align start, reserved
 4E 6F 74 6F  20 53 61 6E  73 00 00 00                "Noto Sans" NUL, padding
 48 69 00 00                                          "Hi", padding
 ```
