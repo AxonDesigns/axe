@@ -1,9 +1,11 @@
 cmake_minimum_required(VERSION 3.28)
-project(axe VERSION 0.1.0 LANGUAGES C)
+project(axe VERSION 0.1.0 LANGUAGES C CXX)
 
-if(NOT CMAKE_C_COMPILER_ID MATCHES "Clang")
-    message(FATAL_ERROR "Axe builds with Clang only (got ${CMAKE_C_COMPILER_ID}). "
-                        "Use the CMake presets or set CMAKE_C_COMPILER=clang.")
+if(NOT CMAKE_C_COMPILER_ID MATCHES "Clang" OR NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    message(FATAL_ERROR "Axe builds with Clang only (got ${CMAKE_C_COMPILER_ID} / "
+                        "${CMAKE_CXX_COMPILER_ID}). Use the CMake presets or set "
+                        "CMAKE_C_COMPILER=clang and CMAKE_CXX_COMPILER=clang++. C++ is only "
+                        "used to build HarfBuzz.")
 endif()
 
 set(CMAKE_C_STANDARD 23)
@@ -21,6 +23,7 @@ include(cmake/Sanitizers.cmake)
 
 add_subdirectory(third_party)
 add_subdirectory(src)
+add_subdirectory(tools)
 
 if(UI_BUILD_EXAMPLES)
     add_subdirectory(examples)

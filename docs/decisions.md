@@ -66,6 +66,64 @@ milestone first.
 - **UTF-8 policy:** one U+FFFD per maximal subpart (Unicode §3.9, as in WHATWG).
   `ui_utf8_sanitize` returns the replacement count, which the wire counts in stats.
 
+### HarfBuzz, Fontconfig and the test fonts
+- **HarfBuzz 15.0.0** is a git submodule. A project-owned `third_party/harfbuzz.cmake`
+  compiles the amalgamated `harfbuzz.cc` with Clang++, using upstream meson's flags
+  (`-fno-exceptions -fno-rtti -fno-threadsafe-statics`).
+  - `HAVE_PTHREAD` makes it use pthread mutexes rather than `std::mutex`.
+  - There is no FreeType, glib, ICU, graphite or platform shaper: HarfBuzz's own OpenType
+    functions load fonts, shape and draw outlines.
+  - `harfbuzz-subset.cc` is a separate target, used only by `tools/font_subset`.
+  - C++ is enabled project-wide (`CMAKE_CXX_COMPILER=clang++` in the presets) but compiles
+    only HarfBuzz. The sanitizer presets instrument it too.
+- **One module per dependency.** `src/text/hb/` is the only code that includes `hb.h`, and
+  `src/text/fontconfig/` the only code that includes `fontconfig.h`. Neither leaks a type
+  into another header.
+- **Shaping settings.**
+  - Cluster level `MONOTONE_GRAPHEMES`, so HarfBuzz clusters align with grapheme
+    boundaries, which hit testing needs.
+  - Clusters are UTF-8 byte offsets into the whole paragraph. The surrounding text is
+    passed as context, so joining across run boundaries is correct.
+  - Fonts are scaled to `size_px * 64` with no ppem, so there is no hinting.
+  - Language is HarfBuzz's default. A span language field is a follow-up.
+- **Fontconfig** (minimum 2.13) is used only with `text.system_fonts`, or with extra font
+  directories.
+  - Tests build an isolated configuration (`FcConfigCreate` + `FcConfigAppFontAddDir`)
+    that knows only `tests/fonts`. It sets the XDG cache directory so Fontconfig doesn't
+    warn.
+  - `ui_fc_match` accepts a result only if its family really matches, because
+    `FcFontMatch` always returns something. Generic families (sans-serif, serif,
+    monospace, system-ui) resolve to whatever Fontconfig picks.
+  - Variable fonts' named-instance index bits are dropped: axes are set from the span's
+    weight and style.
+- **Font matching** follows CSS Fonts 4 §5.2.
+  - The weight distance: 400–500 looks up to 500, then down, then up; lighter weights
+    look down first; bolder weights look up first. A variable `wght` axis matches any
+    weight in its range.
+  - A style mismatch costs more than any weight difference.
+  - There is no synthetic bold or italic. An italic request uses an `ital` axis, else
+    `slnt` (down to -12), else an italic face.
+- **Fallback per grapheme cluster.** The primary face is tried first, then the span's
+  family list, then registered families in registration order (each at its best weight
+  and style), then Fontconfig fallback (cached by the cluster's first non-ignorable code
+  point). If nothing covers the cluster, the primary face draws `.notdef`.
+  - Default-ignorable code points need no coverage.
+  - **Stickiness:** a Common or Inherited cluster (space, punctuation, digits) keeps the
+    previous cluster's font when that font covers it. Otherwise every space inside fallback
+    text would split the run and lose kerning.
+- **Runs** split where the bidi level, script, resolved face or shaping style (family,
+  weight, style, size) changes. Color is not a split: glyph color comes from the style of
+  the glyph's cluster.
+- **Test fonts:** `tests/fonts/`, 3.8 MB, OFL, pinned to a google/fonts commit with sha256
+  (`tests/fonts/SOURCES.md`).
+  - Noto Sans (variable wght/wdth; it also covers Devanagari), Noto Sans Hebrew, Arabic and
+    Devanagari.
+  - Noto Sans SC subset to `cjk_chars.txt` (249 KB instead of 17.8 MB). The subset tool
+    keeps every name record: `hb-subset` normally keeps only IDs 0–6, which renamed the
+    font "Noto Sans SC Thin".
+  - The subset is a Modified Version under the OFL. Its name doesn't use the declared
+    Reserved Font Name "Source".
+
 ## Milestone 0.2: hardening before M1
 
 ### Idle frames

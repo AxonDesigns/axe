@@ -5,6 +5,7 @@ find_package(PkgConfig REQUIRED)
 pkg_check_modules(WAYLAND REQUIRED IMPORTED_TARGET wayland-client>=1.20)
 pkg_check_modules(XKBCOMMON REQUIRED IMPORTED_TARGET xkbcommon>=1.0)
 pkg_check_modules(WAYLAND_PROTOCOLS REQUIRED wayland-protocols>=1.31)
+pkg_check_modules(FONTCONFIG REQUIRED IMPORTED_TARGET fontconfig>=2.13)
 
 add_library(ui STATIC
     runtime/actor.c
@@ -27,6 +28,8 @@ add_library(ui STATIC
     platform/wayland/pacing.c
     platform/wayland/wayland.c
     render/render.c
+    text/font_registry.c
+    text/shape.c
     unicode/bidi.c
     unicode/grapheme.c
     unicode/linebreak.c
@@ -41,6 +44,11 @@ target_include_directories(ui
 target_compile_definitions(ui PRIVATE UI_HOOKS_ENABLED=$<BOOL:${UI_HOOKS}> _DEFAULT_SOURCE)
 target_link_libraries(ui PRIVATE m PkgConfig::WAYLAND PkgConfig::XKBCOMMON)
 ui_target_warnings(ui)
+
+# One internal module per dependency: only text/hb includes hb.h and only text/fontconfig
+# includes fontconfig.h; neither type appears in any other header.
+target_sources(ui PRIVATE text/hb/hb_font.c text/fontconfig/fc.c)
+target_link_libraries(ui PRIVATE harfbuzz PkgConfig::FONTCONFIG)
 
 # The render module is the only code that sees webgpu.h.
 ui_generate_webgpu_checked("${CMAKE_BINARY_DIR}/gen/render/webgpu_checked.h" ${UI_WEBGPU_HEADERS})

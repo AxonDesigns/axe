@@ -31,3 +31,4 @@ target_include_directories(ui_webgpu SYSTEM INTERFACE
 target_link_libraries(ui_webgpu INTERFACE wgpu_native)
 set(UI_WEBGPU_HEADERS "${_wgpu_dir}/ffi/webgpu-headers/webgpu.h" "${_wgpu_dir}/ffi/wgpu.h"
     PARENT_SCOPE)
+include(${CMAKE_CURRENT_SOURCE_DIR}/harfbuzz.cmake)

@@ -53,3 +53,12 @@ foreach(kind_file IN ITEMS "bidi:BidiCharacterTest" "linebreak:LineBreakTest"
     add_test(NAME unicode_${kind}
              COMMAND test_unicode_conformance ${kind} ${CMAKE_CURRENT_SOURCE_DIR}/unicode/${file}.txt)
 endforeach()
+
+# Fonts and shaping, with the bundled test fonts only.
+add_executable(test_text_shape test_text_shape.c)
+target_include_directories(test_text_shape PRIVATE ${PROJECT_SOURCE_DIR}/src)
+target_compile_definitions(test_text_shape PRIVATE
+    UI_TEST_FONTS="${CMAKE_CURRENT_SOURCE_DIR}/fonts")
+target_link_libraries(test_text_shape PRIVATE ui m)
+ui_target_warnings(test_text_shape)
+add_test(NAME text_shape COMMAND test_text_shape)
