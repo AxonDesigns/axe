@@ -81,6 +81,15 @@ milestone first.
     visible lines.
   - The node's own background is not clipped (it lies inside its rect anyway).
   - `test_clip` checks pixels against the same scene without the clip.
+- **Runtime font loading:** `load_font(id, path)` (opcode 11) and the `font_loaded(id,
+  result)` event (5), following the timer pattern: a request ID completed by an event, with
+  no callback into the language.
+  - It is applied at the frame boundary on the core thread. HarfBuzz maps the file and
+    reads tables lazily, so this is cheap for local files. Loading off-thread belongs to
+    the asset system.
+  - Success invalidates every paragraph's shaping (matches and fallbacks may change) and
+    marks the roots dirty, so the frame that applies it already shows the new font.
+  - Loading a file that is already registered is a no-op that still succeeds.
 
 ### Unicode layer
 - **Version: Unicode 18.0.0.** This is the UCD that the pinned HarfBuzz 15.0.0 ships
@@ -294,8 +303,8 @@ milestone first.
 - **Invalid UTF-8** is replaced per maximal subpart. Span offsets are remapped onto the
   sanitized text, so a span stays on its characters; boundaries inside a sequence snap to
   its start. Replacements are counted in `ui_app_stats.text_invalid_sequences`.
-- **Fonts come from app creation** (`ui_app_desc.text.font_files`, `system_fonts`).
-  Loading fonts at runtime comes with assets and HMR.
+- **Fonts come from app creation** (`ui_app_desc.text.font_files`, `system_fonts`), and at
+  runtime from `load_font` (see the follow-ups above).
 - **Scene:** a node may own a `ui_paragraph`.
   - It is laid out at the node's width × scale when its surface's list is built.
   - Draw order is background, then text, then children. Overflowing text is drawn unless

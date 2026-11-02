@@ -335,6 +335,18 @@ ui_result ui_cmd_set_text(ui_cmd_writer *w, ui_handle node, const ui_text_desc *
     return UI_OK;
 }
 
+ui_result ui_cmd_load_font(ui_cmd_writer *w, uint32_t id, const char *path) {
+    size_t n = path ? strlen(path) : 0;
+    if (!n || n > UI_FONT_PATH_MAX) return UI_ERR_INVALID_ARGUMENT;
+    uint8_t *p = ui_wire_buf_op(&w->buf, UI_OP_LOAD_FONT,
+                                UI_WIRE_SIZE_LOAD_FONT_HEADER + ui_wire_pad4((uint32_t)n));
+    if (!p) return UI_ERR_OUT_OF_MEMORY;
+    p = ui_wire_put_u32(p, id);
+    p = ui_wire_put_u32(p, (uint32_t)n);
+    put_bytes(p, path, (uint32_t)n);
+    return UI_OK;
+}
+
 ui_result ui_cmd_writer_take(ui_cmd_writer *w, uint8_t **out_bytes, size_t *out_size) {
     *out_bytes = ui_wire_buf_finish(&w->buf, out_size);
     return *out_bytes ? UI_OK : UI_ERR_END;
@@ -367,6 +379,14 @@ ui_result ui_wire_event_surface_close(ui_wire_buf *b, ui_handle surface) {
     uint8_t *p = ui_wire_buf_op(b, UI_EVENT_SURFACE_CLOSE_REQUESTED, UI_WIRE_SIZE_SURFACE_CLOSE);
     if (!p) return UI_ERR_OUT_OF_MEMORY;
     ui_wire_put_handle(p, surface);
+    return UI_OK;
+}
+
+ui_result ui_wire_event_font_loaded(ui_wire_buf *b, uint32_t id, ui_result result) {
+    uint8_t *p = ui_wire_buf_op(b, UI_EVENT_FONT_LOADED, UI_WIRE_SIZE_FONT_LOADED);
+    if (!p) return UI_ERR_OUT_OF_MEMORY;
+    p = ui_wire_put_u32(p, id);
+    ui_wire_put_u32(p, (uint32_t)result);
     return UI_OK;
 }
 
@@ -427,6 +447,11 @@ ui_result ui_event_next(ui_event_reader *reader, ui_event *out) {
             out->timer_fired.id = ui_wire_get_u32(op.payload);
             out->timer_fired.deadline_ns = ui_wire_get_u64(op.payload + 8);
             out->timer_fired.now_ns = ui_wire_get_u64(op.payload + 16);
+            return UI_OK;
+        case UI_EVENT_FONT_LOADED:
+            if (op.payload_size != UI_WIRE_SIZE_FONT_LOADED) return UI_ERR_MALFORMED;
+            out->font_loaded.id = ui_wire_get_u32(op.payload);
+            out->font_loaded.result = (ui_result)ui_wire_get_u32(op.payload + 4);
             return UI_OK;
         default:
             continue; // unknown event from a newer core: skip it

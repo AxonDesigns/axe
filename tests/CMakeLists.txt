@@ -125,3 +125,12 @@ target_link_libraries(test_clip PRIVATE ui m)
 ui_target_warnings(test_clip)
 add_test(NAME clip COMMAND test_clip)
 set_tests_properties(clip PROPERTIES ENVIRONMENT "UI_GPU=software" TIMEOUT 120)
+
+# Loading fonts at runtime.
+add_executable(test_font_loading test_font_loading.c)
+target_include_directories(test_font_loading PRIVATE ${PROJECT_SOURCE_DIR}/src)
+target_compile_definitions(test_font_loading PRIVATE _DEFAULT_SOURCE UI_TEST_FONTS="${CMAKE_CURRENT_SOURCE_DIR}/fonts")
+target_link_libraries(test_font_loading PRIVATE ui m)
+ui_target_warnings(test_font_loading)
+add_test(NAME font_loading COMMAND test_font_loading)
+set_tests_properties(font_loading PROPERTIES ENVIRONMENT "UI_GPU=software" TIMEOUT 120)

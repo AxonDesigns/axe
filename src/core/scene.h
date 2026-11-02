@@ -37,6 +37,8 @@ typedef struct ui_scene_root {
 
 // Receives set_timer ops, which belong to the core rather than to any node.
 typedef void (*ui_scene_timer_fn)(void *user, uint32_t id, uint64_t deadline_ns);
+// Receives load_font ops (the path is not NUL-terminated).
+typedef void (*ui_scene_font_fn)(void *user, uint32_t id, const char *path, uint32_t len);
 
 typedef struct ui_scene_stats {
     uint64_t applied, dropped, rejected;
@@ -63,6 +65,8 @@ typedef struct ui_scene {
     uint32_t clip_capacity;
     ui_scene_timer_fn timer_fn;
     void *timer_user;
+    ui_scene_font_fn font_fn;
+    void *font_user;
 } ui_scene;
 
 void ui_scene_init(ui_scene *s, const ui_logger *log);
@@ -77,6 +81,9 @@ void ui_scene_remove_root(ui_scene *s, ui_handle surface);
 // flush is all-or-nothing. Ops on stale handles are dropped individually and reported in
 // debug builds. Every applied node op marks its root dirty; set_timer goes to timer_fn.
 ui_result ui_scene_apply(ui_scene *s, const uint8_t *data, size_t size, uint64_t now_ns);
+
+// Marks every paragraph for reshaping and every root dirty (the fonts changed).
+void ui_scene_fonts_changed(ui_scene *s);
 
 // Advances every running spring to `now_ns`. Roots with a spring that was running are
 // marked dirty (the settling frame still changes the picture); `animating` is updated to

@@ -41,7 +41,8 @@ set_text (wire)  ──►  scene node owns a ui_paragraph (text, spans, familie
 
 ## Shaping and fonts
 
-- **Fonts** are registered at app creation (`ui_app_desc.text.font_files`). With
+- **Fonts** are registered at app creation (`ui_app_desc.text.font_files`) or at runtime
+  with `load_font`. With
   `system_fonts`, Fontconfig also resolves families and finds fallbacks among installed
   fonts. Tests use only `tests/fonts`.
 - **Matching** follows CSS: each entry of a span's family list is tried in turn, choosing
@@ -214,4 +215,5 @@ build, 2026-11-02):
 - The first frame that shows new text pays for shaping and rasterization on the core
   thread (about 60 ms for the example's paragraph with five scripts). Pre-warming and
   rasterizing off-thread are future work.
-- Fonts are given at app creation; there is no runtime font loading yet.
+- `load_font` reads the file on the core thread at the frame boundary; off-thread loading
+  comes with the asset system.

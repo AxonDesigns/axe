@@ -26,6 +26,7 @@ typedef enum ui_op {
     UI_OP_SET_TEXT = 8,
     UI_OP_APPEND_TEXT = 9, // continues a set_text whose text is longer than one op holds
     UI_OP_SET_CLIP = 10,
+    UI_OP_LOAD_FONT = 11,
 } ui_op;
 
 // Animatable node properties and their component counts.
@@ -45,6 +46,7 @@ typedef enum ui_event_type {
     UI_EVENT_SURFACE_RESIZED = 2,
     UI_EVENT_SURFACE_CLOSE_REQUESTED = 3,
     UI_EVENT_TIMER_FIRED = 4,
+    UI_EVENT_FONT_LOADED = 5,
 } ui_event_type;
 
 typedef struct ui_event {
@@ -65,6 +67,10 @@ typedef struct ui_event {
             uint64_t deadline_ns; // animation-clock time the timer was set for
             uint64_t now_ns;      // animation-clock time it fired (>= deadline_ns)
         } timer_fired;
+        struct {
+            uint32_t id;          // the request id given to ui_cmd_load_font
+            ui_result result;     // UI_OK, UI_ERR_IO (unreadable), UI_ERR_INVALID_ARGUMENT
+        } font_loaded;
     };
 } ui_event;
 
@@ -103,6 +109,13 @@ ui_result ui_cmd_start_spring(ui_cmd_writer *w, ui_handle node, ui_property prop
 ui_result ui_cmd_set_timer(ui_cmd_writer *w, uint32_t id, uint64_t deadline_ns);
 // Disarms timer `id` if armed.
 ui_result ui_cmd_cancel_timer(ui_cmd_writer *w, uint32_t id);
+
+#define UI_FONT_PATH_MAX 4096u
+
+// Registers the font file at `path` (UTF-8, at most UI_FONT_PATH_MAX bytes) at the next
+// frame boundary and answers with UI_EVENT_FONT_LOADED carrying `id`. Text everywhere is
+// shaped again, since the new font can change family matches and fallbacks. Face 0 only.
+ui_result ui_cmd_load_font(ui_cmd_writer *w, uint32_t id, const char *path);
 
 // ---- Text ------------------------------------------------------------------------------
 

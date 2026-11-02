@@ -44,6 +44,22 @@ static void set_timer(void *user, uint32_t id, uint64_t deadline_ns) {
     c->timers[c->timer_count++] = (ui_core_timer){id, deadline_ns};
 }
 
+// Scene callback for load_font ops, applied at the frame boundary like every command. The
+// file is opened on the core thread: HarfBuzz maps it and reads tables lazily, so this is
+// cheap for local files.
+static void load_font(void *user, uint32_t id, const char *path, uint32_t len) {
+    ui_core *c = user;
+    char buf[UI_FONT_PATH_MAX + 1];
+    memcpy(buf, path, len);
+    buf[len] = 0;
+    uint32_t before = ui_font_registry_face_count(c->fonts);
+    ui_result r = ui_font_registry_add_file(c->fonts, buf, 0, NULL);
+    if (r == UI_OK && ui_font_registry_face_count(c->fonts) != before)
+        ui_scene_fonts_changed(&c->scene);
+    if (ui_wire_event_font_loaded(&c->events, id, r) != UI_OK)
+        UI_ERROR(c->log, MODULE, "out of memory queueing font events");
+}
+
 static int timer_order(const void *a, const void *b) {
     const ui_core_timer *x = a, *y = b;
     if (x->deadline_ns != y->deadline_ns) return x->deadline_ns < y->deadline_ns ? -1 : 1;
@@ -108,6 +124,8 @@ ui_result ui_core_init(ui_core *c, const ui_core_desc *desc) {
     ui_wire_buf_init(&c->events, UI_WIRE_MAGIC_EVENT);
     c->scene.timer_fn = set_timer;
     c->scene.timer_user = c;
+    c->scene.font_fn = load_font;
+    c->scene.font_user = c;
     ui_result r = ui_actor_init(&c->actor, "core", c, NULL, ui_core_step, NULL, 1024,
                                 (ui_waker){core_wake, c});
     if (r != UI_OK) return r;

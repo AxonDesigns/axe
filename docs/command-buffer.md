@@ -68,6 +68,7 @@ A handle is 8 bytes: `u32 index`, `u32 generation`.
 | 8 | `set_text` | see [Text](#text) | 72 + variable |
 | 9 | `append_text` | node, `u32 chunk_bytes`, chunk (padded to 4) | 12 + chunk |
 | 10 | `set_clip` | node, `u32 flags` (bit 0: clip; other bits must be 0) | 12 |
+| 11 | `load_font` | `u32 id`, `u32 path_bytes` (1–4096), the path in UTF-8 (padded to 4, no NUL) | 8 + path |
 
 ### Properties for `start_spring`
 
@@ -92,6 +93,13 @@ rect; a node inside another clipped node is clipped to the intersection. The cli
 rectangular, in whole physical pixels: rounded corners are not clipped, and the node's own
 background is not affected. Text and rects entirely outside the clip are culled before
 they reach the display list, so clipped-away glyphs are never rasterized.
+
+### Fonts
+
+`load_font` registers face 0 of a font file at the frame boundary and answers with
+`font_loaded` carrying the same id. On success all text is shaped again, since the new
+font can change family matches and fallbacks, and the surfaces redraw. A path that is
+empty, too long, contains NUL or is not valid UTF-8 drops the op (no event).
 
 ### Timers
 
@@ -200,6 +208,7 @@ the family list "Noto Sans", and no spans:
 | 2 | `surface_resized` | surface handle, `f32 width, height` (logical px), `u32 scale_120` | 20 |
 | 3 | `surface_close_requested` | surface handle | 8 |
 | 4 | `timer_fired` | `u32 id`, `u32` reserved, `u64 deadline_ns`, `u64 now_ns` (both animation clock) | 24 |
+| 5 | `font_loaded` | `u32 id` (from `load_font`), `u32 result` (`ui_result`: 0 OK, `UI_ERR_IO`, `UI_ERR_INVALID_ARGUMENT`) | 8 |
 
 - `predicted_present_ns` is animation-clock time: when the frame is expected on screen.
   Pausing or stepping the clock moves it, so logic that keeps time from these events is

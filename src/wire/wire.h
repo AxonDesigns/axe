@@ -31,6 +31,8 @@ enum {
     UI_WIRE_SIZE_SET_TIMER = 16,         // id u32, reserved u32, deadline_ns u64
     UI_WIRE_SIZE_TIMER_FIRED = 24,       // id u32, reserved u32, deadline_ns u64, now_ns u64
     UI_WIRE_SIZE_SET_CLIP = 12,          // node, flags u32 (bit 0: clip)
+    UI_WIRE_SIZE_LOAD_FONT_HEADER = 8,   // id u32, path_bytes u32; then the path (padded)
+    UI_WIRE_SIZE_FONT_LOADED = 8,        // id u32, result u32
 };
 
 // set_text: fixed header, then spans, the family-name region (NUL-terminated names,
@@ -129,6 +131,7 @@ ui_result ui_wire_event_frame_committed(ui_wire_buf *b, ui_handle surface, uint6
 ui_result ui_wire_event_surface_resized(ui_wire_buf *b, ui_handle surface, float width,
                                         float height, uint32_t scale_120);
 ui_result ui_wire_event_surface_close(ui_wire_buf *b, ui_handle surface);
+ui_result ui_wire_event_font_loaded(ui_wire_buf *b, uint32_t id, ui_result result);
 ui_result ui_wire_event_timer_fired(ui_wire_buf *b, uint32_t id, uint64_t deadline_ns,
                                     uint64_t now_ns);
 

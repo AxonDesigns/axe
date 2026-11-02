@@ -135,6 +135,13 @@ static ui_result validate(const uint8_t *data, size_t size) {
         case UI_OP_SET_COLOR: expected = UI_WIRE_SIZE_SET_COLOR; break;
         case UI_OP_SET_TIMER: expected = UI_WIRE_SIZE_SET_TIMER; break;
         case UI_OP_SET_CLIP: expected = UI_WIRE_SIZE_SET_CLIP; break;
+        case UI_OP_LOAD_FONT: {
+            if (op.payload_size < UI_WIRE_SIZE_LOAD_FONT_HEADER) return UI_ERR_MALFORMED;
+            uint32_t n = ui_wire_get_u32(op.payload + 4);
+            if (n > UI_WIRE_MAX_PAYLOAD) return UI_ERR_MALFORMED;
+            expected = UI_WIRE_SIZE_LOAD_FONT_HEADER + ui_wire_pad4(n);
+            break;
+        }
         case UI_OP_START_SPRING:
             if (op.payload_size < UI_WIRE_SIZE_START_SPRING_BASE) return UI_ERR_MALFORMED;
             expected = UI_WIRE_SIZE_START_SPRING_BASE + 4u * ui_wire_get_u16(op.payload + 10);
@@ -225,6 +232,18 @@ static bool apply_op(ui_scene *s, const ui_wire_op *op, uint64_t now_ns) {
     if (op->opcode == UI_OP_CREATE_NODE) return apply_create(s, p);
     if (op->opcode == UI_OP_SET_TIMER) {
         if (s->timer_fn) s->timer_fn(s->timer_user, ui_wire_get_u32(p), ui_wire_get_u64(p + 8));
+        return true;
+    }
+    if (op->opcode == UI_OP_LOAD_FONT) {
+        uint32_t len = ui_wire_get_u32(p + 4);
+        const char *path = (const char *)p + UI_WIRE_SIZE_LOAD_FONT_HEADER;
+        if (!len || len > UI_FONT_PATH_MAX || memchr(path, 0, len) ||
+            !ui_utf8_valid((const uint8_t *)path, len)) {
+            s->stats.dropped++;
+            UI_DEBUG_REPORT(s->log, MODULE, "dropped load_font %u: bad path", ui_wire_get_u32(p));
+            return false;
+        }
+        if (s->font_fn) s->font_fn(s->font_user, ui_wire_get_u32(p), path, len);
         return true;
     }
     // Every other known op addresses one node; a change marks that node's surface dirty.
@@ -567,6 +586,16 @@ void ui_scene_animate(ui_scene *s, uint64_t now_ns) {
 }
 
 ui_scene_root *ui_scene_root_of(ui_scene *s, ui_handle surface) { return find_root(s, surface); }
+
+void ui_scene_fonts_changed(ui_scene *s) {
+    for (uint32_t slot = 0; slot < s->handles.used; slot++) {
+        if (s->handles.alive[slot] && s->nodes[slot].text) {
+            s->nodes[slot].text->shaped_valid = false;
+            s->nodes[slot].text->layout_valid = false;
+            s->roots[s->nodes[slot].root].dirty = true;
+        }
+    }
+}
 
 // Appends the glyphs of a node's text. ox, oy: the node's origin in physical px.
 static ui_result build_text(ui_paragraph *p, float ox, float oy, float width, float scale,
