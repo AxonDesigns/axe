@@ -3,6 +3,23 @@
 Choices the architecture document leaves open, recorded as they are made. Newest
 milestone first.
 
+## Milestone 1: text pipeline
+
+### CI
+- **GitHub Actions, Linux only** (`.github/workflows/ci.yml`): `ubuntu-24.04`, one job per
+  preset (`debug`, `asan`). Every test runs headless on lavapipe. `VK_DRIVER_FILES` names
+  only the lavapipe ICD, so a test can never pick up a GPU by accident.
+- **Clang 22 from apt.llvm.org** is pinned in CI (`LLVM_VERSION`). It is the oldest version
+  the code was developed with. Local development may use newer versions.
+- **What is cached.** Two caches, both keyed on the wgpu-native submodule commit:
+  - the vendored crates, `third_party/wgpu-native-vendor/`;
+  - Corrosion's Cargo target dir, `build/<preset>/cargo`, whose key also includes the Rust
+    and LLVM versions.
+- **What a warm run rebuilds.** Vendored crates are fingerprinted by version, so they never
+  rebuild. Fresh checkouts give the `wgpu-native` crate itself new mtimes, so only that one
+  crate rebuilds.
+- On failure, the test log and any golden-diff PNGs are uploaded as artifacts.
+
 ## Milestone 0.2: hardening before M1
 
 ### Idle frames

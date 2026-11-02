@@ -1,0 +1,95 @@
+# Linux CI: builds the debug and asan presets and runs every test headless on lavapipe.
+# The wgpu-native build (vendored crates + Cargo target dir) is cached per preset, keyed on
+# the pinned submodule commit and the Rust toolchain, so a warm run only builds our C code.
+name: ci
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  LLVM_VERSION: "22"
+  RUST_VERSION: "1.93"
+
+jobs:
+  linux:
+    name: linux (${{ matrix.preset }})
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        preset: [debug, asan]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install system packages
+        run: |
+          wget -qO llvm.sh https://apt.llvm.org/llvm.sh
+          sudo bash llvm.sh "$LLVM_VERSION"
+          sudo apt-get install -y --no-install-recommends \
+            "libclang-rt-$LLVM_VERSION-dev" ninja-build \
+            libwayland-dev wayland-protocols libxkbcommon-dev libfontconfig-dev \
+            mesa-vulkan-drivers libvulkan1 vulkan-tools
+          echo "/usr/lib/llvm-$LLVM_VERSION/bin" >> "$GITHUB_PATH"
+
+      - name: Install Rust
+        run: rustup toolchain install "$RUST_VERSION" --profile minimal
+
+      - name: Cache key
+        id: key
+        run: echo "wgpu=$(git rev-parse HEAD:third_party/wgpu-native)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache vendored crates
+        id: vendor
+        uses: actions/cache@v4
+        with:
+          path: third_party/wgpu-native-vendor
+          key: wgpu-vendor-${{ steps.key.outputs.wgpu }}
+
+      - name: Vendor crates
+        if: steps.vendor.outputs.cache-hit != 'true'
+        run: tools/vendor-rust.sh
+
+      - name: Cache wgpu-native build
+        uses: actions/cache@v4
+        with:
+          path: build/${{ matrix.preset }}/cargo
+          key: wgpu-build-${{ matrix.preset }}-${{ steps.key.outputs.wgpu }}-rust${{ env.RUST_VERSION }}-llvm${{ env.LLVM_VERSION }}
+
+      - name: Tool versions
+        run: |
+          clang --version | head -1
+          cmake --version | head -1
+          cargo +"$RUST_VERSION" --version
+          vulkaninfo --summary 2>/dev/null | grep -E 'deviceName|driverName' || true
+
+      - name: Configure
+        run: cmake --preset ${{ matrix.preset }}
+
+      - name: Build
+        run: cmake --build --preset ${{ matrix.preset }}
+
+      - name: Test
+        env:
+          # Only the CPU driver: tests must not depend on a GPU.
+          VK_DRIVER_FILES: /usr/share/vulkan/icd.d/lvp_icd.x86_64.json
+          VK_ICD_FILENAMES: /usr/share/vulkan/icd.d/lvp_icd.x86_64.json
+        run: ctest --preset ${{ matrix.preset }}
+
+      - name: Upload test artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-artifacts-${{ matrix.preset }}
+          path: |
+            build/${{ matrix.preset }}/Testing/Temporary/LastTest.log
+            build/${{ matrix.preset }}/tests/**/*.png
+          if-no-files-found: ignore

@@ -17,7 +17,7 @@ Vulkan and WGSL) and always in the `release` profile.
 | Tool | Version |
 | --- | --- |
 | Rust | 1.93 (`rust-toolchain.toml`, matches wgpu-native's pin) |
-| Clang | 18 or newer (C23, `#embed`); developed with 22.1 |
+| Clang | 19 or newer (C23, `#embed`); CI pins 22, developed with 22–23 |
 | CMake | 3.28 or newer |
 
 ## System libraries (Linux, for now)
