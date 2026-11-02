@@ -21,6 +21,11 @@ static_assert(sizeof(ui_dl_rect) == INSTANCE_STRIDE, "instance layout must match
 static const char rrect_wgsl[] = {
 #embed "shaders/rrect.wgsl"
     , 0};
+static const char glyph_wgsl[] = {
+#embed "shaders/glyph.wgsl"
+    , 0};
+
+static_assert(sizeof(ui_dl_glyph) == INSTANCE_STRIDE, "glyph instances share the rect stride");
 
 typedef struct render_surface {
     bool used;
@@ -41,18 +46,22 @@ typedef struct render_surface {
     WGPUBindGroup bind_group;
     WGPUBuffer instances;
     uint64_t instance_bytes;
+    WGPUBuffer glyph_instances;
+    uint64_t glyph_instance_bytes;
 } render_surface;
 
 // One atlas page texture. The core decides what goes where; this side only uploads.
 typedef struct atlas_page {
     WGPUTexture texture;
     WGPUTextureView view;
+    WGPUBindGroup bind_group;
     uint32_t size;
 } atlas_page;
 
 typedef struct pipeline_entry {
     WGPUTextureFormat format;
-    WGPURenderPipeline pipeline;
+    WGPURenderPipeline rect;
+    WGPURenderPipeline glyph;
 } pipeline_entry;
 
 struct ui_render {
@@ -64,8 +73,11 @@ struct ui_render {
     WGPUDevice device;
     WGPUQueue queue;
     WGPUShaderModule shader;
-    WGPUBindGroupLayout bind_group_layout;
+    WGPUShaderModule glyph_shader;
+    WGPUBindGroupLayout bind_group_layout;  // group 0: globals
+    WGPUBindGroupLayout atlas_layout;       // group 1 of the glyph pipeline: one atlas page
     WGPUPipelineLayout pipeline_layout;
+    WGPUPipelineLayout glyph_pipeline_layout;
     pipeline_entry pipelines[MAX_PIPELINES];
     uint32_t pipeline_count;
     render_surface surfaces[UI_MAX_SURFACES];
@@ -174,7 +186,8 @@ static void wait_request(ui_render *r, const request_result *res) {
 
 // ---- Pipelines ---------------------------------------------------------------------------
 
-static ui_result create_pipeline(ui_render *r, WGPUTextureFormat format, WGPURenderPipeline *out) {
+static ui_result create_pipeline(ui_render *r, WGPUTextureFormat format, bool glyph,
+                                 WGPURenderPipeline *out) {
     WGPUVertexAttribute attributes[3];
     for (uint32_t i = 0; i < 3; i++) {
         attributes[i] = WGPU_VERTEX_ATTRIBUTE_INIT;
@@ -198,15 +211,15 @@ static ui_result create_pipeline(ui_render *r, WGPUTextureFormat format, WGPURen
     target.writeMask = WGPUColorWriteMask_All;
 
     WGPUFragmentState fragment = WGPU_FRAGMENT_STATE_INIT;
-    fragment.module = r->shader;
+    fragment.module = glyph ? r->glyph_shader : r->shader;
     fragment.entryPoint = sv("fs_main");
     fragment.targetCount = 1;
     fragment.targets = &target;
 
     WGPURenderPipelineDescriptor desc = WGPU_RENDER_PIPELINE_DESCRIPTOR_INIT;
-    desc.label = sv("rrect");
-    desc.layout = r->pipeline_layout;
-    desc.vertex.module = r->shader;
+    desc.label = sv(glyph ? "glyph" : "rrect");
+    desc.layout = glyph ? r->glyph_pipeline_layout : r->pipeline_layout;
+    desc.vertex.module = glyph ? r->glyph_shader : r->shader;
     desc.vertex.entryPoint = sv("vs_main");
     desc.vertex.bufferCount = 1;
     desc.vertex.buffers = &instance_layout;
@@ -216,17 +229,24 @@ static ui_result create_pipeline(ui_render *r, WGPUTextureFormat format, WGPURen
     return *out ? UI_OK : UI_ERR_GPU;
 }
 
-static WGPURenderPipeline pipeline_for(ui_render *r, WGPUTextureFormat format) {
+static ui_result create_pipelines(ui_render *r, WGPUTextureFormat format, pipeline_entry *e) {
+    *e = (pipeline_entry){.format = format};
+    ui_result res = create_pipeline(r, format, false, &e->rect);
+    if (res == UI_OK) res = create_pipeline(r, format, true, &e->glyph);
+    return res;
+}
+
+static const pipeline_entry *pipelines_for(ui_render *r, WGPUTextureFormat format) {
     for (uint32_t i = 0; i < r->pipeline_count; i++) {
-        if (r->pipelines[i].format == format) return r->pipelines[i].pipeline;
+        if (r->pipelines[i].format == format) return &r->pipelines[i];
     }
     // Only reached for a surface format nobody precompiled; logged so it gets added.
     if (r->pipeline_count == MAX_PIPELINES) return NULL;
-    UI_WARN(r->log, MODULE, "compiling a pipeline for format %d at runtime", (int)format);
-    WGPURenderPipeline p;
-    if (create_pipeline(r, format, &p) != UI_OK) return NULL;
-    r->pipelines[r->pipeline_count++] = (pipeline_entry){format, p};
-    return p;
+    UI_WARN(r->log, MODULE, "compiling pipelines for format %d at runtime", (int)format);
+    pipeline_entry *e = &r->pipelines[r->pipeline_count];
+    if (create_pipelines(r, format, e) != UI_OK) return NULL;
+    r->pipeline_count++;
+    return e;
 }
 
 // ---- Device ------------------------------------------------------------------------------
@@ -294,11 +314,14 @@ static ui_result init_device(ui_render *r) {
     shader_desc.nextInChain = &wgsl.chain;
     shader_desc.label = sv("rrect.wgsl");
     r->shader = wgpuDeviceCreateShaderModule(r->device, &shader_desc);
-    if (!r->shader) return UI_ERR_GPU;
+    wgsl.code = sv(glyph_wgsl);
+    shader_desc.label = sv("glyph.wgsl");
+    r->glyph_shader = wgpuDeviceCreateShaderModule(r->device, &shader_desc);
+    if (!r->shader || !r->glyph_shader) return UI_ERR_GPU;
 
     WGPUBindGroupLayoutEntry entry = WGPU_BIND_GROUP_LAYOUT_ENTRY_INIT;
     entry.binding = 0;
-    entry.visibility = WGPUShaderStage_Vertex;
+    entry.visibility = WGPUShaderStage_Vertex | WGPUShaderStage_Fragment;
     entry.buffer.type = WGPUBufferBindingType_Uniform;
     entry.buffer.minBindingSize = 16;
     WGPUBindGroupLayoutDescriptor bgl_desc = WGPU_BIND_GROUP_LAYOUT_DESCRIPTOR_INIT;
@@ -309,17 +332,32 @@ static ui_result init_device(ui_render *r) {
     layout_desc.bindGroupLayoutCount = 1;
     layout_desc.bindGroupLayouts = &r->bind_group_layout;
     r->pipeline_layout = wgpuDeviceCreatePipelineLayout(r->device, &layout_desc);
-    if (!r->bind_group_layout || !r->pipeline_layout) return UI_ERR_GPU;
+
+    WGPUBindGroupLayoutEntry tex = WGPU_BIND_GROUP_LAYOUT_ENTRY_INIT;
+    tex.binding = 0;
+    tex.visibility = WGPUShaderStage_Fragment;
+    tex.texture.sampleType = WGPUTextureSampleType_Float;
+    tex.texture.viewDimension = WGPUTextureViewDimension_2D;
+    WGPUBindGroupLayoutDescriptor tex_desc = WGPU_BIND_GROUP_LAYOUT_DESCRIPTOR_INIT;
+    tex_desc.entryCount = 1;
+    tex_desc.entries = &tex;
+    r->atlas_layout = wgpuDeviceCreateBindGroupLayout(r->device, &tex_desc);
+    WGPUBindGroupLayout glyph_layouts[2] = {r->bind_group_layout, r->atlas_layout};
+    layout_desc.bindGroupLayoutCount = 2;
+    layout_desc.bindGroupLayouts = glyph_layouts;
+    r->glyph_pipeline_layout = wgpuDeviceCreatePipelineLayout(r->device, &layout_desc);
+    if (!r->bind_group_layout || !r->pipeline_layout || !r->atlas_layout ||
+        !r->glyph_pipeline_layout)
+        return UI_ERR_GPU;
 
     // Precompile every variant used at runtime: windows (BGRA8 sRGB, the common swapchain
     // format) and offscreen targets (RGBA8 sRGB).
     static const WGPUTextureFormat formats[] = {WGPUTextureFormat_BGRA8UnormSrgb,
                                                 WGPUTextureFormat_RGBA8UnormSrgb};
     for (size_t i = 0; i < UI_ARRAY_LEN(formats); i++) {
-        WGPURenderPipeline p;
-        ui_result res = create_pipeline(r, formats[i], &p);
+        ui_result res = create_pipelines(r, formats[i], &r->pipelines[r->pipeline_count]);
         if (res != UI_OK) return res;
-        r->pipelines[r->pipeline_count++] = (pipeline_entry){formats[i], p};
+        r->pipeline_count++;
     }
     return UI_OK;
 }
@@ -337,6 +375,7 @@ static void release_surface(render_surface *s) {
     if (s->bind_group) wgpuBindGroupRelease(s->bind_group);
     if (s->uniforms) wgpuBufferRelease(s->uniforms);
     if (s->instances) wgpuBufferRelease(s->instances);
+    if (s->glyph_instances) wgpuBufferRelease(s->glyph_instances);
     if (s->offscreen_view) wgpuTextureViewRelease(s->offscreen_view);
     if (s->offscreen) wgpuTextureRelease(s->offscreen);
     if (s->surface) {
@@ -461,6 +500,7 @@ static ui_result ensure_offscreen(ui_render *r, render_surface *s, uint32_t widt
 // ---- Atlas -------------------------------------------------------------------------------
 
 static void release_page(atlas_page *p) {
+    if (p->bind_group) wgpuBindGroupRelease(p->bind_group);
     if (p->view) wgpuTextureViewRelease(p->view);
     if (p->texture) {
         wgpuTextureDestroy(p->texture);
@@ -480,6 +520,15 @@ static ui_result create_page(ui_render *r, atlas_page *p, uint32_t size, uint16_
     p->view = p->texture ? wgpuTextureCreateView(p->texture, NULL) : NULL;
     p->size = size;
     if (!p->view) return UI_ERR_GPU;
+    WGPUBindGroupEntry be = WGPU_BIND_GROUP_ENTRY_INIT;
+    be.binding = 0;
+    be.textureView = p->view;
+    WGPUBindGroupDescriptor bg = WGPU_BIND_GROUP_DESCRIPTOR_INIT;
+    bg.layout = r->atlas_layout;
+    bg.entryCount = 1;
+    bg.entries = &be;
+    p->bind_group = wgpuDeviceCreateBindGroup(r->device, &bg);
+    if (!p->bind_group) return UI_ERR_GPU;
     // New pages start transparent (WebGPU zero-initializes, but say so explicitly: released
     // and recreated slots must never show stale glyphs).
     uint32_t bpp = format == UI_ATLAS_RGBA8 ? 4 : 1;
@@ -531,27 +580,42 @@ static ui_result apply_atlas_update(ui_render *r, const ui_atlas_update *u) {
 
 // ---- Frames ------------------------------------------------------------------------------
 
-static ui_result encode(ui_render *r, render_surface *s, const ui_display_list *dl,
-                        WGPUTextureView target) {
-    WGPURenderPipeline pipeline = pipeline_for(r, s->format);
-    if (!pipeline) return UI_ERR_GPU;
-    const float globals[4] = {(float)dl->width, (float)dl->height, 0, 0};
-    wgpuQueueWriteBuffer(r->queue, s->uniforms, 0, globals, sizeof globals);
-
-    uint64_t bytes = (uint64_t)dl->rect_count * INSTANCE_STRIDE;
-    if (bytes > s->instance_bytes) {
-        uint64_t size = s->instance_bytes ? s->instance_bytes : 4096;
+// Grows a per-surface instance buffer to hold `bytes` and uploads `data` into it.
+static ui_result upload_instances(ui_render *r, WGPUBuffer *buffer, uint64_t *capacity,
+                                  const void *data, uint64_t bytes, const char *label) {
+    if (!bytes) return UI_OK;
+    if (bytes > *capacity) {
+        uint64_t size = *capacity ? *capacity : 4096;
         while (size < bytes) size *= 2;
-        if (s->instances) wgpuBufferRelease(s->instances);
+        if (*buffer) wgpuBufferRelease(*buffer);
         WGPUBufferDescriptor bd = WGPU_BUFFER_DESCRIPTOR_INIT;
-        bd.label = sv("instances");
+        bd.label = sv(label);
         bd.size = size;
         bd.usage = WGPUBufferUsage_Vertex | WGPUBufferUsage_CopyDst;
-        s->instances = wgpuDeviceCreateBuffer(r->device, &bd);
-        s->instance_bytes = s->instances ? size : 0;
-        if (!s->instances) return UI_ERR_GPU;
+        *buffer = wgpuDeviceCreateBuffer(r->device, &bd);
+        *capacity = *buffer ? size : 0;
+        if (!*buffer) return UI_ERR_GPU;
     }
-    if (bytes) wgpuQueueWriteBuffer(r->queue, s->instances, 0, dl->rects, (size_t)bytes);
+    wgpuQueueWriteBuffer(r->queue, *buffer, 0, data, (size_t)bytes);
+    return UI_OK;
+}
+
+static ui_result encode(ui_render *r, render_surface *s, const ui_display_list *dl,
+                        WGPUTextureView target) {
+    const pipeline_entry *pipes = pipelines_for(r, s->format);
+    if (!pipes) return UI_ERR_GPU;
+    const float globals[4] = {(float)dl->width, (float)dl->height, dl->text_contrast,
+                              dl->text_gamma};
+    wgpuQueueWriteBuffer(r->queue, s->uniforms, 0, globals, sizeof globals);
+
+    uint64_t rect_bytes = (uint64_t)dl->rect_count * INSTANCE_STRIDE;
+    uint64_t glyph_bytes = (uint64_t)dl->glyph_count * INSTANCE_STRIDE;
+    ui_result res = upload_instances(r, &s->instances, &s->instance_bytes, dl->rects, rect_bytes,
+                                     "rect instances");
+    if (res == UI_OK)
+        res = upload_instances(r, &s->glyph_instances, &s->glyph_instance_bytes, dl->glyphs,
+                               glyph_bytes, "glyph instances");
+    if (res != UI_OK) return res;
 
     WGPUCommandEncoder enc = wgpuDeviceCreateCommandEncoder(r->device, NULL);
     WGPURenderPassColorAttachment color = WGPU_RENDER_PASS_COLOR_ATTACHMENT_INIT;
@@ -563,11 +627,30 @@ static ui_result encode(ui_render *r, render_surface *s, const ui_display_list *
     pass_desc.colorAttachmentCount = 1;
     pass_desc.colorAttachments = &color;
     WGPURenderPassEncoder pass = wgpuCommandEncoderBeginRenderPass(enc, &pass_desc);
-    if (dl->rect_count) {
-        wgpuRenderPassEncoderSetPipeline(pass, pipeline);
-        wgpuRenderPassEncoderSetBindGroup(pass, 0, s->bind_group, 0, NULL);
-        wgpuRenderPassEncoderSetVertexBuffer(pass, 0, s->instances, 0, bytes);
-        wgpuRenderPassEncoderDraw(pass, 4, dl->rect_count, 0, 0);
+    wgpuRenderPassEncoderSetBindGroup(pass, 0, s->bind_group, 0, NULL);
+    int bound = -1; // which pipeline is set: UI_DL_RECTS or UI_DL_GLYPHS
+    int32_t page = -1;
+    for (uint32_t i = 0; i < dl->batch_count; i++) {
+        const ui_dl_batch *b = &dl->batches[i];
+        if (b->kind == UI_DL_GLYPHS) {
+            const atlas_page *ap = b->page < UI_ATLAS_MAX_PAGES ? &r->atlas[b->page] : NULL;
+            if (!ap || !ap->bind_group) continue; // never sent: nothing to draw from
+            if (bound != UI_DL_GLYPHS) {
+                wgpuRenderPassEncoderSetPipeline(pass, pipes->glyph);
+                wgpuRenderPassEncoderSetVertexBuffer(pass, 0, s->glyph_instances, 0, glyph_bytes);
+                bound = UI_DL_GLYPHS;
+                page = -1;
+            }
+            if (page != b->page) {
+                wgpuRenderPassEncoderSetBindGroup(pass, 1, ap->bind_group, 0, NULL);
+                page = b->page;
+            }
+        } else if (bound != UI_DL_RECTS) {
+            wgpuRenderPassEncoderSetPipeline(pass, pipes->rect);
+            wgpuRenderPassEncoderSetVertexBuffer(pass, 0, s->instances, 0, rect_bytes);
+            bound = UI_DL_RECTS;
+        }
+        wgpuRenderPassEncoderDraw(pass, 4, b->count, 0, b->first);
     }
     wgpuRenderPassEncoderEnd(pass);
     wgpuRenderPassEncoderRelease(pass);
@@ -801,11 +884,17 @@ static void release_all(ui_render *r) {
         if (r->surfaces[i].used) release_surface(&r->surfaces[i]);
     }
     for (uint32_t i = 0; i < UI_ATLAS_MAX_PAGES; i++) release_page(&r->atlas[i]);
-    for (uint32_t i = 0; i < r->pipeline_count; i++) wgpuRenderPipelineRelease(r->pipelines[i].pipeline);
+    for (uint32_t i = 0; i < r->pipeline_count; i++) {
+        if (r->pipelines[i].rect) wgpuRenderPipelineRelease(r->pipelines[i].rect);
+        if (r->pipelines[i].glyph) wgpuRenderPipelineRelease(r->pipelines[i].glyph);
+    }
     r->pipeline_count = 0;
     if (r->pipeline_layout) wgpuPipelineLayoutRelease(r->pipeline_layout);
+    if (r->glyph_pipeline_layout) wgpuPipelineLayoutRelease(r->glyph_pipeline_layout);
     if (r->bind_group_layout) wgpuBindGroupLayoutRelease(r->bind_group_layout);
+    if (r->atlas_layout) wgpuBindGroupLayoutRelease(r->atlas_layout);
     if (r->shader) wgpuShaderModuleRelease(r->shader);
+    if (r->glyph_shader) wgpuShaderModuleRelease(r->glyph_shader);
     if (r->queue) wgpuQueueRelease(r->queue);
     if (r->device) {
         wgpuDeviceDestroy(r->device);
@@ -814,8 +903,11 @@ static void release_all(ui_render *r) {
     if (r->adapter) wgpuAdapterRelease(r->adapter);
     if (r->instance) wgpuInstanceRelease(r->instance);
     r->pipeline_layout = NULL;
+    r->glyph_pipeline_layout = NULL;
     r->bind_group_layout = NULL;
+    r->atlas_layout = NULL;
     r->shader = NULL;
+    r->glyph_shader = NULL;
     r->queue = NULL;
     r->device = NULL;
     r->adapter = NULL;

@@ -1,5 +1,7 @@
 #include "core/core.h"
 
+#include <math.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "render/render.h"
@@ -66,6 +68,34 @@ static void fire_timers(ui_core *c) {
     c->timer_count -= due;
 }
 
+static float env_float(const char *name, float fallback) {
+    const char *v = getenv(name);
+    if (!v || !*v) return fallback;
+    char *end;
+    float f = strtof(v, &end);
+    return *end || !isfinite(f) || f < 0 ? fallback : f;
+}
+
+static ui_result init_text(ui_core *c, const ui_text_config *cfg) {
+    static const ui_text_config none = {0};
+    if (!cfg) cfg = &none;
+    ui_font_registry_desc fd = {.log = c->log, .system_fonts = cfg->system_fonts};
+    ui_result r = ui_font_registry_create(&fd, &c->fonts);
+    if (r != UI_OK) return r;
+    for (uint32_t i = 0; i < cfg->font_file_count; i++)
+        ui_font_registry_add_file(c->fonts, cfg->font_files[i], 0, NULL); // failures are logged
+    if (!ui_font_registry_face_count(c->fonts) && !cfg->system_fonts)
+        UI_WARN(c->log, MODULE, "no fonts: text will not be drawn");
+    r = ui_text_context_init(&c->text, c->fonts);
+    if (r != UI_OK) return r;
+    ui_atlas_desc ad = {cfg->atlas_page_size, cfg->atlas_max_pages, cfg->glyph_evict_frames};
+    r = ui_atlas_create(&ad, &c->atlas);
+    if (r != UI_OK) return r;
+    c->text_contrast = env_float("UI_TEXT_CONTRAST", cfg->contrast > 0 ? cfg->contrast : UI_TEXT_DEFAULT_CONTRAST);
+    c->text_gamma = env_float("UI_TEXT_GAMMA", cfg->gamma > 0 ? cfg->gamma : 1.f);
+    return UI_OK;
+}
+
 ui_result ui_core_init(ui_core *c, const ui_core_desc *desc) {
     memset(c, 0, sizeof *c);
     c->log = desc->log;
@@ -82,7 +112,18 @@ ui_result ui_core_init(ui_core *c, const ui_core_desc *desc) {
                                 (ui_waker){core_wake, c});
     if (r != UI_OK) return r;
     r = ui_queue_init_unbounded(&c->from_logic, 256, (ui_waker){core_wake, c});
-    if (r != UI_OK) ui_actor_destroy(&c->actor);
+    if (r != UI_OK) {
+        ui_actor_destroy(&c->actor);
+        return r;
+    }
+    r = init_text(c, desc->text);
+    if (r != UI_OK) {
+        ui_queue_destroy(&c->from_logic, NULL);
+        ui_actor_destroy(&c->actor);
+        ui_atlas_destroy(c->atlas);
+        ui_text_context_free(&c->text);
+        ui_font_registry_destroy(c->fonts);
+    }
     return r;
 }
 
@@ -97,7 +138,12 @@ void ui_core_destroy(ui_core *c) {
     }
     ui_wire_buf_free(&c->events);
     ui_handle_table_destroy(&c->surface_handles);
-    ui_scene_destroy(&c->scene);
+    ui_scene_destroy(&c->scene); // before the fonts its paragraphs refer to
+    free(c->unsent);
+    ui_atlas_destroy(c->atlas);
+    ui_raster_free(&c->raster);
+    ui_text_context_free(&c->text);
+    ui_font_registry_destroy(c->fonts);
 }
 
 ui_core_surface *ui_core_surface_get(ui_core *c, ui_handle handle) {
@@ -294,6 +340,33 @@ static bool surface_has_work(ui_core *c, const ui_core_surface *s) {
            (root && (root->dirty || root->animating));
 }
 
+// Queues the atlas changes made so far for the render actor. False only when memory ran out;
+// the changes are then kept and retried.
+static bool send_atlas_update(ui_core *c) {
+    if (!c->unsent) {
+        bool failed;
+        c->unsent = ui_atlas_take_update(c->atlas, &failed);
+        if (failed) return false;
+    }
+    if (!c->unsent) return true;
+    ui_msg msg = {.type = UI_MSG_ATLAS_UPDATE, .ptr = c->unsent};
+    if (ui_queue_push(&c->render->queue, &msg) != UI_OK) return false;
+    c->unsent = NULL;
+    return true;
+}
+
+// The oldest epoch among surfaces whose newest committed list render hasn't finished: no
+// glyph used at or after it may be evicted.
+static uint64_t protect_epoch(const ui_core *c) {
+    uint64_t epoch = UINT64_MAX;
+    for (uint32_t i = 0; i < UI_MAX_SURFACES; i++) {
+        const ui_core_surface *s = &c->surfaces[i];
+        if (ui_handle_is_null(s->handle) || s->last_done_frame >= s->next_frame_id) continue;
+        if (s->last_epoch < epoch) epoch = s->last_epoch;
+    }
+    return epoch;
+}
+
 static void commit(ui_core *c, ui_core_surface *s, uint64_t now) {
     ui_scene_root *root = ui_scene_root_of(&c->scene, s->handle);
     if (root) root->dirty = false;
@@ -315,8 +388,24 @@ static void commit(ui_core *c, ui_core_surface *s, uint64_t now) {
     dl->height = physical(s->config.logical_height, s->config.scale_120);
     dl->platform_token = s->config.token;
     memcpy(dl->clear, clear_color, sizeof dl->clear);
-    if (ui_scene_build(&c->scene, s->handle, dl) != UI_OK)
+    dl->epoch = c->epoch;
+    dl->text_contrast = c->text_contrast;
+    dl->text_gamma = c->text_gamma;
+    ui_scene_text text = {&c->text, c->atlas, &c->raster};
+    if (ui_scene_build(&c->scene, s->handle, dl, &text) != UI_OK)
         UI_ERROR(c->log, MODULE, "display list incomplete (out of memory)");
+    // The atlas changes this list needs go into the render inbox before the list is
+    // published (docs/text.md): the inbox is FIFO and never replaces, the mailbox may.
+    if (!send_atlas_update(c)) {
+        UI_ERROR(c->log, MODULE, "out of memory sending glyphs; frame %llu not shown",
+                 (unsigned long long)dl->frame_id);
+        s->force_draw = true;
+        s->awaiting_frame = false;
+        s->next_frame_id--;
+        return;
+    }
+    dl->atlas_seq = ui_atlas_seq(c->atlas);
+    s->last_epoch = c->epoch;
     if (dl->rect_count)
         UI_TRACE_LOG(c->log, MODULE, "frame %llu t=%.3f s: first rect at %.1f,%.1f",
                      (unsigned long long)dl->frame_id, (double)now / 1e9, dl->rects[0].x,
@@ -384,6 +473,7 @@ static void frame(ui_core *c) {
 
     UI_HOOK_PHASE_BEGIN(c->hooks, UI_PHASE_COMMIT, main, frame_id);
     bool drew = false;
+    if (busy) ui_atlas_begin_frame(c->atlas, ++c->epoch, protect_epoch(c));
     for (uint32_t i = 0; i < UI_MAX_SURFACES; i++) {
         ui_core_surface *s = &c->surfaces[i];
         if (ui_handle_is_null(s->handle) || !s->frame_ready) continue;
@@ -399,6 +489,16 @@ static void frame(ui_core *c) {
             UI_HOOK(c->hooks, UI_TRACE_FRAME_IDLE, 0, s->handle, s->next_frame_id);
         }
     }
+    if (busy) ui_atlas_end_frame(c->atlas);
+    c->stats.text_invalid_sequences = c->scene.stats.text_invalid;
+    ui_atlas_stats as;
+    ui_atlas_get_stats(c->atlas, &as);
+    c->stats.glyphs_rasterized = as.rasterized;
+    c->stats.glyphs_evicted = as.evicted;
+    c->stats.glyphs_rejected = as.rejected;
+    c->stats.atlas_updates = as.updates;
+    c->stats.atlas_pages = as.pages;
+    c->stats.glyphs_cached = as.glyphs;
     UI_HOOK_PHASE_END(c->hooks, UI_PHASE_COMMIT, main, frame_id);
     if (drew) ui_signal_notify(&c->render->signal);
 }

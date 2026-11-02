@@ -33,6 +33,12 @@ extern const ui_scheduler_ops ui_scheduler_single;
 // the logic actor is blocked. Thread: main.
 ui_result ui_app_frame_without_logic(ui_app *app);
 
+// Test-only: one frame produced by the core alone, on the calling (main) thread. The display
+// list is published, and its atlas update queued, but the render actor is not stepped or
+// waited for, so the next one of these replaces an undrawn list. Valid under both
+// schedulers while ui_app_run/ui_app_frame is not executing. Thread: main.
+ui_result ui_app_step_core(ui_app *app);
+
 struct ui_app {
     ui_logger log;
     ui_hooks hooks;

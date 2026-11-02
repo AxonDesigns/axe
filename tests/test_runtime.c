@@ -142,7 +142,7 @@ static void test_scene_apply_and_stale(void) {
     CHECK_EQ_INT(sc.stats.dropped, 0);
 
     ui_display_list dl = {.scale_120 = 180}; // 1.5x
-    CHECK(ui_scene_build(&sc, surf, &dl) == UI_OK);
+    CHECK(ui_scene_build(&sc, surf, &dl, NULL) == UI_OK);
     CHECK_EQ_INT(dl.rect_count, 2);
     CHECK_NEAR(dl.rects[0].x, 15, 1e-4);         // 10 * 1.5
     CHECK_NEAR(dl.rects[1].x, 22.5, 1e-4);       // (10 + 5) * 1.5, child relative to parent
@@ -159,7 +159,7 @@ static void test_scene_apply_and_stale(void) {
     CHECK_EQ_INT(sc.stats.applied, 7);
     CHECK_EQ_INT(sc.stats.dropped, 2);
     ui_display_list_reset(&dl);
-    ui_scene_build(&sc, surf, &dl);
+    ui_scene_build(&sc, surf, &dl, NULL);
     CHECK_EQ_INT(dl.rect_count, 0);
 
     // The client frees and reuses the slot: the new generation is accepted, the old is not.

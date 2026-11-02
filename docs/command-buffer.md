@@ -16,8 +16,9 @@ Both share one framing. The C encoder and decoder live in `src/wire/`; the publi
 - Every op starts on a 4-byte boundary, and every op size is a multiple of 4.
 - A `u64` may sit at an offset that is a multiple of 4 but not of 8. Readers must load it
   unaligned (`memcpy`).
-- Strings, pointers and native sizes never appear. Buffers are position-independent and
-  portable to WASM.
+- Pointers and native sizes never appear, so buffers are position-independent and portable
+  to WASM. Text appears only in the text ops, as length-counted UTF-8 byte arrays (family
+  names are NUL-terminated inside a sized region).
 
 ## Header (16 bytes)
 
@@ -64,6 +65,8 @@ A handle is 8 bytes: `u32 index`, `u32 generation`.
 | 5 | `set_color` | node, `f32 r, g, b, a` (sRGB, straight alpha, clamped to [0, 1]) | 24 |
 | 6 | `start_spring` | node, `u16 property`, `u16 count`, `f32 stiffness`, `f32 damping`, `f32 target[count]` | 20 + 4·count |
 | 7 | `set_timer` | `u32 id`, `u32` reserved (0), `u64 deadline_ns` (animation clock; `UINT64_MAX` disarms) | 16 |
+| 8 | `set_text` | see [Text](#text) | 64 + variable |
+| 9 | `append_text` | node, `u32 chunk_bytes`, chunk (padded to 4) | 12 + chunk |
 
 ### Properties for `start_spring`
 
@@ -91,6 +94,79 @@ rate.
 - Like every command, `set_timer` takes effect at the next frame boundary.
 - `deadline_ns = UINT64_MAX` disarms the timer (`ui_cmd_cancel_timer`).
 - An app holds at most 4096 armed timers; further ones are dropped like an invalid op.
+
+### Text
+
+`set_text` gives a node a paragraph of styled text. The text wraps to the node's width, is
+drawn over its background with its origin at the node's top-left, and is laid out again
+whenever the width or the surface scale changes.
+
+| Offset | Type | Field |
+| --- | --- | --- |
+| 0 | handle | node |
+| 8 | u32 | `text_bytes`: total UTF-8 length (≤ 16 MiB) |
+| 12 | u32 | `chunk_bytes`: text bytes carried in this op |
+| 16 | u16 | `span_count` (≤ 1024) |
+| 18 | u16 | `family_count` (≤ 64) |
+| 20 | u16 | `families_bytes`: size of the family region, a multiple of 4 |
+| 22 | u16 | `ellipsis_bytes` (≤ 64) |
+| 24 | u16 | `max_lines` (0 = unlimited) |
+| 26 | u8 | direction: 0 auto (first strong character, per paragraph), 1 LTR, 2 RTL |
+| 27 | u8 | flags: bit 0 = the ellipsis bytes replace the default U+2026 (0 bytes = none) |
+| 28 | style | the default style (36 bytes, below; `start` and `end` are 0) |
+| 64 | style[] | `span_count` spans |
+| … | bytes | family region: `family_count` NUL-terminated UTF-8 names, zero-padded |
+| … | bytes | ellipsis, padded to 4 |
+| … | bytes | the first `chunk_bytes` of text, padded to 4 |
+
+A style or span is 36 bytes:
+
+| Offset | Type | Field |
+| --- | --- | --- |
+| 0 | u32 | `start`: byte offset into the text |
+| 4 | u32 | `end`: exclusive; spans are sorted and do not overlap |
+| 8 | u16 | family: index into the family region, or `0xFFFF` for the default family |
+| 10 | u16 | weight, 1–1000 (400 regular, 700 bold) |
+| 12 | u8 | slant: 0 normal, 1 italic, 2 oblique |
+| 13 | u8[3] | reserved (0) |
+| 16 | f32 | size, logical px, in (0, 4096] |
+| 20 | f32[4] | color: sRGB, straight alpha, clamped to [0, 1] |
+
+- Each family entry is a CSS-style list (`"Noto Sans, sans-serif"`), tried in order
+  against registered fonts and then the system's. Bytes no span covers use the default
+  style.
+- **Long text** continues in `append_text` ops for the same node. They must follow the
+  `set_text` directly, in the same buffer, until `text_bytes` have arrived. Otherwise the
+  `set_text` is dropped, together with the continuations it consumed, and the node keeps its
+  old text. A buffer is applied atomically, so long text changes atomically too. A stray
+  `append_text` is dropped. `ui_cmd_set_text` splits text automatically.
+- **Invalid UTF-8** is replaced with U+FFFD, one per maximal subpart of an ill-formed
+  sequence (Unicode §3.9). Each replacement is counted in
+  `ui_app_stats.text_invalid_sequences`. Span offsets are moved with their characters, and
+  offsets inside a sequence snap to its start. Offsets reported back for this text refer to
+  the stored, sanitized text.
+- **Framing errors** reject the whole buffer: a payload smaller than the fixed header, a
+  `families_bytes` that is not a multiple of 4, or sizes that don't add up to the op size.
+- **Drops** (counted, and the node is unchanged): a stale node, out-of-range values,
+  unsorted or overlapping spans, spans past the end, a family index past the region, names
+  or a custom ellipsis that are not valid UTF-8, or a missing continuation.
+
+Example: `set_text(node {1,1}, "Hi")` with the default style (16 px, weight 400, white),
+the family list "Noto Sans", and no spans:
+
+```
+55 49 43 42  00 00 00 00  64 00 00 00  01 00 00 00   header: UICB v0, 100 bytes, 1 op
+08 00 54 00  01 00 00 00  01 00 00 00                set_text, 84 bytes, node {1,1}
+02 00 00 00  02 00 00 00                             text_bytes 2, chunk_bytes 2
+00 00 01 00  0C 00 00 00  00 00 00 00                0 spans, 1 family, 12-byte region,
+                                                     no ellipsis, max_lines 0, auto, flags 0
+00 00 00 00  00 00 00 00  00 00 90 01  00 00 00 00   style: start 0, end 0, family 0,
+                                                     weight 400, normal, reserved
+00 00 80 41  00 00 80 3F  00 00 80 3F  00 00 80 3F   size 16, r 1, g 1, b 1
+00 00 80 3F                                          a 1
+4E 6F 74 6F  20 53 61 6E  73 00 00 00                "Noto Sans" NUL, padding
+48 69 00 00                                          "Hi", padding
+```
 
 ## Events (`UIEB`)
 

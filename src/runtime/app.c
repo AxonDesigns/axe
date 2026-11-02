@@ -44,6 +44,7 @@ ui_result ui_app_create(const ui_app_desc *desc, ui_app **out) {
         .time = desc->time,
         .start_paused = desc->start_paused,
         .progress = &app->progress,
+        .text = &desc->text,
     };
     r = ui_core_init(&app->core, &core_desc);
     if (r != UI_OK) goto fail_core;
@@ -209,3 +210,10 @@ ui_result ui_image_write_ppm(const ui_image *image, const char *path) {
 }
 
 void ui_app_get_stats(const ui_app *app, ui_app_stats *out) { *out = app->core.stats; }
+
+ui_result ui_app_step_core(ui_app *app) {
+    if (app->running) return UI_ERR_WRONG_STATE;
+    ui_core_force_frame(&app->core);
+    ui_core_step(&app->core);
+    return app->core.failure;
+}

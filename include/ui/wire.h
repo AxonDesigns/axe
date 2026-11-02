@@ -23,6 +23,8 @@ typedef enum ui_op {
     UI_OP_SET_COLOR = 5,
     UI_OP_START_SPRING = 6,
     UI_OP_SET_TIMER = 7,
+    UI_OP_SET_TEXT = 8,
+    UI_OP_APPEND_TEXT = 9, // continues a set_text whose text is longer than one op holds
 } ui_op;
 
 // Animatable node properties and their component counts.
@@ -97,6 +99,58 @@ ui_result ui_cmd_start_spring(ui_cmd_writer *w, ui_handle node, ui_property prop
 ui_result ui_cmd_set_timer(ui_cmd_writer *w, uint32_t id, uint64_t deadline_ns);
 // Disarms timer `id` if armed.
 ui_result ui_cmd_cancel_timer(ui_cmd_writer *w, uint32_t id);
+
+// ---- Text ------------------------------------------------------------------------------
+
+#define UI_TEXT_FAMILY_DEFAULT 0xFFFFu
+#define UI_TEXT_MAX_SPANS 1024u
+#define UI_TEXT_MAX_FAMILIES 64u
+#define UI_TEXT_MAX_ELLIPSIS 64u    // bytes
+#define UI_TEXT_MAX_BYTES (16u << 20)
+
+typedef enum ui_text_direction {
+    UI_TEXT_DIR_AUTO = 0, // each paragraph follows its first strong character
+    UI_TEXT_DIR_LTR = 1,
+    UI_TEXT_DIR_RTL = 2,
+} ui_text_direction;
+
+typedef enum ui_text_slant {
+    UI_TEXT_NORMAL = 0,
+    UI_TEXT_ITALIC = 1,
+    UI_TEXT_OBLIQUE = 2,
+} ui_text_slant;
+
+typedef struct ui_text_style_desc {
+    uint16_t family; // index into ui_text_desc.families, or UI_TEXT_FAMILY_DEFAULT
+    uint16_t weight; // 1..1000 (400 regular, 700 bold)
+    uint8_t slant;   // ui_text_slant
+    float size;      // logical px, > 0
+    float color[4];  // sRGB, straight alpha, clamped to [0, 1]
+} ui_text_style_desc;
+
+typedef struct ui_text_span_desc {
+    uint32_t start, end; // UTF-8 byte offsets into the text; sorted and non-overlapping
+    ui_text_style_desc style;
+} ui_text_span_desc;
+
+typedef struct ui_text_desc {
+    const char *text;           // UTF-8; invalid sequences become U+FFFD in the core
+    uint32_t length;            // bytes, at most UI_TEXT_MAX_BYTES
+    ui_text_style_desc style;   // for bytes no span covers
+    const ui_text_span_desc *spans;
+    uint32_t span_count;        // at most UI_TEXT_MAX_SPANS
+    const char *const *families; // CSS-style family lists, e.g. "Noto Sans, sans-serif"
+    uint32_t family_count;      // at most UI_TEXT_MAX_FAMILIES
+    ui_text_direction direction;
+    uint16_t max_lines;         // 0: unlimited
+    const char *ellipsis;       // shown when max_lines cuts text; NULL: U+2026, "": none
+} ui_text_desc;
+
+// Sets a node's text. It wraps to the node's width and is drawn over its background, in
+// the node's coordinate space (origin at its top-left). Text longer than one op holds is
+// split into set_text + append_text ops in the same buffer, so the change stays atomic.
+// UI_ERR_INVALID_ARGUMENT for out-of-range values or unsorted/overlapping spans.
+ui_result ui_cmd_set_text(ui_cmd_writer *w, ui_handle node, const ui_text_desc *desc);
 
 // Finalizes the header and moves the encoded bytes to the caller, leaving the writer empty
 // and reusable. Ownership: *out_bytes is malloc'd; release it with free().

@@ -32,6 +32,16 @@ enum {
     UI_WIRE_SIZE_TIMER_FIRED = 24,       // id u32, reserved u32, deadline_ns u64, now_ns u64
 };
 
+// set_text: fixed header, then spans, the family-name region (NUL-terminated names,
+// zero-padded to a multiple of 4), the ellipsis (padded), the first text chunk (padded).
+#define UI_WIRE_SIZE_SET_TEXT_HEADER 64u
+#define UI_WIRE_SIZE_TEXT_SPAN 36u
+#define UI_WIRE_SIZE_APPEND_TEXT_HEADER 12u // node, chunk_bytes; then the chunk (padded)
+#define UI_WIRE_TEXT_CUSTOM_ELLIPSIS 1u     // set_text flags: the ellipsis bytes replace U+2026
+#define UI_WIRE_MAX_PAYLOAD (UI_WIRE_MAX_OP_SIZE - UI_WIRE_OP_HEADER_SIZE)
+
+static inline uint32_t ui_wire_pad4(uint32_t n) { return (n + 3u) & ~3u; }
+
 // Growable encoder. The header is written by ui_wire_buf_finish.
 typedef struct ui_wire_buf {
     uint8_t *data;

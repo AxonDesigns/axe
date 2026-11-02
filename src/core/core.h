@@ -6,6 +6,8 @@
 #include "core/clock.h"
 #include "core/display_list.h"
 #include "core/scene.h"
+#include "text/atlas.h"
+#include "text/paragraph.h"
 #include "hooks/hooks_internal.h"
 #include "platform/platform.h"
 #include "runtime/actor.h"
@@ -34,6 +36,7 @@ typedef struct ui_core_surface {
     uint64_t predicted_host_ns;
     uint64_t next_frame_id;
     uint64_t last_done_frame;    // last frame the render actor finished (presented or skipped)
+    uint64_t last_epoch;         // epoch of the newest committed list (glyph eviction bound)
 } ui_core_surface;
 
 typedef struct ui_core_desc {
@@ -43,6 +46,7 @@ typedef struct ui_core_desc {
     ui_time_source time;
     bool start_paused;
     ui_signal *progress;         // notified on every message to the core
+    const ui_text_config *text;  // fonts and text rendering (may be NULL)
 } ui_core_desc;
 
 typedef struct ui_core_timer {
@@ -51,6 +55,7 @@ typedef struct ui_core_timer {
 } ui_core_timer;
 
 #define UI_MAX_TIMERS 4096u
+#define UI_TEXT_DEFAULT_CONTRAST 0.9f // coverage contrast boost (docs/text.md)
 
 struct ui_core {
     ui_actor actor;              // its bounded queue carries render -> core messages
@@ -75,6 +80,15 @@ struct ui_core {
 
     ui_core_timer *timers;       // armed timers, unordered
     uint32_t timer_count, timer_capacity;
+
+    // Text: fonts, shaping and layout, the glyph atlas and its rasterizer.
+    ui_font_registry *fonts;
+    ui_text_context text;
+    ui_atlas *atlas;
+    ui_raster raster;
+    uint64_t epoch;              // core frames that drew; glyphs age by it
+    ui_atlas_update *unsent;     // an atlas update the render inbox could not take (OOM)
+    float text_contrast, text_gamma;
 
     ui_wire_buf events;          // events not yet sent to logic
     uint32_t events_in_flight;   // event buffers logic has not finished

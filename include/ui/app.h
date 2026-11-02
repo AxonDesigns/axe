@@ -64,6 +64,21 @@ typedef enum ui_gpu_preference {
     UI_GPU_SOFTWARE,     // the fallback (CPU) adapter, e.g. lavapipe
 } ui_gpu_preference;
 
+// Fonts and text rendering.
+typedef struct ui_text_config {
+    const char *const *font_files; // fonts to register (TTF, OTF; face 0 of each)
+    uint32_t font_file_count;
+    bool system_fonts;             // find families and fallbacks among installed fonts
+    // Coverage contrast boost for text (0 = linear coverage), and an optional coverage
+    // gamma (0 or 1 = off). See docs/text.md. 0 picks the defaults; UI_TEXT_CONTRAST and
+    // UI_TEXT_GAMMA override them.
+    float contrast;
+    float gamma;
+    uint32_t atlas_page_size;      // px per side; 0 = 1024
+    uint32_t atlas_max_pages;      // 0 = 8
+    uint32_t glyph_evict_frames;   // 0 = 300
+} ui_text_config;
+
 typedef struct ui_app_desc {
     ui_scheduler_kind scheduler;
     ui_gpu_preference gpu;
@@ -71,6 +86,7 @@ typedef struct ui_app_desc {
     ui_logic_desc logic;
     ui_time_source time;     // optional; zeroed means CLOCK_MONOTONIC
     bool start_paused;       // start with the animation clock paused (tests)
+    ui_text_config text;
 } ui_app_desc;
 
 // Creates the app and its first surface, and starts the actors. Thread: becomes the main
@@ -136,6 +152,13 @@ typedef struct ui_app_stats {
     uint64_t commands_applied;
     uint64_t commands_dropped;       // stale or wrong-kind handles, unknown ops
     uint64_t buffers_rejected;       // malformed command buffers
+    uint64_t text_invalid_sequences; // ill-formed UTF-8 subparts replaced with U+FFFD
+    uint64_t glyphs_rasterized;
+    uint64_t glyphs_evicted;
+    uint64_t glyphs_rejected;        // too large for the atlas, or no space left
+    uint64_t atlas_updates;          // updates sent to the render thread
+    uint32_t atlas_pages;
+    uint32_t glyphs_cached;
 } ui_app_stats;
 void ui_app_get_stats(const ui_app *app, ui_app_stats *out);
 

@@ -9,6 +9,8 @@
 #include "core/spring.h"
 #include "runtime/common.h"
 #include "runtime/handle_table.h"
+#include "text/atlas.h"
+#include "text/paragraph.h"
 
 #define UI_NO_SLOT UINT32_MAX
 
@@ -22,6 +24,7 @@ typedef struct ui_node {
     float radius;
     float color[4];        // linear, straight alpha
     ui_spring springs[UI_SPRING_COUNT];
+    ui_paragraph *text;    // NULL when the node has no text
 } ui_node;
 
 typedef struct ui_scene_root {
@@ -36,7 +39,15 @@ typedef void (*ui_scene_timer_fn)(void *user, uint32_t id, uint64_t deadline_ns)
 
 typedef struct ui_scene_stats {
     uint64_t applied, dropped, rejected;
+    uint64_t text_invalid; // ill-formed UTF-8 subparts replaced in set_text
 } ui_scene_stats;
+
+// What drawing text needs, owned by the core: fonts and shaping, the atlas, the rasterizer.
+typedef struct ui_scene_text {
+    ui_text_context *ctx;
+    ui_atlas *atlas;
+    ui_raster *raster;
+} ui_scene_text;
 
 typedef struct ui_scene {
     const ui_logger *log;
@@ -72,5 +83,8 @@ void ui_scene_animate(ui_scene *s, uint64_t now_ns);
 // The root for a surface, or NULL. Callers read and clear `dirty`.
 ui_scene_root *ui_scene_root_of(ui_scene *s, ui_handle surface);
 
-// Appends the surface's tree to `dl` in paint order (parents before children).
-ui_result ui_scene_build(ui_scene *s, ui_handle surface, ui_display_list *dl);
+// Appends the surface's tree to `dl` in paint order (parents before children; a node's
+// background, then its text). Text wraps to the node's width at the list's scale; its
+// glyphs are rasterized into the atlas on first use. `text` may be NULL (no text drawn).
+ui_result ui_scene_build(ui_scene *s, ui_handle surface, ui_display_list *dl,
+                         const ui_scene_text *text);

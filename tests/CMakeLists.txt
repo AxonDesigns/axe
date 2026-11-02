@@ -79,3 +79,32 @@ target_compile_definitions(test_text_layout PRIVATE UI_TEST_FONTS="${CMAKE_CURRE
 target_link_libraries(test_text_layout PRIVATE ui m)
 ui_target_warnings(test_text_layout)
 add_test(NAME text_layout COMMAND test_text_layout)
+
+# Golden images of text, headless on lavapipe, under both schedulers.
+add_executable(test_text_golden test_text_golden.c)
+target_include_directories(test_text_golden PRIVATE ${PROJECT_SOURCE_DIR}/src)
+target_compile_definitions(test_text_golden PRIVATE _DEFAULT_SOURCE
+    UI_TEST_FONTS="${CMAKE_CURRENT_SOURCE_DIR}/fonts"
+    UI_TEST_GOLDENS="${CMAKE_CURRENT_SOURCE_DIR}/goldens"
+    UI_TEST_OUT="${CMAKE_CURRENT_BINARY_DIR}")
+target_link_libraries(test_text_golden PRIVATE ui m)
+ui_target_warnings(test_text_golden)
+add_test(NAME text_golden COMMAND test_text_golden)
+set_tests_properties(text_golden PROPERTIES ENVIRONMENT "UI_GPU=software" TIMEOUT 300)
+
+# Glyph uploads survive display-list replacement, under both schedulers.
+add_executable(test_atlas_upload test_atlas_upload.c)
+target_include_directories(test_atlas_upload PRIVATE ${PROJECT_SOURCE_DIR}/src)
+target_compile_definitions(test_atlas_upload PRIVATE _DEFAULT_SOURCE
+    UI_TEST_FONTS="${CMAKE_CURRENT_SOURCE_DIR}/fonts")
+target_link_libraries(test_atlas_upload PRIVATE ui m)
+ui_target_warnings(test_atlas_upload)
+add_test(NAME atlas_upload COMMAND test_atlas_upload)
+set_tests_properties(atlas_upload PROPERTIES ENVIRONMENT "UI_GPU=software" TIMEOUT 120)
+
+# The set_text / append_text wire ops.
+add_executable(test_text_wire test_text_wire.c)
+target_include_directories(test_text_wire PRIVATE ${PROJECT_SOURCE_DIR}/src)
+target_link_libraries(test_text_wire PRIVATE ui m)
+ui_target_warnings(test_text_wire)
+add_test(NAME text_wire COMMAND test_text_wire)
