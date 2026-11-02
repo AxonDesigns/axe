@@ -107,8 +107,8 @@ whenever the width or the surface scale changes.
 | 8 | u32 | `text_bytes`: total UTF-8 length (≤ 16 MiB) |
 | 12 | u32 | `chunk_bytes`: text bytes carried in this op |
 | 16 | u16 | `span_count` (≤ 1024) |
-| 18 | u16 | `family_count` (≤ 64) |
-| 20 | u16 | `families_bytes`: size of the family region, a multiple of 4 |
+| 18 | u16 | `string_count`: family lists and language tags (≤ 64) |
+| 20 | u16 | `strings_bytes`: size of the string region, a multiple of 4 |
 | 22 | u16 | `ellipsis_bytes` (≤ 64) |
 | 24 | u16 | `max_lines` (0 = unlimited) |
 | 26 | u8 | direction: 0 auto (first strong character, per paragraph), 1 LTR, 2 RTL |
@@ -118,7 +118,7 @@ whenever the width or the surface scale changes.
 | 68 | u8 | align: 0 start, 1 end, 2 left, 3 right, 4 center, 5 justify |
 | 69 | u8[3] | reserved (0) |
 | 72 | style[] | `span_count` spans |
-| … | bytes | family region: `family_count` NUL-terminated UTF-8 names, zero-padded |
+| … | bytes | string region: `string_count` NUL-terminated UTF-8 strings, zero-padded |
 | … | bytes | ellipsis, padded to 4 |
 | … | bytes | the first `chunk_bytes` of text, padded to 4 |
 
@@ -128,10 +128,11 @@ A style or span is 36 bytes:
 | --- | --- | --- |
 | 0 | u32 | `start`: byte offset into the text |
 | 4 | u32 | `end`: exclusive; spans are sorted and do not overlap |
-| 8 | u16 | family: index into the family region, or `0xFFFF` for the default family |
+| 8 | u16 | family: index of a family list in the string region, or `0xFFFF` for the default |
 | 10 | u16 | weight, 1–1000 (400 regular, 700 bold) |
 | 12 | u8 | slant: 0 normal, 1 italic, 2 oblique |
-| 13 | u8[3] | reserved (0) |
+| 13 | u8 | reserved (0) |
+| 14 | u16 | language: index of a BCP 47 tag in the string region **plus one**; 0 = default |
 | 16 | f32 | size, logical px, in (0, 4096] |
 | 20 | f32[4] | color: sRGB, straight alpha, clamped to [0, 1] |
 
@@ -141,6 +142,9 @@ A style or span is 36 bytes:
 - **Line height** 0 lets each line be as tall as its fonts need. Otherwise every line is
   `line_height × size × scale` px, rounded, with the baseline placed by the default style's
   font, so fallback fonts with tall metrics don't change the spacing.
+- **Languages** select language-specific glyph forms (OpenType `locl`, e.g. Romanian ș,
+  Serbian Cyrillic). `ui_cmd_set_text` writes `families` and then `languages` into the
+  string region. A language change splits shaping runs.
 - Each family entry is a CSS-style list (`"Noto Sans, sans-serif"`), tried in order
   against registered fonts and then the system's. Bytes no span covers use the default
   style.
@@ -157,8 +161,9 @@ A style or span is 36 bytes:
 - **Framing errors** reject the whole buffer: a payload smaller than the fixed header, a
   `families_bytes` that is not a multiple of 4, or sizes that don't add up to the op size.
 - **Drops** (counted, and the node is unchanged): a stale node, out-of-range values,
-  unsorted or overlapping spans, spans past the end, a family index past the region, names
-  or a custom ellipsis that are not valid UTF-8, or a missing continuation.
+  unsorted or overlapping spans, spans past the end, a family or language index past the
+  string region, strings or a custom ellipsis that are not valid UTF-8, or a missing
+  continuation.
 
 Example: `set_text(node {1,1}, "Hi")` with the default style (16 px, weight 400, white),
 the family list "Noto Sans", and no spans:
@@ -167,10 +172,10 @@ the family list "Noto Sans", and no spans:
 55 49 43 42  00 00 00 00  6C 00 00 00  01 00 00 00   header: UICB v0, 108 bytes, 1 op
 08 00 5C 00  01 00 00 00  01 00 00 00                set_text, 92 bytes, node {1,1}
 02 00 00 00  02 00 00 00                             text_bytes 2, chunk_bytes 2
-00 00 01 00  0C 00 00 00  00 00 00 00                0 spans, 1 family, 12-byte region,
+00 00 01 00  0C 00 00 00  00 00 00 00                0 spans, 1 string, 12-byte region,
                                                      no ellipsis, max_lines 0, auto, flags 0
 00 00 00 00  00 00 00 00  00 00 90 01  00 00 00 00   style: start 0, end 0, family 0,
-                                                     weight 400, normal, reserved
+                                                     weight 400, normal, no language
 00 00 80 41  00 00 80 3F  00 00 80 3F  00 00 80 3F   size 16, r 1, g 1, b 1
 00 00 80 3F                                          a 1
 00 00 00 00  00 00 00 00                             line_height 0, align start, reserved

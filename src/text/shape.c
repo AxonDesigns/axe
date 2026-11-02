@@ -48,9 +48,21 @@ void ui_text_input_family(const ui_text_input *in, const ui_text_style *style,
     *len = in->family_offsets[style->family + 1] - in->family_offsets[style->family];
 }
 
+void ui_text_input_language(const ui_text_input *in, const ui_text_style *style,
+                            const char **text, uint32_t *len) {
+    uint32_t i = style->language;
+    if (!i || i > in->family_count) {
+        *text = NULL;
+        *len = 0;
+        return;
+    }
+    *text = in->families + in->family_offsets[i - 1];
+    *len = in->family_offsets[i] - in->family_offsets[i - 1];
+}
+
 static bool same_shaping(const ui_text_style *a, const ui_text_style *b) {
     return a->family == b->family && a->weight == b->weight && a->style == b->style &&
-           a->size == b->size;
+           a->size == b->size && a->language == b->language;
 }
 
 // Grows every per-code-point array of the paragraph and the shaper's scratch to n + 1.
@@ -91,7 +103,8 @@ static ui_result shape_run(ui_text_shaper *s, ui_font_registry *fonts, const ui_
     run->descent = m.descent;
     run->line_gap = m.line_gap;
     ui_shape_request req = {in->text, in->len, run->start, run->end - run->start, run->script,
-                            run->level & 1};
+                            run->level & 1, NULL, 0};
+    ui_text_input_language(in, st, &req.language, &req.language_len);
     const ui_glyph_pos *glyphs;
     uint32_t count;
     ui_result res = ui_shape(s->hb, font, &req, &glyphs, &count);
@@ -215,7 +228,10 @@ ui_result ui_reshape_range(ui_text_shaper *s, ui_font_registry *fonts, const ui_
                            const ui_glyph_pos **glyphs, uint32_t *count) {
     ui_font *font = ui_font_registry_font_by_key(fonts, run->font);
     if (!font) return UI_ERR_OUT_OF_MEMORY;
-    ui_shape_request req = {in->text, in->len, start, end - start, run->script, run->level & 1};
+    ui_shape_request req = {in->text, in->len, start, end - start, run->script, run->level & 1,
+                            NULL, 0};
+    ui_text_input_language(in, ui_text_input_style(in, run->style), &req.language,
+                           &req.language_len);
     return ui_shape(s->hb, font, &req, glyphs, count);
 }
 

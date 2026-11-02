@@ -321,13 +321,15 @@ static bool read_style(const uint8_t *p, uint32_t family_count, ui_text_style *o
     *end = ui_wire_get_u32(p + 4);
     uint16_t family = ui_wire_get_u16(p + 8), weight = ui_wire_get_u16(p + 10);
     uint8_t slant = p[12];
+    uint16_t language = ui_wire_get_u16(p + 14); // string index + 1; 0 = none
     float size = ui_wire_get_f32(p + 16), c[4];
     for (int i = 0; i < 4; i++) c[i] = ui_wire_get_f32(p + 20 + 4 * i);
     if ((family != UI_TEXT_FAMILY_DEFAULT && family >= family_count) || weight < 1 ||
         weight > 1000 || slant > UI_TEXT_OBLIQUE || !isfinite(size) || size <= 0 ||
-        size > 4096 || !finite_n(c, 4))
+        size > 4096 || !finite_n(c, 4) || language > family_count)
         return false;
-    *out = (ui_text_style){.family = family, .weight = weight, .style = slant, .size = size};
+    *out = (ui_text_style){.family = family, .weight = weight, .style = slant, .size = size,
+                           .language = language};
     for (int i = 0; i < 3; i++) out->color[i] = srgb_to_linear(fminf(fmaxf(c[i], 0.f), 1.f));
     out->color[3] = fminf(fmaxf(c[3], 0.f), 1.f);
     return true;
@@ -411,7 +413,7 @@ static bool apply_set_text(ui_scene *s, const ui_wire_op *op, ui_wire_reader *r)
                  align > UI_TEXT_ALIGN_JUSTIFY))
         why = "set_text (paragraph)";
     if (!why && (dir > UI_TEXT_DIR_RTL || span_count > UI_TEXT_MAX_SPANS ||
-                 family_count > UI_TEXT_MAX_FAMILIES || ell_len > UI_TEXT_MAX_ELLIPSIS))
+                 family_count > UI_TEXT_MAX_STRINGS || ell_len > UI_TEXT_MAX_ELLIPSIS))
         why = "set_text (limits)";
 
     ui_text_style base;

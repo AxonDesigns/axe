@@ -104,7 +104,8 @@ ui_result ui_cmd_cancel_timer(ui_cmd_writer *w, uint32_t id);
 
 #define UI_TEXT_FAMILY_DEFAULT 0xFFFFu
 #define UI_TEXT_MAX_SPANS 1024u
-#define UI_TEXT_MAX_FAMILIES 64u
+#define UI_TEXT_MAX_STRINGS 64u     // family lists and language tags together
+#define UI_TEXT_MAX_LANGUAGE 35u    // bytes per language tag
 #define UI_TEXT_MAX_ELLIPSIS 64u    // bytes
 #define UI_TEXT_MAX_BYTES (16u << 20)
 
@@ -133,6 +134,9 @@ typedef struct ui_text_style_desc {
     uint16_t family; // index into ui_text_desc.families, or UI_TEXT_FAMILY_DEFAULT
     uint16_t weight; // 1..1000 (400 regular, 700 bold)
     uint8_t slant;   // ui_text_slant
+    // 1-based index into ui_text_desc.languages; 0: none (HarfBuzz's default). Selects
+    // language-specific forms, e.g. Romanian ș or Serbian Cyrillic.
+    uint16_t language;
     float size;      // logical px, > 0
     float color[4];  // sRGB, straight alpha, clamped to [0, 1]
 } ui_text_style_desc;
@@ -149,7 +153,9 @@ typedef struct ui_text_desc {
     const ui_text_span_desc *spans;
     uint32_t span_count;        // at most UI_TEXT_MAX_SPANS
     const char *const *families; // CSS-style family lists, e.g. "Noto Sans, sans-serif"
-    uint32_t family_count;      // at most UI_TEXT_MAX_FAMILIES
+    uint32_t family_count;
+    const char *const *languages; // BCP 47 tags, e.g. "ro", "sr-Cyrl", "zh-Hant"
+    uint32_t language_count;    // families + languages: at most UI_TEXT_MAX_STRINGS
     ui_text_direction direction;
     uint16_t max_lines;         // 0: unlimited
     const char *ellipsis;       // shown when max_lines cuts text; NULL: U+2026, "": none

@@ -301,7 +301,7 @@ static int32_t advance_of(ui_font *font, const char *text) {
     const ui_glyph_pos *g;
     uint32_t n;
     ui_shape_request req = {(const uint8_t *)text, (uint32_t)strlen(text), 0,
-                            (uint32_t)strlen(text), 0x4C61746E, false};
+                            (uint32_t)strlen(text), 0x4C61746E, false, NULL, 0};
     ui_shape(sh, font, &req, &g, &n);
     int32_t sum = 0;
     for (uint32_t i = 0; i < n; i++) sum += g[i].advance;
@@ -349,6 +349,38 @@ static void test_synthesis(void) {
     ui_font_registry_destroy(r);
 }
 
+static void test_language(void) {
+    // Language selects locl forms: Romanian ş takes a comma below, Serbian б its own form.
+    ui_font_registry *r = registry_with_all();
+    ui_text_shaper s;
+    CHECK(ui_text_shaper_init(&s) == UI_OK);
+    ui_shaped_paragraph p = {0};
+    static const char strings[] = "Noto Sansrosr";
+    static const uint32_t offsets[] = {0, 9, 11, 13};
+    ui_text_style ro = {.family = 0, .weight = 400, .size = 16, .color = {0, 0, 0, 1}, .language = 2};
+    ui_text_style sr = ro;
+    sr.language = 3;
+    // "ş ş б б": the first of each pair has no language, the second has one.
+    const char *text = "\xC5\x9F \xC5\x9F \xD0\xB1 \xD0\xB1";
+    ui_text_span both[] = {{3, 5, ro}, {9, 11, sr}};
+    ui_text_input in = {
+        .text = (const uint8_t *)text, .len = (uint32_t)strlen(text),
+        .base = {.family = 0, .weight = 400, .size = 16, .color = {0, 0, 0, 1}},
+        .spans = both, .span_count = 2, .families = strings, .family_offsets = offsets,
+        .family_count = 3, .dir = UI_BIDI_LTR,
+    };
+    CHECK(ui_shape_paragraph(&s, r, &in, 1, &p) == UI_OK);
+    uint32_t glyph_at[12] = {0};
+    for (uint32_t i = 0; i < p.glyph_count; i++)
+        if (p.glyphs[i].cluster < 12) glyph_at[p.glyphs[i].cluster] = p.glyphs[i].glyph;
+    CHECK(glyph_at[0] != glyph_at[3]); // ş vs Romanian ș
+    CHECK(glyph_at[6] != glyph_at[9]); // б vs Serbian б
+    CHECK(p.run_count >= 4);           // language changes split runs
+    ui_shaped_paragraph_free(&p);
+    ui_text_shaper_free(&s);
+    ui_font_registry_destroy(r);
+}
+
 int main(void) {
     RUN(test_faces);
     RUN(test_matching);
@@ -357,5 +389,6 @@ int main(void) {
     RUN(test_shaping);
     RUN(test_outlines);
     RUN(test_synthesis);
+    RUN(test_language);
     return test_failures != 0;
 }

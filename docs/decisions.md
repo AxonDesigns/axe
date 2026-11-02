@@ -62,6 +62,14 @@ milestone first.
     half-leading around the default style's font, so a fallback font's tall metrics no
     longer push lines apart. 0 keeps the metric-based lines.
   - Golden cases `justify` and `center` cover this.
+- **Per-span language** (BCP 47), passed to HarfBuzz for `locl` forms: Romanian ș and
+  Serbian б differ in Noto Sans, and tests check both.
+  - Languages share `set_text`'s string table with the family lists (now
+    `string_count` / `strings_bytes`, at most 64 strings in all).
+  - A style's language sits in what were reserved bytes, as string index + 1, so 0 (and a
+    zero-initialized C struct) means the default language.
+  - The writer accepts tags of ASCII letters, digits and hyphens, at most 35 bytes.
+  - Language is part of the shaping style: a change splits runs.
 
 ### Unicode layer
 - **Version: Unicode 18.0.0.** This is the UCD that the pinned HarfBuzz 15.0.0 ships
@@ -128,7 +136,7 @@ milestone first.
   - Clusters are UTF-8 byte offsets into the whole paragraph. The surrounding text is
     passed as context, so joining across run boundaries is correct.
   - Fonts are scaled to `size_px * 64` with no ppem, so there is no hinting.
-  - Language is HarfBuzz's default. A span language field is a follow-up.
+  - Language comes from the span (see the follow-ups above), else HarfBuzz's default.
 - **Fontconfig** (minimum 2.13) is used only with `text.system_fonts`, or with extra font
   directories.
   - Tests build an isolated configuration (`FcConfigCreate` + `FcConfigAppFontAddDir`)

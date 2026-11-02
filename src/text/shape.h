@@ -22,6 +22,7 @@ typedef struct ui_text_style {
     uint8_t style;    // ui_font_style
     float size;       // logical px
     float color[4];   // linear, straight alpha
+    uint16_t language; // index + 1 into the input's strings (a BCP 47 tag); 0 = default
 } ui_text_style;
 
 typedef struct ui_text_span {
@@ -86,6 +87,9 @@ void ui_text_shaper_free(ui_text_shaper *s);
 
 // The style a style index refers to.
 const ui_text_style *ui_text_input_style(const ui_text_input *in, uint32_t index);
+// The language tag of a style (NULL for the default).
+void ui_text_input_language(const ui_text_input *in, const ui_text_style *style,
+                            const char **text, uint32_t *len);
 // The family list text of a style (empty for the default family).
 void ui_text_input_family(const ui_text_input *in, const ui_text_style *style,
                           const char **text, uint32_t *len);

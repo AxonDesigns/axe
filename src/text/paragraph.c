@@ -256,7 +256,9 @@ static ui_result add_ellipsis(builder *b, uint32_t r, uint32_t at, uint8_t para_
     const ui_glyph_pos *g;
     uint32_t count;
     for (int attempt = 0; attempt < 2; attempt++) {
-        ui_shape_request req = {text, len, 0, len, run->script, para_level & 1};
+        ui_shape_request req = {text, len, 0, len, run->script, para_level & 1, NULL, 0};
+        ui_text_input_language(&b->in, ui_text_input_style(&b->in, run->style), &req.language,
+                               &req.language_len);
         ui_result res = ui_shape(c->shaper.hb, font, &req, &g, &count);
         if (res != UI_OK) return res;
         bool missing = false;

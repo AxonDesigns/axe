@@ -107,6 +107,8 @@ typedef struct ui_shape_request {
     uint32_t start, len;   // the run to shape, in bytes
     uint32_t script;       // ISO 15924 tag ('Latn')
     bool rtl;
+    const char *language;  // BCP 47 tag, not NUL-terminated; NULL: HarfBuzz's default
+    uint32_t language_len;
 } ui_shape_request;
 
 // Shapes one run. Glyphs come out in visual order (reversed for RTL), with clusters as byte

@@ -52,8 +52,10 @@ static void test_basic(void) {
     setup(&s);
     ui_cmd_writer *w;
     ui_cmd_writer_create(&w);
+    static const char *const languages[] = {"ro", "sr-Cyrl"};
     ui_text_span_desc spans[2] = {
-        {0, 5, {.family = 1, .weight = 700, .slant = UI_TEXT_ITALIC, .size = 20, .color = {1, 0, 0, 1}}},
+        {0, 5, {.family = 1, .weight = 700, .slant = UI_TEXT_ITALIC, .size = 20, .color = {1, 0, 0, 1},
+                .language = 2}},
         {6, 11, {.family = UI_TEXT_FAMILY_DEFAULT, .weight = 300, .size = 12, .color = {0, 0, 1, 0.5f}}},
     };
     ui_text_desc d = basic("Hello world", 11);
@@ -63,6 +65,8 @@ static void test_basic(void) {
     d.max_lines = 3;
     d.align = UI_TEXT_ALIGN_JUSTIFY;
     d.line_height = 1.4f;
+    d.languages = languages;
+    d.language_count = 2;
     CHECK(ui_cmd_set_text(w, node, &d) == UI_OK);
     CHECK_EQ_INT(ui_cmd_writer_op_count(w), 1);
     CHECK(apply(&s, w) == UI_OK);
@@ -76,7 +80,10 @@ static void test_basic(void) {
         CHECK_EQ_INT(p->spans[1].start, 6);
         CHECK_NEAR(p->spans[1].style.color[2], 1.0, 1e-6);  // sRGB 1.0 -> linear 1.0
         CHECK_NEAR(p->spans[1].style.color[3], 0.5, 1e-6);  // alpha stays linear
-        CHECK_EQ_INT(p->family_count, 2);
+        CHECK_EQ_INT(p->family_count, 4); // the string table: 2 families, 2 languages
+        CHECK_EQ_INT(p->spans[0].style.language, 4); // "sr-Cyrl", string 3, stored + 1
+        CHECK(!memcmp(p->families + p->family_offsets[3], "sr-Cyrl", 7));
+        CHECK_EQ_INT(p->spans[1].style.language, 0);
         CHECK(!memcmp(p->families + p->family_offsets[0], "Noto Sans, sans-serif", 21));
         CHECK(!memcmp(p->families + p->family_offsets[1], "Mono", 4));
         CHECK_EQ_INT(p->dir, UI_BIDI_RTL);
@@ -202,6 +209,14 @@ static void test_validation(void) {
     d.line_height = -1;
     CHECK(ui_cmd_set_text(w, node, &d) == UI_ERR_INVALID_ARGUMENT);
     d.line_height = 0;
+    static const char *const bad_tag[] = {"r o"};
+    d.languages = bad_tag;
+    d.language_count = 1;
+    CHECK(ui_cmd_set_text(w, node, &d) == UI_ERR_INVALID_ARGUMENT);
+    d.language_count = 0;
+    d.style.language = 1; // past the (empty) language list
+    CHECK(ui_cmd_set_text(w, node, &d) == UI_ERR_INVALID_ARGUMENT);
+    d.style.language = 0;
     CHECK_EQ_INT(ui_cmd_writer_op_count(w), 0);
 
     // The core re-checks what a writer could get wrong: patch a valid op into an overlap.

@@ -251,7 +251,9 @@ ui_result ui_shape(ui_shaper *s, ui_font *font, const ui_shape_request *req,
     hb_buffer_add_utf8(b, (const char *)req->text, (int)req->text_len, req->start, (int)req->len);
     hb_buffer_set_direction(b, req->rtl ? HB_DIRECTION_RTL : HB_DIRECTION_LTR);
     hb_buffer_set_script(b, hb_script_from_iso15924_tag(req->script));
-    hb_buffer_set_language(b, hb_language_get_default());
+    hb_buffer_set_language(b, req->language ? hb_language_from_string(req->language,
+                                                                      (int)req->language_len)
+                                            : hb_language_get_default());
     hb_buffer_set_cluster_level(b, HB_BUFFER_CLUSTER_LEVEL_MONOTONE_GRAPHEMES);
     hb_buffer_set_flags(b, HB_BUFFER_FLAG_PRODUCE_UNSAFE_TO_CONCAT |
                                (req->start == 0 ? HB_BUFFER_FLAG_BOT : 0) |

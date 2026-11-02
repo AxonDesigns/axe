@@ -55,7 +55,8 @@ set_text (wire)  ──►  scene node owns a ui_paragraph (text, spans, familie
   font of the text around them when it covers them, so fallback runs are not split at
   every space.
 - **Shaping** happens at the physical size (font size × scale), with grapheme-level
-  clusters measured in UTF-8 byte offsets. The whole paragraph is passed as context, so
+  clusters measured in UTF-8 byte offsets, and in the span's language when it has one
+  (OpenType `locl` forms). The whole paragraph is passed as context, so
   joining across runs and across intra-word line breaks is right. There is no hinting.
 
 ## Layout
@@ -204,7 +205,6 @@ build, 2026-11-02):
 ## Known limitations
 
 - Justification stretches spaces only; CJK text without spaces is not justified.
-- HarfBuzz's default language is used; there is no per-span language.
 - Without an explicit line height, a fallback font with tall metrics, such as Arabic, makes
   its lines taller (as in browsers). Set `line_height` for even spacing.
 - No clipping: text taller than its node overflows the node.
