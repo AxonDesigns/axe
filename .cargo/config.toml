@@ -1,0 +1,9 @@
+# All Rust crates build offline from the vendored sources (see tools/vendor-rust.sh).
+[source.crates-io]
+replace-with = "vendored-sources"
+
+[source.vendored-sources]
+directory = "third_party/wgpu-native-vendor"
+
+[net]
+offline = true

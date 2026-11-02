@@ -1,0 +1,4 @@
+# Matches third_party/wgpu-native/rust-toolchain.toml at the pinned tag.
+[toolchain]
+channel = "1.93"
+profile = "minimal"

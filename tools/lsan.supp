@@ -1,0 +1,6 @@
+# Leaks inside GPU drivers and the Vulkan loader are outside our control.
+leak:libnvidia-
+leak:libvulkan.so
+leak:libvulkan_lvp.so
+leak:libLLVM
+leak:libdbus-1.so
