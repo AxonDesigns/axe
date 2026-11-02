@@ -63,6 +63,7 @@ A handle is 8 bytes: `u32 index`, `u32 generation`.
 | 4 | `set_corner_radius` | node, `f32 radius` (logical px, ≥ 0) | 12 |
 | 5 | `set_color` | node, `f32 r, g, b, a` (sRGB, straight alpha, clamped to [0, 1]) | 24 |
 | 6 | `start_spring` | node, `u16 property`, `u16 count`, `f32 stiffness`, `f32 damping`, `f32 target[count]` | 20 + 4·count |
+| 7 | `set_timer` | `u32 id`, `u32` reserved (0), `u64 deadline_ns` (animation clock; `UINT64_MAX` disarms) | 16 |
 
 ### Properties for `start_spring`
 
@@ -80,6 +81,17 @@ rate.
 - A `set_*` op on a property stops that property's spring.
 - `count` must equal the property's component count; stiffness must be > 0 and damping ≥ 0.
 
+### Timers
+
+`set_timer` arms a one-shot timer, or re-arms it if one with the same `id` is armed.
+
+- It fires as a `timer_fired` event once the animation clock reaches `deadline_ns`. That
+  happens even when no surface draws, so logic can keep time while everything is idle.
+- A paused clock only moves when stepped, so timers don't fire while it's paused.
+- Like every command, `set_timer` takes effect at the next frame boundary.
+- `deadline_ns = UINT64_MAX` disarms the timer (`ui_cmd_cancel_timer`).
+- An app holds at most 4096 armed timers; further ones are dropped like an invalid op.
+
 ## Events (`UIEB`)
 
 | Opcode | Event | Payload | Bytes |
@@ -87,6 +99,7 @@ rate.
 | 1 | `frame_committed` | surface handle, `u64 frame_id`, `u64 predicted_present_ns` | 24 |
 | 2 | `surface_resized` | surface handle, `f32 width, height` (logical px), `u32 scale_120` | 20 |
 | 3 | `surface_close_requested` | surface handle | 8 |
+| 4 | `timer_fired` | `u32 id`, `u32` reserved, `u64 deadline_ns`, `u64 now_ns` (both animation clock) | 24 |
 
 - `predicted_present_ns` is animation-clock time: when the frame is expected on screen.
   Pausing or stepping the clock moves it, so logic that keeps time from these events is
@@ -94,6 +107,11 @@ rate.
 - `scale_120` is the scale in 120ths: 120 = 1.0, 150 = 1.25, 180 = 1.5.
 - `surface_resized` is sent once when a surface appears and again whenever its logical
   size or scale changes. It always precedes that frame's `frame_committed`.
+- `frame_committed` is sent only for frames that were drawn. A surface with nothing to draw
+  (no applied commands, no running spring, no size or configure change) goes idle and
+  sends nothing, so logic must not use these events as a clock. Use timers for that.
+- When several timers are due at once they fire earliest deadline first, ties by `id`.
+  Re-arming from `deadline_ns` rather than `now_ns` keeps a periodic timer from drifting.
 
 ## Validation and error handling
 
@@ -122,9 +140,14 @@ for changes old readers cannot skip.
 - Each flush is one buffer. All buffers received before a frame starts are applied in
   arrival order during that frame's apply phase.
 - Writes become visible no earlier than the next frame commit after the flush.
-- The core keeps at most two event buffers queued for logic. Later events are appended to
-  one pending buffer, so a stalled logic actor gets one batch instead of a backlog. Event
-  order is always preserved.
+- **Logic → core is lossless.** The channel is unbounded: a flush is never refused,
+  delayed or dropped, however far ahead logic runs, and buffers apply in the order they
+  were flushed. The only failure is running out of memory. Even then nothing is lost: the
+  logic actor holds the message and retries, and the core leaves messages queued until it
+  can take them.
+- **Core → logic is bounded.** The core keeps at most two event buffers queued for logic.
+  Later events are appended to one pending buffer, so a stalled logic actor gets one
+  batch instead of a backlog. Event order is always preserved.
 
 ## Example
 

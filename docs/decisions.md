@@ -3,6 +3,103 @@
 Choices the architecture document leaves open, recorded as they are made. Newest
 milestone first.
 
+## Milestone 0.2: hardening before M1
+
+### Idle frames
+- **A surface draws only when it has work.** Work is any of:
+  - an applied op on a node under it;
+  - a spring under it that was running at the start of the frame (the settling frame still
+    draws);
+  - a size or scale change;
+  - a new configure;
+  - a forced redraw.
+  A ready surface with none of these commits nothing, increments
+  `ui_app_stats.frames_skipped_idle` and emits the `UI_TRACE_FRAME_IDLE` hook.
+- **"Forced" means the renderer lost the frame** (no swapchain image), so the content must
+  be redrawn even though nothing changed. `ui_app_frame` is *not* a force. It gives every
+  surface a frame opportunity, like a vblank, so the headless test can show that frames
+  without commands commit nothing.
+- **Three pacing states per surface:** *ready* (may draw now), *awaiting* (a frame
+  callback is outstanding) and *idle* (neither). A drawn frame asks for its next callback
+  in its commit. An idle frame asks for none, so an idle window costs the compositor,
+  the GPU and us nothing.
+- **Waking up:** when an idle surface gets work, the core calls `surface_request_frame`
+  once. On Wayland that is `wl_surface_frame` plus a `wl_surface_commit` with no new
+  buffer, issued from the main thread. That is safe because an idle surface has no frame in
+  flight and the render thread has nothing pending for it. The next frame is paced by the
+  compositor's callback, as before the idle period.
+- **Pending command buffers count as work for every idle surface.** Which surface a buffer
+  touches is only known once it is applied at a frame boundary, so all of them are woken.
+  A surface that turns out unaffected skips one frame. That costs one buffer-less commit
+  per flush while idle, which is cheap next to an always-on loop.
+- **A configure that changes only window state still draws one frame.** That is what acks
+  it, so the compositor never waits on an unacked configure.
+
+### Timers (new wire op and event)
+- **Why:** idle frames remove the only clock logic had. Logic used `frame_committed` to time
+  its every-2-seconds spring, so an idle window would stop the demo.
+- **What:** command `set_timer(id, deadline_ns)`, opcode 7, and event
+  `timer_fired(id, deadline_ns, now_ns)`, opcode 4, both on the animation clock. This is the
+  architecture's pattern for async results: a request ID completed by an event, with no
+  callbacks into the language. Old readers skip the new opcodes, so the wire version stays
+  0.
+- **Determinism:** timers are on the animation clock, so a paused or stepped clock drives
+  them in tests. They fire in `ui_core_step` before the frame, earliest deadline first,
+  ties by id.
+  - In run mode the main thread sleeps in the platform wait exactly until the next due
+    timer (`ui_core_wait_timeout_ns`, using the clock's inverse mapping), or forever while
+    paused. The wait rounds up to whole milliseconds so it never spins early.
+- **`set_timer` applies at the frame boundary like every command.** While idle it is one
+  of the pending buffers that wake the surfaces (above).
+- **Limit:** 4096 armed timers per app; more are dropped and counted as dropped ops.
+- The demo arms its timer from the first `frame_committed` and re-arms from each
+  deadline, so the period doesn't drift.
+
+### Backpressure
+- **Logic → core is a separate, unbounded queue** (`ui_core.from_logic`). It grows by
+  doubling and never returns `UI_ERR_FULL`. The core's own bounded queue now carries only
+  render → core messages (frame done, render failed), and core → logic stays bounded with
+  coalescing.
+  - **Why unbounded rather than blocking:** it needs no cross-scheduler wait protocol, and
+    the single scheduler, where core and logic share a thread, can't block at all.
+  - **Why memory is still bounded in practice:** logic can only run ahead by as many
+    flushes as it makes between two core steps.
+- **The sleep-polling retry loop is gone.** The only remaining failure is out of memory,
+  and it loses nothing:
+  - the logic actor keeps an ordered outbox and retries it before handling new events;
+  - the core reserves room for every queued buffer before taking any, and on failure
+    leaves them queued until the next step.
+  So order and completeness hold even under memory pressure.
+- **The flood test** pushes into `from_logic` directly, from another thread under the
+  threaded scheduler. That is the exact channel the logic actor uses, and the logic host
+  can't yet flush several buffers in one callback.
+
+### Refresh-aware retry
+- **A skipped frame now retries after the surface's own period**
+  (`surface_period_ns`, a new platform call), instead of a hard-coded 16.67 ms. The period
+  is:
+  - on Wayland, the refresh from presentation feedback, else the measured present
+    interval, else 60 Hz;
+  - on headless, a nominal 60 Hz.
+  A retry is also a forced redraw.
+
+### Test-only frame without logic
+- **`ui_app_frame_without_logic`** (internal, in `runtime/app_internal.h`) is a scheduler op
+  that produces a frame and waits only for render to finish it, not for logic. The stall
+  test uses it to keep frames coming while logic is held, without real sleeps.
+  - Under the single scheduler it steps core and render and skips logic.
+- **The stall test holds logic on a condition variable** inside its event callback for 32
+  frames × 16 ms (512 ms of stepped clock time). Every frame must commit and the rect must
+  follow the closed-form spring within 1.5 px. After release, the `set_color` written
+  during the stall must apply.
+
+### Tooling
+- **The `UI_TRACE` printer is idle-aware.** It restarts interval measurement after an idle
+  period, so an idle gap is no longer reported as a long frame or a late present, and it
+  prints the number of idle frames.
+- **`spring_rect --period S`** sets the time between springs, so idle behavior can be
+  observed (long idle stretches with `--period 20`).
+
 ## Milestone 0.1: runtime skeleton
 
 ### Dependencies and build
