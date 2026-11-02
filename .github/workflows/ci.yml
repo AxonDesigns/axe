@@ -47,9 +47,10 @@ jobs:
         id: key
         run: echo "wgpu=$(git rev-parse HEAD:third_party/wgpu-native)" >> "$GITHUB_OUTPUT"
 
-      - name: Cache vendored crates
+      # Restore and save are separate steps so a failing test still saves the caches.
+      - name: Restore vendored crates
         id: vendor
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: third_party/wgpu-native-vendor
           key: wgpu-vendor-${{ steps.key.outputs.wgpu }}
@@ -58,8 +59,9 @@ jobs:
         if: steps.vendor.outputs.cache-hit != 'true'
         run: tools/vendor-rust.sh
 
-      - name: Cache wgpu-native build
-        uses: actions/cache@v4
+      - name: Restore wgpu-native build
+        id: cargo
+        uses: actions/cache/restore@v4
         with:
           path: build/${{ matrix.preset }}/cargo
           key: wgpu-build-${{ matrix.preset }}-${{ steps.key.outputs.wgpu }}-rust${{ env.RUST_VERSION }}-llvm${{ env.LLVM_VERSION }}
@@ -69,13 +71,28 @@ jobs:
           clang --version | head -1
           cmake --version | head -1
           cargo +"$RUST_VERSION" --version
-          vulkaninfo --summary 2>/dev/null | grep -E 'deviceName|driverName' || true
+          ls -l /usr/share/vulkan/icd.d/ || true
+          VK_LOADER_DEBUG=error,warn vulkaninfo --summary || true
 
       - name: Configure
         run: cmake --preset ${{ matrix.preset }}
 
       - name: Build
         run: cmake --build --preset ${{ matrix.preset }}
+
+      - name: Save vendored crates
+        if: always() && steps.vendor.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: third_party/wgpu-native-vendor
+          key: ${{ steps.vendor.outputs.cache-primary-key }}
+
+      - name: Save wgpu-native build
+        if: always() && steps.cargo.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: build/${{ matrix.preset }}/cargo
+          key: ${{ steps.cargo.outputs.cache-primary-key }}
 
       - name: Test
         env:
