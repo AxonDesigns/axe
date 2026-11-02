@@ -39,6 +39,11 @@ jobs:
             libwayland-dev wayland-protocols libxkbcommon-dev libfontconfig-dev \
             mesa-vulkan-drivers libvulkan1 vulkan-tools
           echo "/usr/lib/llvm-$LLVM_VERSION/bin" >> "$GITHUB_PATH"
+          # Only the CPU driver, so a test can never pick up a GPU. The ICD file name differs
+          # between distributions (lvp_icd.json here, lvp_icd.x86_64.json on Arch).
+          icd=$(ls /usr/share/vulkan/icd.d/lvp_icd*.json | head -1)
+          echo "VK_DRIVER_FILES=$icd" >> "$GITHUB_ENV"
+          echo "VK_ICD_FILENAMES=$icd" >> "$GITHUB_ENV"
 
       - name: Install Rust
         run: rustup toolchain install "$RUST_VERSION" --profile minimal
@@ -71,8 +76,7 @@ jobs:
           clang --version | head -1
           cmake --version | head -1
           cargo +"$RUST_VERSION" --version
-          ls -l /usr/share/vulkan/icd.d/ || true
-          VK_LOADER_DEBUG=error,warn vulkaninfo --summary || true
+          vulkaninfo --summary | grep -E 'deviceName|driverName'
 
       - name: Configure
         run: cmake --preset ${{ matrix.preset }}
@@ -95,10 +99,6 @@ jobs:
           key: ${{ steps.cargo.outputs.cache-primary-key }}
 
       - name: Test
-        env:
-          # Only the CPU driver: tests must not depend on a GPU.
-          VK_DRIVER_FILES: /usr/share/vulkan/icd.d/lvp_icd.x86_64.json
-          VK_ICD_FILENAMES: /usr/share/vulkan/icd.d/lvp_icd.x86_64.json
         run: ctest --preset ${{ matrix.preset }}
 
       - name: Upload test artifacts
