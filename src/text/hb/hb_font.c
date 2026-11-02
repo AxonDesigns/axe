@@ -7,6 +7,8 @@
 #include <string.h>
 
 #include "runtime/common.h"
+#include "unicode/ucd.h"
+#include "unicode/utf8.h"
 
 struct ui_face {
     hb_blob_t *blob;
@@ -231,6 +233,12 @@ void ui_shaper_destroy(ui_shaper *s) {
     free(s);
 }
 
+static hb_codepoint_t space_glyph(const ui_font *font) {
+    hb_codepoint_t g = 0;
+    hb_font_get_nominal_glyph(font->font, ' ', &g);
+    return g;
+}
+
 ui_result ui_shape(ui_shaper *s, ui_font *font, const ui_shape_request *req,
                    const ui_glyph_pos **glyphs, uint32_t *count) {
     hb_buffer_t *b = s->buffer;
@@ -261,6 +269,15 @@ ui_result ui_shape(ui_shaper *s, ui_font *font, const ui_shape_request *req,
             .y_offset = pos[i].y_offset,
             .unsafe_to_break = hb_glyph_info_get_glyph_flags(&info[i]) & HB_GLYPH_FLAG_UNSAFE_TO_BREAK,
         };
+        size_t at = info[i].cluster;
+        uint32_t cp = ui_utf8_next(req->text, &at);
+        uint8_t gc = ui_ucd(cp)->gc;
+        if (gc == UI_GC_CC || gc == UI_GC_ZL || gc == UI_GC_ZP) {
+            ui_glyph_pos *g = &s->glyphs[i];
+            g->glyph = UI_GLYPH_INVISIBLE;
+            g->x_offset = g->y_offset = 0;
+            g->advance = cp == '\t' ? hb_font_get_glyph_h_advance(font->font, space_glyph(font)) : 0;
+        }
     }
     *glyphs = s->glyphs;
     *count = n;

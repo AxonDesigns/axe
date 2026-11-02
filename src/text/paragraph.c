@@ -106,8 +106,19 @@ static ui_text_input input_of(const ui_paragraph *p) {
 
 // ---- Line breaking -----------------------------------------------------------------------
 
+#define TAB_SPACES 8.f
+
+// A tab advances to the next stop: every TAB_SPACES space widths from the line start.
+// `space` is the tab's own advance from shaping (its font's space width).
+static float tab_advance(float pen, float space) {
+    if (!(space > 0)) return 0;
+    float interval = space * TAB_SPACES;
+    return (floorf((pen + EPS) / interval) + 1) * interval - pen;
+}
+
 // Whitespace that hangs at the end of a line instead of counting toward its width.
 static bool hangs(uint32_t cp) {
+    if (cp == '\t') return true; // preserved tabs hang like spaces (CSS pre-wrap)
     uint8_t lb = ui_ucd(cp)->lb;
     return lb == UI_LB_SP || lb == UI_LB_BK || lb == UI_LB_CR || lb == UI_LB_LF ||
            lb == UI_LB_NL || lb == UI_LB_ZW;
@@ -131,8 +142,9 @@ static uint32_t break_line(const ui_shaped_paragraph *p, const float *adv, uint3
                 have_break = true;
             }
         }
-        w += adv[i];
-        trailing = hangs(p->cps[i]) ? trailing + adv[i] : 0;
+        float a = p->cps[i] == '\t' ? tab_advance(w, adv[i]) : adv[i];
+        w += a;
+        trailing = hangs(p->cps[i]) ? trailing + a : 0;
         if (w - trailing > max_w + EPS) {
             if (have_break) return last_break;
             uint32_t g = i;
@@ -346,14 +358,26 @@ static ui_result build_line(builder *b, uint32_t lcs, uint32_t lce, uint32_t met
         for (uint32_t i = 0; i < pc->glyph_count; i++) {
             ui_layout_glyph *g = &o->glyphs[pc->glyph_start + i];
             g->x += pen; // still relative to the line start; y still the offset
+            if (g->glyph == UI_GLYPH_INVISIBLE && g->advance > 0) // a tab: to the next stop
+                g->advance = tab_advance(pen, g->advance);
             pen += g->advance;
         }
         lr->width = pen - lr->x;
     }
     // Trailing whitespace (logical end) hangs: it is laid out but not counted.
+    // Measured on the positioned glyphs: a tab's width depends on where it sits.
     float trailing = 0;
     if (ellipsis_run == NO_RUN) {
-        for (uint32_t i = lce; i-- > lcs && hangs(sp->cps[i]);) trailing += c->advances[i];
+        uint32_t ts = lce;
+        while (ts > lcs && hangs(sp->cps[ts - 1])) ts--;
+        uint32_t from = sp->offsets[ts];
+        for (uint32_t k = run_start; k < o->run_count; k++) {
+            const ui_layout_run *lr = &o->runs[k];
+            for (uint32_t i = 0; i < lr->glyph_count; i++) {
+                const ui_layout_glyph *g = &o->glyphs[lr->glyph_start + i];
+                if (g->cluster >= from && g->cluster < le) trailing += g->advance;
+            }
+        }
     }
     float visible = fmaxf(pen - trailing, 0);
     float height = roundf(asc + desc + gap);
@@ -375,7 +399,7 @@ static uint32_t ellipsis_cut(const ui_shaped_paragraph *p, const float *adv, uin
     float w = 0;
     uint32_t best = ls;
     for (uint32_t i = ls; i < le; i++) {
-        w += adv[i];
+        w += p->cps[i] == '\t' ? tab_advance(w, adv[i]) : adv[i];
         uint32_t next = i + 1;
         if (next < p->cp_count && next < le && !p->graphemes[next]) continue;
         if (hangs(p->cps[i])) continue; // never end the content on whitespace

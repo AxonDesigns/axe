@@ -233,6 +233,39 @@ static void test_reshape_at_unsafe_break(void) {
     ui_paragraph_free(&p);
 }
 
+static void test_controls(void) {
+    // Line breaks and other controls draw nothing and take no width (fonts map them to
+    // .notdef, which would draw a box); a tab advances to the next stop, 8 spaces apart.
+    ui_paragraph p = {0}, q = {0};
+    set(&q, "ab", 0, UI_BIDI_AUTO);
+    float ab = lay(&q, 1, INFINITY)->width;
+    set(&p, "ab\n", 0, UI_BIDI_AUTO);
+    const ui_paragraph_layout *l = lay(&p, 1, INFINITY);
+    CHECK_NEAR(l->lines[0].width, ab, 0.01);
+    for (uint32_t i = 0; i < l->glyph_count; i++)
+        if (l->glyphs[i].cluster == 2) CHECK(l->glyphs[i].glyph == UI_GLYPH_INVISIBLE && l->glyphs[i].advance == 0);
+    set(&p, "a\x01" "b\r\n", 0, UI_BIDI_AUTO);
+    l = lay(&p, 1, INFINITY);
+    CHECK_NEAR(l->lines[0].width, ab, 0.01);
+
+    set(&q, " ", 0, UI_BIDI_AUTO);
+    float space = lay(&q, 1, INFINITY)->glyphs[0].advance;
+    set(&p, "a\tb\t\tc", 0, UI_BIDI_AUTO);
+    l = lay(&p, 1, INFINITY);
+    float stop = space * 8;
+    for (uint32_t i = 0; i < l->glyph_count; i++) {
+        const ui_layout_glyph *g = &l->glyphs[i];
+        if (g->cluster == 2) CHECK_NEAR(g->x, stop, 0.01);     // 'b' at the first stop
+        if (g->cluster == 5) CHECK_NEAR(g->x, 3 * stop, 0.01); // 'c' two stops later
+        if (g->cluster == 1) CHECK(g->glyph == UI_GLYPH_INVISIBLE);
+    }
+    // Line breaking measures tabs the same way.
+    l = lay(&p, 1, stop * 2);
+    CHECK_EQ_INT(l->line_count, 2);
+    ui_paragraph_free(&q);
+    ui_paragraph_free(&p);
+}
+
 static void test_cache(void) {
     ui_paragraph p = {0};
     set(&p, LOREM, 0, UI_BIDI_AUTO);
@@ -261,6 +294,7 @@ int main(void) {
     RUN(test_bidi_lines);
     RUN(test_ellipsis);
     RUN(test_reshape_at_unsafe_break);
+    RUN(test_controls);
     RUN(test_cache);
     ui_text_context_free(&ctx);
     ui_font_registry_destroy(fonts);

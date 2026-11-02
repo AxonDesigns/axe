@@ -25,6 +25,14 @@ milestone first.
   is always built in release. Unoptimized, the first shaping of the example paragraph took
   21.7 ms; optimized it takes 1.5 ms. The "about 60 ms first frame" seen in the windowed
   debug run was mostly this.
+- **Controls draw nothing.** Fonts map tab, line feed and other C0/C1 controls to
+  `.notdef` (glyph 0, with an advance), so every line ending in `\n` showed a box. After
+  shaping, characters with general category Cc, Zl or Zp become `UI_GLYPH_INVISIBLE`
+  with no advance; the scene skips them.
+- **Tabs** advance to the next stop, every 8 space widths of the tab's font from the line
+  start. Line breaking and positioning use the same rule, and trailing tabs hang like
+  spaces (CSS `pre-wrap`). In RTL lines, stops are measured from the line's left edge.
+  There are no custom tab stops yet. Golden case `controls` covers this.
 
 ### Unicode layer
 - **Version: Unicode 18.0.0.** This is the UCD that the pinned HarfBuzz 15.0.0 ships

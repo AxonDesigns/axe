@@ -71,6 +71,10 @@ uint32_t ui_font_ligature_carets(const ui_font *font, uint32_t glyph, bool rtl, 
 
 // ---- Shaping ---------------------------------------------------------------------------
 
+// Glyph ID for characters that draw nothing: controls (tab, line feed, ...) and the line
+// and paragraph separators. Fonts often map them to .notdef, which would show a box.
+#define UI_GLYPH_INVISIBLE UINT32_MAX
+
 typedef struct ui_glyph_pos {
     uint32_t glyph;
     uint32_t cluster;      // byte offset into the shaped text of the glyph's first character
@@ -94,7 +98,9 @@ typedef struct ui_shape_request {
 } ui_shape_request;
 
 // Shapes one run. Glyphs come out in visual order (reversed for RTL), with clusters as byte
-// offsets into `text`. *glyphs stays valid until the next call on this shaper.
+// offsets into `text`. Controls and line/paragraph separators come out as
+// UI_GLYPH_INVISIBLE with no advance, except a tab, whose advance is the font's space width
+// (layout turns it into a tab stop). *glyphs stays valid until the next call on this shaper.
 ui_result ui_shape(ui_shaper *shaper, ui_font *font, const ui_shape_request *req,
                    const ui_glyph_pos **glyphs, uint32_t *count);
 

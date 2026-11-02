@@ -70,6 +70,9 @@ static const golden_case cases[] = {
     {"emergency",
      "Pneumonoultramicroscopicsilicovolcanoconiosis",
      120, 0},
+    {"controls",
+     "Name:\tAxe\nScripts:\t5\x01\r\nTabs stop every 8 spaces; controls draw nothing.",
+     380, 0},
 };
 
 static const uint32_t scales[] = {120, 150, 180};

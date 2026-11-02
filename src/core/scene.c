@@ -557,6 +557,7 @@ static ui_result build_text(ui_paragraph *p, float ox, float oy, float width, fl
         if (!font) return UI_ERR_OUT_OF_MEMORY;
         for (uint32_t i = 0; i < run->glyph_count; i++) {
             const ui_layout_glyph *g = &l->glyphs[run->glyph_start + i];
+            if (g->glyph == UI_GLYPH_INVISIBLE) continue;
             // Horizontal subpixel bins; baselines snap to whole pixels.
             float gx = ox + g->x;
             float px = floorf(gx);
