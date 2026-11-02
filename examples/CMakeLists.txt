@@ -7,3 +7,8 @@ ui_target_warnings(spring_rect_logic)
 add_executable(spring_rect spring_rect/main.c)
 target_link_libraries(spring_rect PRIVATE spring_rect_logic)
 ui_target_warnings(spring_rect)
+
+add_executable(text_paragraph text_paragraph/main.c)
+target_compile_definitions(text_paragraph PRIVATE AXE_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
+target_link_libraries(text_paragraph PRIVATE ui)
+ui_target_warnings(text_paragraph)

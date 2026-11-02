@@ -312,6 +312,42 @@ milestone first.
   An offset inside a cluster snaps to its start, and an empty line puts the caret at its
   start edge.
 
+### Fuzzing, benchmarks and the example
+- **Fuzz preset** (`cmake --preset fuzz`): libFuzzer + ASan + UBSan, RelWithDebInfo.
+  Everything is built with `-fsanitize=fuzzer-no-link`, HarfBuzz included. There are four
+  targets in `fuzz/`, and each checks invariants as well as surviving its input:
+  - `fuzz_utf8`: output always valid, replacement count equal to the maximal subparts, and
+    valid input unchanged.
+  - `fuzz_linebreak`: LB2/LB3, mandatory breaks exactly after hard breaks, no break before
+    a space except after one, GB1/GB2.
+  - `fuzz_bidi`: paragraph levels 0 or 1 and honoring a forced direction, levels within
+    max depth + 1, trailing whitespace at the paragraph level, and L2 a permutation.
+  - `fuzz_set_text`: input bytes become a `set_text` (and `append_text`) payload, then
+    apply, layout at an input-chosen scale and width, rasterization into a small atlas,
+    and hit tests.
+- **Seed corpora** are committed in `fuzz/corpus/` (multilingual and malformed samples;
+  the `set_text` seeds come from the real writer). CTest runs each target for 10,000 runs
+  in CI; new inputs go to the build directory.
+- **First finding:** after 488k runs, `fuzz_set_text` found a heap overflow in the
+  rasterizer, not the wire code. Bitmap x is computed as `x + (dx − left)` while the bounds
+  use `floor(min_x + dx)`, and the two round differently, so a point could land at x =
+  −1e−7 and write column −1. Points are now clamped into the bitmap (also when stepping
+  per row), and non-finite outline points are ignored. The input is in the corpus as
+  `regress-raster-negative-x`.
+- **Benchmarks:** `bench/bench_text`, built in every preset and not run by CTest. It
+  measures shaping plus layout of a 10,000-character paragraph (cold and re-layout),
+  rasterizing 1,000 new glyphs, and frame time with 2,000 glyphs split into core commit
+  and render encode through the hook API. Results are in `docs/text.md`. CI budgets come
+  with the vertical slice's numbers.
+- **Example:** `examples/text_paragraph` shows a card with a multilingual paragraph.
+  - The card follows the window; a timer every 3 s springs it between 45% and 100% of the
+    width, and the text node inside springs with it, so the text reflows on every frame
+    of the animation.
+  - Fonts are the bundled test fonts plus system fonts for fallback.
+  - `--headless` writes a PPM.
+  - Run under both schedulers in nested headless sway at 1.25×: about 159 fps on a 160 Hz
+    output while reflowing, with a median core commit of 0.26 ms.
+
 ## Milestone 0.2: hardening before M1
 
 ### Idle frames

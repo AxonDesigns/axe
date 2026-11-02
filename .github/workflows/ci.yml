@@ -1,4 +1,5 @@
-# Linux CI: builds the debug and asan presets and runs every test headless on lavapipe.
+# Linux CI: builds the debug and asan presets and runs every test headless on lavapipe, and
+# runs each libFuzzer target from its seed corpus (the fuzz preset's tests).
 # The wgpu-native build (vendored crates + Cargo target dir) is cached per preset, keyed on
 # the pinned submodule commit and the Rust toolchain, so a warm run only builds our C code.
 name: ci
@@ -24,7 +25,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        preset: [debug, asan]
+        preset: [debug, asan, fuzz]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -109,4 +110,5 @@ jobs:
           path: |
             build/${{ matrix.preset }}/Testing/Temporary/LastTest.log
             build/${{ matrix.preset }}/tests/**/*.png
+            build/${{ matrix.preset }}/fuzz/crash-*
           if-no-files-found: ignore

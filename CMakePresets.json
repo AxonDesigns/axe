@@ -32,12 +32,23 @@
         "CMAKE_BUILD_TYPE": "Debug",
         "UI_SANITIZE": "address;undefined"
       }
+    },
+    {
+      "name": "fuzz",
+      "displayName": "libFuzzer + ASan + UBSan",
+      "inherits": "base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "UI_SANITIZE": "address;undefined",
+        "UI_FUZZ": "ON"
+      }
     }
   ],
   "buildPresets": [
     { "name": "debug", "configurePreset": "debug" },
     { "name": "release", "configurePreset": "release" },
-    { "name": "asan", "configurePreset": "asan" }
+    { "name": "asan", "configurePreset": "asan" },
+    { "name": "fuzz", "configurePreset": "fuzz" }
   ],
   "testPresets": [
     {
@@ -51,6 +62,18 @@
       "name": "asan",
       "inherits": "base",
       "configurePreset": "asan",
+      "environment": {
+        "ASAN_OPTIONS": "detect_leaks=1:abort_on_error=1:strict_string_checks=1",
+        "LSAN_OPTIONS": "suppressions=${sourceDir}/tools/lsan.supp:print_suppressions=0",
+        "UBSAN_OPTIONS": "print_stacktrace=1:halt_on_error=1",
+        "VK_LOADER_DISABLE_DYNAMIC_LIBRARY_UNLOADING": "1"
+      }
+    },
+    {
+      "name": "fuzz",
+      "inherits": "base",
+      "configurePreset": "fuzz",
+      "filter": { "include": { "name": "^fuzz_" } },
       "environment": {
         "ASAN_OPTIONS": "detect_leaks=1:abort_on_error=1:strict_string_checks=1",
         "LSAN_OPTIONS": "suppressions=${sourceDir}/tools/lsan.supp:print_suppressions=0",

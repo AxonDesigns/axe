@@ -25,6 +25,7 @@ void ui_raster_begin(ui_raster *r) {
 }
 
 static void add_line(ui_raster *r, float x0, float y0, float x1, float y1) {
+    if (!isfinite(x0) || !isfinite(y0) || !isfinite(x1) || !isfinite(y1)) return;
     r->min_x = fminf(r->min_x, fminf(x0, x1));
     r->max_x = fmaxf(r->max_x, fmaxf(x0, x1));
     r->min_y = fminf(r->min_y, fminf(y0, y1));
@@ -112,8 +113,8 @@ ui_path_sink ui_raster_sink(ui_raster *r) {
 // Adds the exact signed area of one segment (bitmap coordinates, y down) to acc, whose rows
 // are `stride` floats. The area left of the segment in each row becomes coverage after the
 // row's prefix sum. The scheme is the trapezoid accumulation of font-rs and stb_truetype 2.
-static void accumulate(float *acc, uint32_t stride, uint32_t h, float x0, float y0, float x1,
-                       float y1) {
+static void accumulate(float *acc, uint32_t stride, uint32_t h, float w, float x0, float y0,
+                       float x1, float y1) {
     float dir = 1;
     if (y0 > y1) {
         dir = -1;
@@ -127,14 +128,15 @@ static void accumulate(float *acc, uint32_t stride, uint32_t h, float x0, float 
     float dxdy = (x1 - x0) / (y1 - y0);
     float x = x0;
     if (y0 < 0) {
-        x -= y0 * dxdy;
+        x = fminf(fmaxf(x - y0 * dxdy, 0.f), w);
         y0 = 0;
     }
     float ymax = fminf(y1, (float)h);
     for (int32_t y = (int32_t)y0; (float)y < ymax; y++) {
         float *row = acc + (size_t)y * stride;
         float dy = fminf((float)y + 1, ymax) - fmaxf((float)y, y0);
-        float xnext = x + dxdy * dy;
+        // Stepping accumulates rounding: keep x inside the bitmap's columns.
+        float xnext = fminf(fmaxf(x + dxdy * dy, 0.f), w);
         float d = dy * dir;
         float xa = fminf(x, xnext), xb = fmaxf(x, xnext);
         float xa_floor = floorf(xa);
@@ -187,9 +189,14 @@ ui_result ui_raster_end(ui_raster *r, float dx, float dy, ui_bitmap *out) {
         return UI_ERR_OUT_OF_MEMORY;
     memset(r->acc, 0, cells * sizeof *r->acc);
     float ox = dx - (float)left, oy = (float)top - dy;
+    // Mathematically every x' is in [0, w], but x + (dx - left) and floor(min_x + dx) round
+    // differently, so the leftmost point can land a hair below 0. Clamp, or column -1 is
+    // written (found by fuzz_set_text).
+    float wf = (float)w;
     for (uint32_t i = 0; i < r->seg_count; i++) {
         const ui_raster_segment *s = &r->segs[i];
-        accumulate(r->acc, stride, h, s->x0 + ox, oy - s->y0, s->x1 + ox, oy - s->y1);
+        float x0 = fminf(fmaxf(s->x0 + ox, 0.f), wf), x1 = fminf(fmaxf(s->x1 + ox, 0.f), wf);
+        accumulate(r->acc, stride, h, wf, x0, oy - s->y0, x1, oy - s->y1);
     }
     for (uint32_t y = 0; y < h; y++) {
         const float *row = r->acc + (size_t)y * stride;
