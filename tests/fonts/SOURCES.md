@@ -13,7 +13,18 @@ to avoid brackets in paths.
 | `NotoSansArabic-VF.ttf` | `notosansarabic/NotoSansArabic[wdth,wght].ttf` | `63111b5b2e074dd48cc67692e0a2726d86ee94c1c37fe8598257b7b4e87e869e` | Arabic |
 | `NotoSansHebrew-VF.ttf` | `notosanshebrew/NotoSansHebrew[wdth,wght].ttf` | `7ef36a2c3593758cdb622e1bdef4f84523e92fbc3ccc667438dd80ff54c2de88` | Hebrew |
 | `NotoSansDevanagari-VF.ttf` | `notosansdevanagari/NotoSansDevanagari[wdth,wght].ttf` | `14ec4af41f27482216d1c2229f417ff9b1425e1babb014e57d1d40d03229853e` | Devanagari |
+| `NotoSans-Regular-Static.ttf` | `notosans/NotoSans[wdth,wght].ttf`, static instance, subset | `bfb7bb691513f12e734dc346c03a03f784912432d7e3fa8e56efcf906fe86b3d` | printable ASCII (`latin_chars.txt`); a face without a weight axis, for synthetic bold |
 | `NotoSansSC-Subset.ttf` | `notosanssc/NotoSansSC[wght].ttf`, subset | `a3041811a78c361b1de50f953c805e0244951c21c5bd412f7232ef0d899af0da` | the characters in `cjk_chars.txt` |
+
+## The static Latin instance
+
+`tools/font_subset --static` pins every axis of Noto Sans to its default (wght 400, wdth
+100) and keeps the characters in `latin_chars.txt`:
+
+```sh
+build/debug/tools/font_subset --static 'NotoSans[wdth,wght].ttf' tests/fonts/latin_chars.txt \
+    tests/fonts/NotoSans-Regular-Static.ttf
+```
 
 ## The CJK subset
 

@@ -117,7 +117,7 @@ static void test_glyph(void) {
     ui_face *face;
     CHECK(ui_face_load_file(FONT("NotoSans-VF.ttf"), 0, &face) == UI_OK);
     ui_font *font;
-    CHECK(ui_font_create(face, 48, NULL, 0, &font) == UI_OK);
+    CHECK(ui_font_create(face, 48, NULL, 0, NULL, &font) == UI_OK);
     ui_raster r = {0};
     ui_bitmap bm;
     uint32_t o = ui_font_glyph(font, 'o');
@@ -135,7 +135,7 @@ static void test_glyph(void) {
     // Variations change the outline: bold has more ink.
     ui_font *bold;
     ui_font_axis wght = {UI_AXIS_WGHT, 900};
-    CHECK(ui_font_create(face, 48, &wght, 1, &bold) == UI_OK);
+    CHECK(ui_font_create(face, 48, &wght, 1, NULL, &bold) == UI_OK);
     CHECK(ui_raster_glyph(&r, bold, o, 0, &bm) == UI_OK);
     CHECK(total_coverage(&bm) > full * 1.3);
     // A space has no outline.

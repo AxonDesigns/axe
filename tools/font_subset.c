@@ -1,19 +1,28 @@
-// Subsets a font to the code points that appear in a UTF-8 text file, keeping variations.
+// Subsets a font to the code points that appear in a UTF-8 text file, keeping variations
+// (or, with --static, pinning every axis to its default to make a static instance).
 // Builds tests/fonts/NotoSansSC-Subset.ttf from the full upstream font:
 //   cmake --build --preset debug --target font_subset
 //   build/debug/tools/font_subset NotoSansSC[wght].ttf tests/fonts/cjk_chars.txt \
 //       tests/fonts/NotoSansSC-Subset.ttf
+//   build/debug/tools/font_subset --static NotoSans[wdth,wght].ttf tests/fonts/latin_chars.txt \
+//       tests/fonts/NotoSans-Regular-Static.ttf
 // Developer tool only: it is excluded from the default build.
 #include <hb-subset.h>
 #include <hb.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include "unicode/utf8.h"
 
 int main(int argc, char **argv) {
+    bool pin = argc == 5 && !strcmp(argv[1], "--static");
+    if (pin) {
+        argv++;
+        argc--;
+    }
     if (argc != 4) {
-        fprintf(stderr, "usage: %s FONT CHARS.txt OUT\n", argv[0]);
+        fprintf(stderr, "usage: %s [--static] FONT CHARS.txt OUT\n", argv[0]);
         return 2;
     }
     FILE *f = fopen(argv[2], "rb");
@@ -40,6 +49,10 @@ int main(int argc, char **argv) {
     hb_set_t *names = hb_subset_input_set(input, HB_SUBSET_SETS_NAME_ID);
     hb_set_clear(names);
     hb_set_invert(names);
+    if (pin && !hb_subset_input_pin_all_axes_to_default(input, face)) {
+        fprintf(stderr, "cannot pin the axes\n");
+        return 1;
+    }
     hb_set_t *unicodes = hb_subset_input_unicode_set(input);
     unsigned count = 0;
     for (size_t i = 0; i < n;) {

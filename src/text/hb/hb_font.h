@@ -46,10 +46,22 @@ typedef struct ui_font_axis {
     float value;
 } ui_font_axis;
 
+// Synthesized style for faces that lack it (CSS font-synthesis): emboldening in em units
+// (advances grow with it) and a horizontal slant (shear, x per unit of y).
+typedef struct ui_font_synthesis {
+    float embolden;
+    float slant;
+} ui_font_synthesis;
+
+#define UI_SYNTHETIC_EMBOLDEN 0.025f
+#define UI_SYNTHETIC_SLANT 0.2f // about 11 degrees
+
 // Creates an instance at `size_px` physical pixels per em with the given axis values
-// (unknown axes are ignored; values are clamped by HarfBuzz). The face must outlive it.
+// (unknown axes are ignored; values are clamped by HarfBuzz) and optional synthesis (NULL:
+// none). Outlines, advances and extents all include the synthesis. The face must outlive
+// it.
 ui_result ui_font_create(ui_face *face, float size_px, const ui_font_axis *axes,
-                         uint32_t axis_count, ui_font **out);
+                         uint32_t axis_count, const ui_font_synthesis *synth, ui_font **out);
 void ui_font_destroy(ui_font *font);
 ui_face *ui_font_face(const ui_font *font);
 float ui_font_size(const ui_font *font);

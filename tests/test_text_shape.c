@@ -58,7 +58,7 @@ static void test_faces(void) {
     CHECK(!ui_face_has_codepoint(face, 0x05D0));
 
     ui_font *font;
-    CHECK(ui_font_create(face, 32, NULL, 0, &font) == UI_OK);
+    CHECK(ui_font_create(face, 32, NULL, 0, NULL, &font) == UI_OK);
     ui_font_metrics m;
     ui_font_get_metrics(font, &m);
     CHECK(m.ascent > 20 && m.ascent < 40);
@@ -295,6 +295,60 @@ static void test_outlines(void) {
     ui_font_registry_destroy(r);
 }
 
+static int32_t advance_of(ui_font *font, const char *text) {
+    ui_shaper *sh;
+    ui_shaper_create(&sh);
+    const ui_glyph_pos *g;
+    uint32_t n;
+    ui_shape_request req = {(const uint8_t *)text, (uint32_t)strlen(text), 0,
+                            (uint32_t)strlen(text), 0x4C61746E, false};
+    ui_shape(sh, font, &req, &g, &n);
+    int32_t sum = 0;
+    for (uint32_t i = 0; i < n; i++) sum += g[i].advance;
+    ui_shaper_destroy(sh);
+    return sum;
+}
+
+static void test_synthesis(void) {
+    // A static regular face asked for bold gets synthetic emboldening: wider advances, and
+    // a separate cache instance.
+    ui_font_registry *r;
+    ui_font_registry_desc desc = {.log = &quiet};
+    CHECK(ui_font_registry_create(&desc, &r) == UI_OK);
+    CHECK(ui_font_registry_add_file(r, FONT("NotoSans-Regular-Static.ttf"), 0, NULL) == UI_OK);
+    CHECK(ui_font_registry_add_file(r, FONT("NotoSans-VF.ttf"), 0, NULL) == UI_OK);
+    CHECK(!ui_face_get_info(ui_font_registry_face(r, 0))->has_wght);
+    ui_font_key k400, k700;
+    ui_font *regular = ui_font_registry_font(r, 0, 20, 400, UI_FONT_NORMAL, &k400);
+    ui_font *bold = ui_font_registry_font(r, 0, 20, 700, UI_FONT_NORMAL, &k700);
+    CHECK(k400.instance == 0 && k700.instance != 0);
+    CHECK(advance_of(bold, "Hello") > advance_of(regular, "Hello"));
+    // 600 is the threshold; 500 is not synthesized.
+    ui_font_key k500;
+    ui_font_registry_font(r, 0, 20, 500, UI_FONT_NORMAL, &k500);
+    CHECK_EQ_INT(k500.instance, 0);
+
+    // A variable face reaches 700 through its axis: no synthesis, same as the plain axis.
+    ui_font *vf_bold = ui_font_registry_font(r, 1, 20, 700, UI_FONT_NORMAL, NULL);
+    ui_font *axis_bold;
+    ui_font_axis wght = {UI_AXIS_WGHT, 700};
+    CHECK(ui_font_create(ui_font_registry_face(r, 1), 20, &wght, 1, NULL, &axis_bold) == UI_OK);
+    CHECK_EQ_INT(advance_of(vf_bold, "Hello"), advance_of(axis_bold, "Hello"));
+    ui_font_destroy(axis_bold);
+
+    // Italic from a face without italic design or axis: a synthetic slant leans the
+    // outline right, so the top of an 'l' moves right of the upright one.
+    ui_font *upright = ui_font_registry_font(r, 1, 40, 400, UI_FONT_NORMAL, NULL);
+    ui_font *slanted = ui_font_registry_font(r, 1, 40, 400, UI_FONT_ITALIC, NULL);
+    CHECK(upright != slanted);
+    float ux0, uy0, ux1, uy1, sx0, sy0, sx1, sy1;
+    uint32_t l = ui_font_glyph(upright, 'l');
+    CHECK(ui_font_glyph_bounds(upright, l, &ux0, &uy0, &ux1, &uy1));
+    CHECK(ui_font_glyph_bounds(slanted, l, &sx0, &sy0, &sx1, &sy1));
+    CHECK(sx1 > ux1 + 3); // ~0.2 * cap height
+    ui_font_registry_destroy(r);
+}
+
 int main(void) {
     RUN(test_faces);
     RUN(test_matching);
@@ -302,5 +356,6 @@ int main(void) {
     RUN(test_itemize);
     RUN(test_shaping);
     RUN(test_outlines);
+    RUN(test_synthesis);
     return test_failures != 0;
 }

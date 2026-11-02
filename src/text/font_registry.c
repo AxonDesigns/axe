@@ -23,6 +23,7 @@ typedef struct instance_entry {
     uint32_t face;
     uint32_t axis_count;
     ui_font_axis axes[MAX_AXES];
+    ui_font_synthesis synth;
 } instance_entry;
 
 typedef struct font_entry {
@@ -305,19 +306,20 @@ uint32_t ui_font_registry_resolve(ui_font_registry *r, uint32_t primary, const c
 // ---- Instances ---------------------------------------------------------------------------
 
 static uint32_t intern_instance(ui_font_registry *r, uint32_t face, const ui_font_axis *axes,
-                                uint32_t count) {
-    if (!count) return 0;
+                                uint32_t count, ui_font_synthesis synth) {
+    if (!count && synth.embolden == 0 && synth.slant == 0) return 0;
     for (uint32_t i = 1; i < r->instance_count; i++) {
         instance_entry *e = &r->instances[i];
         if (e->face == face && e->axis_count == count &&
-            !memcmp(e->axes, axes, count * sizeof *axes))
+            !memcmp(e->axes, axes, count * sizeof *axes) &&
+            e->synth.embolden == synth.embolden && e->synth.slant == synth.slant)
             return i;
     }
     if (ui_grow((void **)&r->instances, &r->instance_capacity, r->instance_count + 1,
                 sizeof *r->instances) != UI_OK)
         return UINT32_MAX;
     instance_entry *e = &r->instances[r->instance_count];
-    *e = (instance_entry){.face = face, .axis_count = count};
+    *e = (instance_entry){.face = face, .axis_count = count, .synth = synth};
     memcpy(e->axes, axes, count * sizeof *axes);
     return r->instance_count++;
 }
@@ -338,7 +340,7 @@ static ui_font *create_font(ui_font_registry *r, ui_font_key key) {
     const instance_entry *inst = &r->instances[key.instance];
     ui_font *font;
     if (ui_font_create(r->faces[key.face].face, (float)key.size_q / 64.f, inst->axes,
-                       inst->axis_count, &font) != UI_OK)
+                       inst->axis_count, &inst->synth, &font) != UI_OK)
         return NULL;
     r->fonts[r->font_count++] = (font_entry){key, font};
     return font;
@@ -358,7 +360,16 @@ ui_font *ui_font_registry_font(ui_font_registry *r, uint32_t face, float size_px
         axes[count++] = (ui_font_axis){UI_AXIS_ITAL, 1};
     else if (wants_slant(style) && info->has_slnt)
         axes[count++] = (ui_font_axis){UI_AXIS_SLNT, fmaxf(info->slnt_min, -12.f)};
-    uint32_t instance = intern_instance(r, face, axes, count);
+    // CSS font-synthesis: what the face can't provide is synthesized. Bold when a bold
+    // weight is asked of a face that only reaches a regular one; a slant when italic or
+    // oblique is asked of a face with no italic design or axis.
+    ui_font_synthesis synth = {0};
+    float reach = info->has_wght ? fminf(fmaxf((float)weight, info->wght_min), info->wght_max)
+                                 : (float)info->weight;
+    if (weight >= 600 && reach <= 500) synth.embolden = UI_SYNTHETIC_EMBOLDEN;
+    if (wants_slant(style) && !info->italic && !info->has_ital && !info->has_slnt)
+        synth.slant = UI_SYNTHETIC_SLANT;
+    uint32_t instance = intern_instance(r, face, axes, count, synth);
     if (instance == UINT32_MAX) return NULL;
     uint32_t size_q = (uint32_t)lroundf(fminf(fmaxf(size_px, 1.f / 64.f), 4096.f) * 64.f);
     ui_font_key key = {face, instance, size_q};

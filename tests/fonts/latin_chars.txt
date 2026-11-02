@@ -1,0 +1,2 @@
+# Code points kept in NotoSans-Regular-Static.ttf (tools/font_subset.c --static).
+ !"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\]^_`abcdefghijklmnopqrstuvwxyz{|}~

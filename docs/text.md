@@ -46,7 +46,9 @@ set_text (wire)  ──►  scene node owns a ui_paragraph (text, spans, familie
   fonts. Tests use only `tests/fonts`.
 - **Matching** follows CSS: each entry of a span's family list is tried in turn, choosing
   the closest weight and style. A variable `wght`, `ital` or `slnt` axis is set from the
-  span's weight and style. There is no synthetic bold or italic.
+  span's weight and style. What a face can't provide is synthesized, as CSS
+  `font-synthesis` does: bold when a bold weight is asked of a regular-only face, and a
+  slant when italic is asked of a face without one.
 - **Fallback** is decided per grapheme cluster. The span's font is used if it covers every
   code point (default-ignorables excepted). Otherwise the first that covers it among the
   family list, registered fonts, and installed fonts. Spaces and punctuation stay in the
@@ -204,7 +206,7 @@ build, 2026-11-02):
 - A fallback font with tall metrics, such as Arabic, makes its lines taller. That is what
   browsers do too, but it shows in mixed paragraphs.
 - No clipping: text taller than its node overflows the node.
-- No synthetic bold or italic. No color glyphs (the atlas format field is ready for RGBA
+- No color glyphs (the atlas format field is ready for RGBA
   pages). No vertical text, hyphenation or dictionary breaking for Thai, Lao, Khmer and
   Myanmar.
 - The first frame that shows new text pays for shaping and rasterization on the core

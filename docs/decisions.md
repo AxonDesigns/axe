@@ -39,6 +39,16 @@ milestone first.
 - **Pressure eviction is least recently used first.** Unprotected glyphs not used in this
   frame are sorted by last use and evicted in batches (8, or an eighth of them) until the
   new glyph fits, instead of all at once.
+- **Synthetic bold and italic** (CSS `font-synthesis`), through HarfBuzz's synthetic bold
+  and slant, which change outlines, advances and extents together.
+  - Bold when the request is ≥ 600 but the face reaches at most 500 (through its `wght`
+    axis, or its static weight). Emboldening is 0.025 em, and advances grow with it.
+  - A slant of 0.2 (about 11°) when italic or oblique is asked of a face with no italic
+    design and no `ital` or `slnt` axis.
+  - The synthesis is part of the interned instance, so glyph caching is keyed correctly.
+  - Tests use `NotoSans-Regular-Static.ttf`, a 15 KB static Latin instance made by
+    `tools/font_subset --static`. Golden case `styles` shows synthetic italic with axis
+    weights.
 
 ### Unicode layer
 - **Version: Unicode 18.0.0.** This is the UCD that the pinned HarfBuzz 15.0.0 ships
@@ -121,8 +131,8 @@ milestone first.
     look down first; bolder weights look up first. A variable `wght` axis matches any
     weight in its range.
   - A style mismatch costs more than any weight difference.
-  - There is no synthetic bold or italic. An italic request uses an `ital` axis, else
-    `slnt` (down to -12), else an italic face.
+  - An italic request uses an `ital` axis, else `slnt` (down to -12), else an italic face,
+    else a synthetic slant (see the follow-ups above).
 - **Fallback per grapheme cluster.** The primary face is tried first, then the span's
   family list, then registered families in registration order (each at its best weight
   and style), then Fontconfig fallback (cached by the cluster's first non-ignorable code

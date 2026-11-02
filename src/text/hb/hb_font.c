@@ -155,7 +155,7 @@ bool ui_face_has_codepoint(const ui_face *f, uint32_t cp) {
 // ---- Fonts -------------------------------------------------------------------------------
 
 ui_result ui_font_create(ui_face *face, float size_px, const ui_font_axis *axes,
-                         uint32_t axis_count, ui_font **out) {
+                         uint32_t axis_count, const ui_font_synthesis *synth, ui_font **out) {
     if (!(size_px > 0) || !isfinite(size_px)) return UI_ERR_INVALID_ARGUMENT;
     ui_font *f = calloc(1, sizeof *f);
     if (!f) return UI_ERR_OUT_OF_MEMORY;
@@ -170,6 +170,9 @@ ui_result ui_font_create(ui_face *face, float size_px, const ui_font_axis *axes,
         for (uint32_t i = 0; i < n; i++) vars[i] = (hb_variation_t){axes[i].tag, axes[i].value};
         hb_font_set_variations(f->font, vars, n);
     }
+    if (synth && synth->embolden > 0)
+        hb_font_set_synthetic_bold(f->font, synth->embolden, synth->embolden, false);
+    if (synth && synth->slant != 0) hb_font_set_synthetic_slant(f->font, synth->slant);
     hb_font_make_immutable(f->font);
     if (hb_font_get_empty() == f->font) {
         free(f);
