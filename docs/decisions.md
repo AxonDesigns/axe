@@ -177,6 +177,47 @@ milestone first.
   - A list whose `atlas_seq` the inbox can't satisfy is a protocol violation. It is logged
     and drawn anyway.
 
+### Paragraph layout
+- **Greedy line breaking** over UAX #14 opportunities, measured with the shaped advances.
+  - Each code point's advance is the sum of its cluster's glyphs; with grapheme-level
+    clusters, the advance sits on the cluster's first code point.
+  - A line ends at a mandatory break, else at the last opportunity before the content
+    overflows, else (no opportunity: a word wider than the line) at the last grapheme
+    boundary before the overflow, with at least one grapheme per line.
+  - A width within 1/64 px of the limit counts as fitting.
+- **Trailing whitespace hangs.** SP, the hard break characters and ZWSP at the logical end
+  of a line are laid out but excluded from the line's width, so they never cause a break.
+  In RTL lines they sit left of the content.
+- **Pieces and reordering.** A line is cut into pieces wherever the shaped run or the L1
+  level changes, and L2 then orders the pieces.
+  - Within a piece, glyphs keep HarfBuzz's visual order. A piece whose L1 level parity
+    differs from its run's (whitespace reset to the paragraph level) is reversed.
+  - A piece that starts or ends mid-run is sliced by cluster when HarfBuzz marks the
+    boundary safe. Otherwise it is reshaped, with the paragraph as context, so cursive
+    joining continues across an intra-word break (CSS Text 3 §7.3).
+- **Metrics:**
+  - The line box height is `round(max ascent + max descent + max line gap)` over the
+    line's runs, with the gap split evenly above and below.
+  - Baselines are `round(top + gap/2 + ascent)`, and line tops accumulate rounded
+    heights, so spacing is uniform and every baseline is a whole physical pixel.
+- **Alignment is start only:** left in LTR paragraphs, right in RTL ones. Each line uses
+  its own paragraph's level, since texts with paragraph separators can mix directions.
+  Unbounded layouts align to the widest line.
+- **Max lines and the ellipsis.**
+  - When `max_lines` cuts text off, the last kept line is shortened to the longest prefix
+    that fits with the ellipsis, ending at a grapheme boundary and never on whitespace.
+  - The ellipsis is shaped in the font and script of the run before it, at the paragraph
+    direction, as a piece at the paragraph level at the logical end (on the right in LTR,
+    on the left in RTL).
+  - The default is U+2026; if that font lacks it, "..." is used. An empty ellipsis cuts
+    without one.
+- **Empty lines:** empty text is one empty line in the base font, and text ending in a
+  hard break gets an empty last line. Carets need both once editing exists.
+- **Cache:** `ui_paragraph` keeps the shaped paragraph (keyed by text, spans, direction
+  and scale) and the line layout (also width and max lines). A width change, such as a
+  resize or a spring, only re-breaks lines. `shape_count` and `layout_count` let tests
+  check this.
+
 ## Milestone 0.2: hardening before M1
 
 ### Idle frames

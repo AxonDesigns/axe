@@ -89,6 +89,7 @@ static ui_result shape_run(ui_text_shaper *s, ui_font_registry *fonts, const ui_
     ui_font_get_metrics(font, &m);
     run->ascent = m.ascent;
     run->descent = m.descent;
+    run->line_gap = m.line_gap;
     ui_shape_request req = {in->text, in->len, run->start, run->end - run->start, run->script,
                             run->level & 1};
     const ui_glyph_pos *glyphs;

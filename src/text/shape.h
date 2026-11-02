@@ -48,7 +48,7 @@ typedef struct ui_shaped_run {
     uint32_t script;                 // ISO 15924 tag
     uint32_t style;                  // shaping style: 0 = base, else span index + 1
     uint8_t level;                   // bidi embedding level (odd = RTL)
-    float ascent, descent;           // px
+    float ascent, descent, line_gap; // px
 } ui_shaped_run;
 
 typedef struct ui_shaped_paragraph {

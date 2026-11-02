@@ -71,3 +71,11 @@ target_compile_definitions(test_text_raster PRIVATE _DEFAULT_SOURCE
 target_link_libraries(test_text_raster PRIVATE ui m)
 ui_target_warnings(test_text_raster)
 add_test(NAME text_raster COMMAND test_text_raster)
+
+# Paragraph layout.
+add_executable(test_text_layout test_text_layout.c)
+target_include_directories(test_text_layout PRIVATE ${PROJECT_SOURCE_DIR}/src)
+target_compile_definitions(test_text_layout PRIVATE UI_TEST_FONTS="${CMAKE_CURRENT_SOURCE_DIR}/fonts")
+target_link_libraries(test_text_layout PRIVATE ui m)
+ui_target_warnings(test_text_layout)
+add_test(NAME text_layout COMMAND test_text_layout)
