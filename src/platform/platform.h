@@ -25,7 +25,8 @@ typedef struct ui_platform_listener {
     // The surface may draw its next frame, expected on screen at the given host time.
     void (*frame)(void *user, void *core_tag, uint64_t predicted_present_host_ns);
     void (*close)(void *user, void *core_tag);
-    // Feedback for a presented frame (present_ns 0: discarded by the compositor).
+    // Feedback for a presented frame (present_ns 0: discarded by the compositor). The
+    // refresh period is the compositor's, or the measured one when it reports none (VRR).
     void (*presented)(void *user, void *core_tag, uint64_t frame_id, uint64_t present_ns,
                       uint64_t refresh_ns);
 } ui_platform_listener;

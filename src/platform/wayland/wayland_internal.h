@@ -69,7 +69,8 @@ struct ui_psurface {
 
     // Main thread: pacing.
     uint64_t last_present_ns; // CLOCK_MONOTONIC
-    uint64_t refresh_ns;      // 0 until known
+    uint64_t refresh_ns;      // reported by the compositor; 0 until known or with VRR
+    double measured_period_ns; // smoothed interval between presents, for when refresh is 0
     int frames_ahead;         // presents land this many refreshes after the next vblank
     int late_streak, early_streak;
 

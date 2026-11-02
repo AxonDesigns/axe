@@ -80,7 +80,8 @@ static ui_result start(ui_app *app) {
 
 static ui_result run(ui_app *app) {
     while (!app->core.quit_requested) {
-        ui_result r = app->platform->vt->wait(app->platform, UINT64_MAX);
+        uint64_t timeout = ui_core_has_work(&app->core) ? 0 : UINT64_MAX;
+        ui_result r = app->platform->vt->wait(app->platform, timeout);
         if (r != UI_OK) return r;
         ui_core_step(&app->core);
     }

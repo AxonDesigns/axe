@@ -88,5 +88,9 @@ void ui_core_force_frame(ui_core *c);
 // Actor step: drains messages, produces a frame if any surface is ready, flushes events.
 void ui_core_step(void *self);
 
+// True when a step would do something now: a surface is ready to draw or messages wait.
+// Schedulers must not block in the platform wait while this holds.
+bool ui_core_has_work(ui_core *c);
+
 // True when every surface's last committed frame is done and logic has handled all events.
 bool ui_core_idle(const ui_core *c);

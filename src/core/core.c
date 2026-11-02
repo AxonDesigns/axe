@@ -280,6 +280,10 @@ static void frame(ui_core *c) {
         memcpy(dl->clear, clear_color, sizeof dl->clear);
         if (ui_scene_build(&c->scene, s->handle, dl) != UI_OK)
             UI_ERROR(c->log, MODULE, "display list incomplete (out of memory)");
+        if (dl->rect_count)
+            UI_TRACE_LOG(c->log, MODULE, "frame %llu t=%.3f s: first rect at %.1f,%.1f",
+                         (unsigned long long)dl->frame_id, (double)now / 1e9, dl->rects[0].x,
+                         dl->rects[0].y);
         if (ui_mailbox_publish(&s->mailbox)) c->stats.display_lists_replaced++;
         c->stats.frames_committed++;
 
@@ -314,6 +318,17 @@ void ui_core_step(void *self) {
     drain(c);
     frame(c);
     flush_events(c);
+}
+
+bool ui_core_has_work(ui_core *c) {
+    for (uint32_t i = 0; i < UI_MAX_SURFACES; i++) {
+        const ui_core_surface *s = &c->surfaces[i];
+        if (!ui_handle_is_null(s->handle) && s->frame_ready) return true;
+    }
+    mtx_lock(&c->actor.queue.lock);
+    bool queued = c->actor.queue.count > 0;
+    mtx_unlock(&c->actor.queue.lock);
+    return queued;
 }
 
 bool ui_core_idle(const ui_core *c) {

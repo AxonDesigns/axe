@@ -1,12 +1,19 @@
 // Frame pacing on Wayland. The render thread attaches per-commit state right before it
-// presents (configure ack, viewport, frame callback); the compositor's replies are
-// dispatched on the main thread and turned into "draw the next frame" for the core.
+// presents (configure ack, viewport, frame callback, presentation feedback); the
+// compositor's replies are dispatched on the main thread and turned into "draw the next
+// frame, which will reach the screen at time T" for the core.
+//
+// Prediction: presentation feedback gives the last present time and the refresh period.
+// A frame drawn now is expected at the first vblank after now, plus `frames_ahead` periods,
+// which adapts when feedback shows presents landing consistently a period late or early.
 #include <stdlib.h>
 
 #include "platform/wayland/wayland_internal.h"
 
 #define MODULE "wayland"
 #define DEFAULT_REFRESH_NS 16666667u
+#define MAX_FRAMES_AHEAD 3
+#define ADAPT_STREAK 4
 
 uint64_t ui_wl_now_ns(void) {
     struct timespec ts;
@@ -36,24 +43,128 @@ static void report_frame(ui_psurface *s, uint64_t predicted_ns) {
     s->platform->base.listener.frame(s->platform->base.listener.user, s->core_tag, predicted_ns);
 }
 
+static uint64_t period(const ui_psurface *s) {
+    if (s->refresh_ns) return s->refresh_ns;
+    if (s->measured_period_ns > 0) return (uint64_t)s->measured_period_ns;
+    return DEFAULT_REFRESH_NS;
+}
+
+static uint64_t predict_present(const ui_psurface *s, uint64_t now) {
+    uint64_t refresh = period(s);
+    uint64_t next;
+    if (s->last_present_ns && now >= s->last_present_ns)
+        next = s->last_present_ns + refresh * ((now - s->last_present_ns) / refresh + 1);
+    else
+        next = now + refresh;
+    return next + (uint64_t)s->frames_ahead * refresh;
+}
+
 // Main thread.
 static void frame_done(void *data, struct wl_callback *callback, uint32_t time_ms) {
     (void)time_ms;
     wl_pending *p = data;
     ui_psurface *s = p->surface;
     pending_remove(s, p);
-    UI_TRACE_LOG(s->platform->base.log, MODULE, "frame callback for frame %llu",
-                 (unsigned long long)p->frame_id);
     wl_callback_destroy(callback);
     free(p);
-    // The frame drawn now reaches the screen at the next refresh.
-    uint64_t refresh = s->refresh_ns ? s->refresh_ns : DEFAULT_REFRESH_NS;
-    report_frame(s, ui_wl_now_ns() + refresh);
+    report_frame(s, predict_present(s, ui_wl_now_ns()));
 }
 
 static const struct wl_callback_listener frame_listener = {.done = frame_done};
 
-void ui_wl_pacing_first_frame(ui_psurface *s) { report_frame(s, ui_wl_now_ns()); }
+void ui_wl_pacing_first_frame(ui_psurface *s) { report_frame(s, predict_present(s, ui_wl_now_ns())); }
+
+// Converts a timestamp of the compositor's presentation clock to CLOCK_MONOTONIC.
+static uint64_t to_monotonic(clockid_t clock, uint64_t t) {
+    if (clock == CLOCK_MONOTONIC) return t;
+    struct timespec ts;
+    clock_gettime(clock, &ts);
+    uint64_t other = (uint64_t)ts.tv_sec * 1000000000u + (uint64_t)ts.tv_nsec;
+    uint64_t mono = ui_wl_now_ns();
+    return t + mono - other;
+}
+
+static void adapt(ui_psurface *s, int64_t error_ns) {
+    int64_t half = (int64_t)period(s) / 2;
+    if (error_ns > half) {
+        s->early_streak = 0;
+        if (++s->late_streak >= ADAPT_STREAK && s->frames_ahead < MAX_FRAMES_AHEAD) {
+            s->frames_ahead++;
+            s->late_streak = 0;
+        }
+    } else if (error_ns < -half) {
+        s->late_streak = 0;
+        if (++s->early_streak >= ADAPT_STREAK && s->frames_ahead > 0) {
+            s->frames_ahead--;
+            s->early_streak = 0;
+        }
+    } else {
+        s->late_streak = s->early_streak = 0;
+    }
+}
+
+static void feedback_finish(wl_pending *p, struct wp_presentation_feedback *feedback,
+                            uint64_t present_ns, uint64_t refresh_ns) {
+    ui_psurface *s = p->surface;
+    pending_remove(s, p);
+    wp_presentation_feedback_destroy(feedback);
+    s->platform->base.listener.presented(s->platform->base.listener.user, s->core_tag,
+                                         p->frame_id, present_ns, refresh_ns);
+    free(p);
+}
+
+static void feedback_sync_output(void *data, struct wp_presentation_feedback *feedback,
+                                 struct wl_output *output) {
+    (void)data, (void)feedback, (void)output;
+}
+
+static void feedback_presented(void *data, struct wp_presentation_feedback *feedback,
+                               uint32_t tv_sec_hi, uint32_t tv_sec_lo, uint32_t tv_nsec,
+                               uint32_t refresh, uint32_t seq_hi, uint32_t seq_lo,
+                               uint32_t flags) {
+    (void)seq_hi, (void)seq_lo, (void)flags;
+    wl_pending *p = data;
+    ui_psurface *s = p->surface;
+    uint64_t t = (((uint64_t)tv_sec_hi << 32) | tv_sec_lo) * 1000000000u + tv_nsec;
+    t = to_monotonic(s->platform->presentation_clock, t);
+    if (s->last_present_ns && t > s->last_present_ns) {
+        // Smoothed present interval; gaps (missed frames, idle) are not periods.
+        double d = (double)(t - s->last_present_ns);
+        if (s->measured_period_ns <= 0) s->measured_period_ns = d;
+        else if (d < s->measured_period_ns * 1.5) s->measured_period_ns += (d - s->measured_period_ns) * 0.1;
+    }
+    if (t > s->last_present_ns) s->last_present_ns = t;
+    s->refresh_ns = refresh; // 0: unknown or variable refresh, use the measured period
+    adapt(s, (int64_t)(t - p->predicted_ns));
+    UI_TRACE_LOG(s->platform->base.log, MODULE,
+                 "frame %llu presented %+.2f ms vs prediction (refresh %.2f ms, ahead %d)",
+                 (unsigned long long)p->frame_id, (double)(int64_t)(t - p->predicted_ns) / 1e6,
+                 refresh / 1e6, s->frames_ahead);
+    feedback_finish(p, feedback, t, period(s));
+}
+
+static void feedback_discarded(void *data, struct wp_presentation_feedback *feedback) {
+    feedback_finish(data, feedback, 0, 0);
+}
+
+static const struct wp_presentation_feedback_listener feedback_listener = {
+    .sync_output = feedback_sync_output,
+    .presented = feedback_presented,
+    .discarded = feedback_discarded,
+};
+
+// Render thread. Feedback proxies inherit the wp_presentation's (default) queue.
+static void wl_presentation_feedback_request(ui_psurface *s, const ui_present_info *info) {
+    if (!s->platform->presentation) return;
+    wl_pending *fb = calloc(1, sizeof *fb);
+    if (!fb) return;
+    fb->surface = s;
+    fb->frame_id = info->frame_id;
+    fb->predicted_ns = info->predicted_present_host_ns;
+    fb->feedback = wp_presentation_feedback(s->platform->presentation, s->surface_wrapper);
+    wp_presentation_feedback_add_listener(fb->feedback, &feedback_listener, fb);
+    pending_add(s, fb);
+}
 
 // Render thread. libwayland requests are thread-safe; the new callback proxies inherit the
 // default queue, so their events are dispatched on the main thread. Their listeners are set
@@ -86,8 +197,7 @@ void ui_wl_pre_present(ui_psurface *s, const ui_present_info *info) {
         wl_callback_add_listener(frame->frame, &frame_listener, frame);
         pending_add(s, frame);
     }
-    UI_TRACE_LOG(s->platform->base.log, MODULE, "pre-present frame %llu",
-                 (unsigned long long)info->frame_id);
+    wl_presentation_feedback_request(s, info);
 }
 
 // Main thread, after the render thread has stopped.
