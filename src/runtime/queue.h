@@ -9,9 +9,8 @@
 #include "ui/result.h"
 
 typedef enum ui_msg_type {
-    UI_MSG_STOP = 1,
     // logic -> core
-    UI_MSG_CMD_BUFFER,      // ptr: malloc'd command buffer (ownership moves), size: bytes
+    UI_MSG_CMD_BUFFER = 1,  // ptr: malloc'd command buffer (ownership moves), size: bytes
     UI_MSG_EVENTS_DONE,     // u64: event buffers fully handled (and their commands flushed)
     // core -> logic
     UI_MSG_EVENT_BUFFER,    // ptr: malloc'd event buffer (ownership moves), size: bytes

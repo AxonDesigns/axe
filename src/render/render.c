@@ -235,8 +235,12 @@ static ui_result init_device(ui_render *r) {
     wgpuInstanceRequestAdapter(r->instance, &options, adapter_cb);
     wait_request(r, &adapter);
     if (!adapter.handle) {
-        UI_ERROR(r->log, MODULE, "no %s adapter: %s",
-                 r->desc.gpu == UI_GPU_SOFTWARE ? "software (lavapipe)" : "GPU", adapter.message);
+        UI_ERROR(r->log, MODULE, "no %s adapter (%s)%s",
+                 r->desc.gpu == UI_GPU_SOFTWARE ? "software" : "GPU", adapter.message,
+                 r->desc.gpu == UI_GPU_SOFTWARE
+                     ? "; is a CPU Vulkan driver such as lavapipe installed and loadable? "
+                       "Check `vulkaninfo --summary`"
+                     : "");
         return UI_ERR_GPU;
     }
     r->adapter = adapter.handle;

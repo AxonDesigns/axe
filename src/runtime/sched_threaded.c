@@ -28,6 +28,9 @@ static int actor_thread(void *arg) {
         if (atomic_load(&a->stopping)) break;
         ui_signal_wait(&a->signal, seen, 0);
     }
+    // Drain what was sent before the stop (e.g. the close event for logic), as the single
+    // scheduler does by stepping every actor once more before its loop ends.
+    a->step(a->self);
     a->stop(a->self);
     return 0;
 }
