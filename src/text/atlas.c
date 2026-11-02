@@ -326,7 +326,7 @@ static bool place(ui_atlas *a, uint16_t w, uint16_t h, uint16_t *pg_out, uint16_
         if (ui_grow((void **)&a->lru, &a->lru_capacity, n + 1, sizeof *a->lru) != UI_OK) break;
         a->lru[n++] = (lru_entry){a->slots[i].last_used, i};
     }
-    qsort(a->lru, n, sizeof *a->lru, lru_order);
+    if (n) qsort(a->lru, n, sizeof *a->lru, lru_order); // lru is NULL until first used
     uint32_t batch = n / 8 > 8 ? n / 8 : 8;
     for (uint32_t k = 0; k < n;) {
         for (uint32_t end = k + batch < n ? k + batch : n; k < end; k++)
