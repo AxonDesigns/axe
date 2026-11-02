@@ -18,6 +18,8 @@ typedef struct ui_scheduler_ops {
     ui_result (*run)(ui_app *app);
     // ui_app_frame: one frame, then wait until idle.
     ui_result (*frame)(ui_app *app);
+    // ui_app_frame_without_logic: one frame, waiting for render only.
+    ui_result (*frame_without_logic)(ui_app *app);
     // Lets the actors process messages just queued by the main thread, then returns when
     // `done` is true.
     void (*wait_until)(ui_app *app, _Atomic bool *done);
@@ -25,6 +27,11 @@ typedef struct ui_scheduler_ops {
 
 extern const ui_scheduler_ops ui_scheduler_threaded;
 extern const ui_scheduler_ops ui_scheduler_single;
+
+// Test-only: like ui_app_frame, but returns once the render actor has finished the frame,
+// without waiting for logic to handle its events. Lets a test keep producing frames while
+// the logic actor is blocked. Thread: main.
+ui_result ui_app_frame_without_logic(ui_app *app);
 
 struct ui_app {
     ui_logger log;

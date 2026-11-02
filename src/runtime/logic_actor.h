@@ -11,8 +11,11 @@ typedef struct ui_logic {
     ui_actor actor;
     ui_logic_desc desc;
     const ui_logger *log;
-    ui_queue *core_queue;
+    ui_queue *core_queue;    // the core's unbounded logic channel
     ui_cmd_writer *writer;
+    ui_msg *outbox;          // messages not yet accepted by the core (only on OOM)
+    uint32_t outbox_count, outbox_capacity;
+    bool reported_oom;
 } ui_logic;
 
 ui_result ui_logic_init(ui_logic *l, const ui_logic_desc *desc, const ui_logger *log,

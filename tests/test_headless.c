@@ -15,7 +15,14 @@
 #define SCALE (SCALE_120 / 120.0)
 #define MS 1000000ull
 
-enum { SHOT_T0, SHOT_T2_1, SHOT_T4, SHOT_COUNT };
+enum { SHOT_T0, SHOT_T2_1, SHOT_T4, SHOT_IDLE, SHOT_COUNT };
+
+// Counters sampled around the idle part of the script.
+typedef struct idle_report {
+    ui_app_stats settled; // right after the second spring settled (t = 5.6 s)
+    ui_app_stats idle;    // after three frames with nothing to do
+    ui_app_stats woken;   // after the t = 6 s timer started the third spring
+} idle_report;
 
 typedef struct rgb {
     int r, g, b;
@@ -63,10 +70,11 @@ static bool shoot(ui_app *app, ui_image *out, const char *ppm) {
     return true;
 }
 
-// The script: settle at t=0, trigger the first spring at t=2 s, sample it in flight at
-// t=2.1 s and settled at t=4 s.
+// The script: settle at t=0, the demo's timer starts the first spring at t=2 s, sample it in
+// flight at t=2.1 s and settled at t=4 s. Then let the second spring settle and check that
+// frame opportunities with nothing to do commit nothing until the next timer wakes it.
 static bool run_script(ui_scheduler_kind scheduler, ui_image shots[SHOT_COUNT], bool write_ppm,
-                       ui_app_stats *stats) {
+                       ui_app_stats *stats, idle_report *idle) {
     demo_logic logic;
     if (demo_logic_init(&logic) != UI_OK) return false;
     logic.stall = false; // the stall flag is for the interactive example only
@@ -89,7 +97,9 @@ static bool run_script(ui_scheduler_kind scheduler, ui_image shots[SHOT_COUNT], 
               shoot(app, &shots[SHOT_T0], write_ppm ? "spring_rect_t0.ppm" : NULL);
     if (ok) {
         ui_app_clock_step(app, 2000 * MS);
-        ok = frame(app) && frame(app); // logic sends the spring; the core starts it at t=2 s
+        // The demo's timer fires (nothing to draw yet, so this frame is idle); logic answers
+        // with the spring, which the next frame starts at t=2 s.
+        ok = frame(app) && frame(app);
     }
     if (ok) {
         ui_app_clock_step(app, 100 * MS);
@@ -100,13 +110,35 @@ static bool run_script(ui_scheduler_kind scheduler, ui_image shots[SHOT_COUNT], 
         ok = frame(app) && shoot(app, &shots[SHOT_T4], write_ppm ? "spring_rect_t4.ppm" : NULL);
     }
     if (ok) CHECK_EQ_INT(ui_app_clock_now(app), 4000 * MS);
+    if (ok) {
+        // The t=4 s timer already fired in the last frame; this one starts spring two, which
+        // settles by t=5.6 s (the settling frame still draws).
+        ok = frame(app);
+        ui_app_clock_step(app, 1600 * MS);
+        ok = ok && frame(app);
+        ui_app_get_stats(app, &idle->settled);
+    }
+    for (int i = 0; ok && i < 3; i++) {
+        ui_app_clock_step(app, 100 * MS); // 5.7, 5.8, 5.9 s: no commands, no springs
+        ok = frame(app);
+    }
+    if (ok) {
+        ui_app_get_stats(app, &idle->idle);
+        ok = shoot(app, &shots[SHOT_IDLE], write_ppm ? "spring_rect_idle.ppm" : NULL);
+    }
+    if (ok) {
+        ui_app_clock_step(app, 100 * MS); // t = 6 s: the timer fires while the surface is idle
+        ok = frame(app) && frame(app);
+        ui_app_get_stats(app, &idle->woken);
+    }
     ui_app_get_stats(app, stats);
     ui_app_destroy(app);
     demo_logic_fini(&logic);
     return ok;
 }
 
-static void check_shots(const ui_image shots[SHOT_COUNT], const ui_app_stats *stats) {
+static void check_shots(const ui_image shots[SHOT_COUNT], const ui_app_stats *stats,
+                        const idle_report *idle) {
     float a[4], b[4];
     demo_logic_rect(0, WIDTH, HEIGHT, a);
     demo_logic_rect(1, WIDTH, HEIGHT, b);
@@ -154,19 +186,36 @@ static void check_shots(const ui_image shots[SHOT_COUNT], const ui_app_stats *st
     CHECK_RGB(t4, bx, ay, expected_color(1), 2);
     CHECK_RGB(t4, ax, ay, bg, 0);
 
+    // Idle: the image is still the settled second spring (anchor 2) and three frames with
+    // nothing to do committed nothing.
+    float c2[4];
+    demo_logic_rect(2, WIDTH, HEIGHT, c2);
+    const ui_image *im = &shots[SHOT_IDLE];
+    CHECK_RGB(im, (uint32_t)((c2[0] + c2[2] / 2) * SCALE), (uint32_t)((c2[1] + c2[3] / 2) * SCALE),
+              expected_color(2), 2);
+    CHECK_EQ_INT(idle->idle.frames_committed, idle->settled.frames_committed);
+    CHECK_EQ_INT(idle->idle.frames_skipped_idle, idle->settled.frames_skipped_idle + 3);
+    // The t=6 s timer wakes it: one idle frame while logic answers, then a commit.
+    CHECK_EQ_INT(idle->woken.frames_committed, idle->idle.frames_committed + 1);
+    CHECK_EQ_INT(idle->woken.frames_skipped_idle, idle->idle.frames_skipped_idle + 1);
+
     CHECK_EQ_INT(stats->commands_dropped, 0);
     CHECK_EQ_INT(stats->buffers_rejected, 0);
-    CHECK_EQ_INT(stats->frames_committed, 6);
+    // Committed: t=0 (x2), 2.0, 2.1, 4.0 (x2), 5.6, 6.0. Idle: t=2.0, 5.7, 5.8, 5.9, 6.0.
+    CHECK_EQ_INT(stats->frames_committed, 8);
+    CHECK_EQ_INT(stats->frames_skipped_idle, 5);
 }
 
 int main(void) {
     ui_image single[SHOT_COUNT] = {0}, threaded[SHOT_COUNT] = {0};
     ui_app_stats single_stats, threaded_stats;
-    if (!run_script(UI_SCHEDULER_SINGLE, single, true, &single_stats)) return 1;
-    check_shots(single, &single_stats);
+    idle_report single_idle, threaded_idle;
+    if (!run_script(UI_SCHEDULER_SINGLE, single, true, &single_stats, &single_idle)) return 1;
+    check_shots(single, &single_stats, &single_idle);
     fprintf(stderr, "%s single scheduler\n", test_failures ? "FAIL" : "pass");
 
-    if (!run_script(UI_SCHEDULER_THREADED, threaded, false, &threaded_stats)) return 1;
+    if (!run_script(UI_SCHEDULER_THREADED, threaded, false, &threaded_stats, &threaded_idle))
+        return 1;
     int before = test_failures;
     for (int i = 0; i < SHOT_COUNT; i++) {
         CHECK_EQ_INT(threaded[i].width, single[i].width);
@@ -175,6 +224,7 @@ int main(void) {
         CHECK(threaded[i].pixels && memcmp(threaded[i].pixels, single[i].pixels, bytes) == 0);
     }
     CHECK_EQ_INT(threaded_stats.frames_committed, single_stats.frames_committed);
+    CHECK_EQ_INT(threaded_stats.frames_skipped_idle, single_stats.frames_skipped_idle);
     fprintf(stderr, "%s threaded scheduler matches single\n", test_failures > before ? "FAIL" : "pass");
 
     for (int i = 0; i < SHOT_COUNT; i++) {

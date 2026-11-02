@@ -1,6 +1,7 @@
 // spring_rect: one rounded rect driven by springs from the logic actor.
 //
-//   spring_rect                      window on the Wayland compositor
+//   spring_rect [--period S]         window on the Wayland compositor; a new spring every
+//                                    S seconds (default 2), idle in between
 //   spring_rect --headless [--seconds S] [--out file.ppm]
 //                                    offscreen, paused clock stepped at 60 Hz, writes a PPM
 //
@@ -36,20 +37,23 @@ static int run_headless(ui_app *app, double seconds, const char *out) {
 
 int main(int argc, char **argv) {
     bool headless = false;
-    double seconds = 3.0;
+    double seconds = 3.0, period = 2.0;
     const char *out = "spring_rect.ppm";
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--headless") == 0) headless = true;
         else if (strcmp(argv[i], "--seconds") == 0 && i + 1 < argc) seconds = atof(argv[++i]);
         else if (strcmp(argv[i], "--out") == 0 && i + 1 < argc) out = argv[++i];
+        else if (strcmp(argv[i], "--period") == 0 && i + 1 < argc) period = atof(argv[++i]);
         else {
-            fprintf(stderr, "usage: %s [--headless [--seconds S] [--out file.ppm]]\n", argv[0]);
+            fprintf(stderr, "usage: %s [--period S] [--headless [--seconds S] [--out file.ppm]]\n",
+                    argv[0]);
             return 2;
         }
     }
 
     demo_logic logic;
     if (demo_logic_init(&logic) != UI_OK) return 1;
+    if (period > 0) logic.period_ns = (uint64_t)(period * 1e9);
     ui_app_desc desc = {
         .surface = {
             .kind = headless ? UI_SURFACE_HEADLESS : UI_SURFACE_WINDOW,

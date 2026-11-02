@@ -30,8 +30,7 @@ static void stop(ui_app *app) {
 
 static ui_result run(ui_app *app) {
     while (!app->core.quit_requested) {
-        uint64_t timeout = ui_core_has_work(&app->core) ? 0 : UINT64_MAX;
-        ui_result r = app->platform->vt->wait(app->platform, timeout);
+        ui_result r = app->platform->vt->wait(app->platform, ui_core_wait_timeout_ns(&app->core));
         if (r != UI_OK) return r;
         step_all(app);
     }
@@ -42,6 +41,16 @@ static ui_result frame(ui_app *app) {
     ui_core_force_frame(&app->core);
     step_all(app);
     // Pick up the logic's flush and the render's FRAME_DONE without starting a new frame.
+    ui_core_step(&app->core);
+    return app->core.failure;
+}
+
+static ui_result frame_without_logic(ui_app *app) {
+    // Only the core and render run; logic keeps its queued events for later.
+    ui_core_force_frame(&app->core);
+    ui_core_step(&app->core);
+    ui_actor *render = ui_render_actor(app->render);
+    render->step(render->self);
     ui_core_step(&app->core);
     return app->core.failure;
 }
@@ -57,5 +66,6 @@ const ui_scheduler_ops ui_scheduler_single = {
     .stop = stop,
     .run = run,
     .frame = frame,
+    .frame_without_logic = frame_without_logic,
     .wait_until = wait_until,
 };

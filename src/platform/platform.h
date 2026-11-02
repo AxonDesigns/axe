@@ -62,6 +62,13 @@ typedef struct ui_platform_vtable {
     // lands in the same surface commit as the frame's buffer.
     void (*surface_pre_present)(ui_psurface *s, const ui_present_info *info);
     ui_result (*surface_set_position)(ui_psurface *s, int32_t x, int32_t y);
+    // Main thread. Asks for one frame callback on a surface that stopped drawing because it
+    // went idle, without presenting a new buffer, so the next frame is still paced by the
+    // compositor. Only called while no frame of this surface is in flight.
+    void (*surface_request_frame)(ui_psurface *s);
+    // Main thread. The surface's current refresh period: reported by the compositor, else
+    // measured from presents, else the platform default.
+    uint64_t (*surface_period_ns)(ui_psurface *s);
     // Blocks until platform events or wake(), at most `timeout_ns` (UINT64_MAX: forever),
     // then dispatches events to the listener.
     ui_result (*wait)(ui_platform *p, uint64_t timeout_ns);

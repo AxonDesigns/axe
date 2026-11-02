@@ -41,14 +41,21 @@ typedef struct ui_queue {
     mtx_t lock;
     ui_msg *ring;
     uint32_t capacity, head, count;
+    bool unbounded; // grows instead of returning UI_ERR_FULL
     ui_waker waker;
 } ui_queue;
 
 ui_result ui_queue_init(ui_queue *q, uint32_t capacity, ui_waker waker);
+// A queue that never refuses a message: it doubles its ring when full. For channels whose
+// messages must not be lost (logic -> core); fails only when memory runs out.
+ui_result ui_queue_init_unbounded(ui_queue *q, uint32_t initial_capacity, ui_waker waker);
 // Frees owned payloads of undelivered messages via `drop` (may be NULL).
 void ui_queue_destroy(ui_queue *q, void (*drop)(ui_msg *msg));
-// Thread: any. Returns UI_ERR_FULL instead of blocking.
+// Thread: any. Never blocks. A bounded queue returns UI_ERR_FULL; an unbounded one grows
+// and returns UI_ERR_OUT_OF_MEMORY only if that fails.
 ui_result ui_queue_push(ui_queue *q, const ui_msg *msg);
+// Thread: any. Messages currently queued.
+uint32_t ui_queue_count(ui_queue *q);
 // Thread: the owning actor. Returns false when empty.
 bool ui_queue_pop(ui_queue *q, ui_msg *out);
 

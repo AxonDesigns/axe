@@ -22,6 +22,7 @@ typedef enum ui_op {
     UI_OP_SET_CORNER_RADIUS = 4,
     UI_OP_SET_COLOR = 5,
     UI_OP_START_SPRING = 6,
+    UI_OP_SET_TIMER = 7,
 } ui_op;
 
 // Animatable node properties and their component counts.
@@ -40,6 +41,7 @@ typedef enum ui_event_type {
     UI_EVENT_FRAME_COMMITTED = 1,
     UI_EVENT_SURFACE_RESIZED = 2,
     UI_EVENT_SURFACE_CLOSE_REQUESTED = 3,
+    UI_EVENT_TIMER_FIRED = 4,
 } ui_event_type;
 
 typedef struct ui_event {
@@ -55,6 +57,11 @@ typedef struct ui_event {
             float width, height; // logical pixels
             uint32_t scale_120;  // scale factor in 120ths (120 = 1.0, 150 = 1.25)
         } surface_resized;
+        struct {
+            uint32_t id;
+            uint64_t deadline_ns; // animation-clock time the timer was set for
+            uint64_t now_ns;      // animation-clock time it fired (>= deadline_ns)
+        } timer_fired;
     };
 } ui_event;
 
@@ -83,6 +90,13 @@ ui_result ui_cmd_set_color(ui_cmd_writer *w, ui_handle node, float r, float g, f
 // ui_property_components(property) floats. A running spring keeps its velocity.
 ui_result ui_cmd_start_spring(ui_cmd_writer *w, ui_handle node, ui_property property,
                               const float *target, float stiffness, float damping);
+
+// Arms one-shot timer `id` for animation-clock time `deadline_ns`, replacing an armed timer
+// with the same id. It fires once as UI_EVENT_TIMER_FIRED, even while every surface is
+// idle; it does not fire while the clock is paused (unless the clock is stepped past it).
+ui_result ui_cmd_set_timer(ui_cmd_writer *w, uint32_t id, uint64_t deadline_ns);
+// Disarms timer `id` if armed.
+ui_result ui_cmd_cancel_timer(ui_cmd_writer *w, uint32_t id);
 
 // Finalizes the header and moves the encoded bytes to the caller, leaving the writer empty
 // and reusable. Ownership: *out_bytes is malloc'd; release it with free().

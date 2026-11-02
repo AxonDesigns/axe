@@ -26,6 +26,8 @@ struct ui_trace_printer {
     interval_acc presents; // compositor present timestamps (core thread)
     _Atomic uint64_t frames_done;
     uint64_t refresh_ns;
+    uint64_t idle_frames;
+    bool resuming; // after an idle period the next intervals measure the gap, not pacing
 };
 
 static const char *const phase_names[UI_PHASE_COUNT] = {"apply", "animate", "commit", "encode",
@@ -82,6 +84,9 @@ static void print_and_reset(ui_trace_printer *p, uint64_t now) {
         n += snprintf(line + n, sizeof line - (size_t)n, " | %s %.3f/%.3f/%.3f", phase_names[i],
                       ms(mn), ms(sum / count), ms(mx));
     }
+    if (p->idle_frames && n < (int)sizeof line)
+        n += snprintf(line + n, sizeof line - (size_t)n, " | idle %" PRIu64, p->idle_frames);
+    p->idle_frames = 0;
     fprintf(stderr, "%s\n", line);
     uint64_t frames_last = p->frames.last_ns, presents_last = p->presents.last_ns;
     p->frames = (interval_acc){.last_ns = frames_last};
@@ -95,6 +100,12 @@ static void on_trace(void *user, const ui_trace_event *ev) {
     case UI_TRACE_FRAME_BEGIN:
         // Core thread.
         if (!p->window_start) p->window_start = ev->time_ns;
+        if (p->resuming) {
+            // Intervals spanning an idle period are not frame times or missed vblanks.
+            p->resuming = false;
+            p->frames.last_ns = 0;
+            p->presents.last_ns = 0;
+        }
         interval_add(&p->frames, ev->time_ns, 0);
         if (ev->time_ns - p->window_start >= 1000000000u) print_and_reset(p, ev->time_ns);
         break;
@@ -113,6 +124,11 @@ static void on_trace(void *user, const ui_trace_event *ev) {
         atomic_min(&a->min, d);
         break;
     }
+    case UI_TRACE_FRAME_IDLE:
+        // Core thread.
+        p->idle_frames++;
+        p->resuming = true;
+        break;
     case UI_TRACE_PRESENTED:
         // Core thread (platform feedback). A present more than 1.5 refresh periods after
         // the previous one means at least one vblank was missed.

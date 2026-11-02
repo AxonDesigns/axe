@@ -83,8 +83,7 @@ static ui_result start(ui_app *app) {
 
 static ui_result run(ui_app *app) {
     while (!app->core.quit_requested) {
-        uint64_t timeout = ui_core_has_work(&app->core) ? 0 : UINT64_MAX;
-        ui_result r = app->platform->vt->wait(app->platform, timeout);
+        ui_result r = app->platform->vt->wait(app->platform, ui_core_wait_timeout_ns(&app->core));
         if (r != UI_OK) return r;
         ui_core_step(&app->core);
     }
@@ -105,6 +104,18 @@ static ui_result frame(ui_app *app) {
     return app->core.failure;
 }
 
+static ui_result frame_without_logic(ui_app *app) {
+    ui_core_force_frame(&app->core);
+    ui_core_step(&app->core);
+    for (;;) {
+        uint64_t seen = ui_signal_seq(&app->progress);
+        ui_core_step(&app->core);
+        if (ui_core_frames_done(&app->core) || app->core.quit_requested) break;
+        ui_signal_wait(&app->progress, seen, 0);
+    }
+    return app->core.failure;
+}
+
 static void wait_until(ui_app *app, _Atomic bool *done) {
     for (;;) {
         uint64_t seen = ui_signal_seq(&app->progress);
@@ -119,5 +130,6 @@ const ui_scheduler_ops ui_scheduler_threaded = {
     .stop = stop,
     .run = run,
     .frame = frame,
+    .frame_without_logic = frame_without_logic,
     .wait_until = wait_until,
 };

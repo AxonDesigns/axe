@@ -38,7 +38,7 @@ static ui_scene_root *find_root(ui_scene *s, ui_handle surface) {
 ui_result ui_scene_add_root(ui_scene *s, ui_handle surface) {
     for (uint32_t i = 0; i < UI_MAX_SURFACES; i++) {
         if (ui_handle_is_null(s->roots[i].surface)) {
-            s->roots[i] = (ui_scene_root){surface, UI_NO_SLOT, UI_NO_SLOT};
+            s->roots[i] = (ui_scene_root){surface, UI_NO_SLOT, UI_NO_SLOT, false, false};
             return UI_OK;
         }
     }
@@ -120,6 +120,7 @@ static ui_result validate(const uint8_t *data, size_t size) {
         case UI_OP_SET_RECT: expected = UI_WIRE_SIZE_SET_RECT; break;
         case UI_OP_SET_CORNER_RADIUS: expected = UI_WIRE_SIZE_SET_CORNER_RADIUS; break;
         case UI_OP_SET_COLOR: expected = UI_WIRE_SIZE_SET_COLOR; break;
+        case UI_OP_SET_TIMER: expected = UI_WIRE_SIZE_SET_TIMER; break;
         case UI_OP_START_SPRING:
             if (op.payload_size < UI_WIRE_SIZE_START_SPRING_BASE) return UI_ERR_MALFORMED;
             expected = UI_WIRE_SIZE_START_SPRING_BASE + 4u * ui_wire_get_u16(op.payload + 10);
@@ -182,13 +183,30 @@ static bool apply_create(ui_scene *s, const uint8_t *p) {
     if (*last != UI_NO_SLOT) s->nodes[*last].next_sibling = slot;
     else *first = slot;
     *last = slot;
+    s->roots[n->root].dirty = true;
     return true;
 }
+
+static bool apply_node_op(ui_scene *s, const ui_wire_op *op, uint64_t now_ns);
 
 static bool apply_op(ui_scene *s, const ui_wire_op *op, uint64_t now_ns) {
     const uint8_t *p = op->payload;
     if (op->opcode == UI_OP_CREATE_NODE) return apply_create(s, p);
+    if (op->opcode == UI_OP_SET_TIMER) {
+        if (s->timer_fn) s->timer_fn(s->timer_user, ui_wire_get_u32(p), ui_wire_get_u64(p + 8));
+        return true;
+    }
+    // Every other known op addresses one node; a change marks that node's surface dirty.
+    ui_handle h = ui_wire_get_handle(p);
+    ui_node *n = node_of(s, h);
+    uint32_t root = n ? n->root : 0;
+    bool applied = apply_node_op(s, op, now_ns);
+    if (applied && n) s->roots[root].dirty = true;
+    return applied;
+}
 
+static bool apply_node_op(ui_scene *s, const ui_wire_op *op, uint64_t now_ns) {
+    const uint8_t *p = op->payload;
     ui_handle h = ui_wire_get_handle(p);
     ui_node *n = node_of(s, h);
     float v[UI_PROP_MAX_COMPONENTS];
@@ -293,6 +311,7 @@ static void write_back(ui_node *n, int which) {
 }
 
 void ui_scene_animate(ui_scene *s, uint64_t now_ns) {
+    for (uint32_t i = 0; i < UI_MAX_SURFACES; i++) s->roots[i].animating = false;
     for (uint32_t slot = 0; slot < s->handles.used; slot++) {
         if (!s->handles.alive[slot]) continue;
         ui_node *n = &s->nodes[slot];
@@ -300,19 +319,13 @@ void ui_scene_animate(ui_scene *s, uint64_t now_ns) {
             if (!n->springs[i].active) continue;
             ui_spring_advance(&n->springs[i], now_ns, spring_epsilon[i]);
             write_back(n, i);
+            s->roots[n->root].dirty = true;
+            if (n->springs[i].active) s->roots[n->root].animating = true;
         }
     }
 }
 
-bool ui_scene_animating(const ui_scene *s) {
-    for (uint32_t slot = 0; slot < s->handles.used; slot++) {
-        if (!s->handles.alive[slot]) continue;
-        for (int i = 0; i < UI_SPRING_COUNT; i++) {
-            if (s->nodes[slot].springs[i].active) return true;
-        }
-    }
-    return false;
-}
+ui_scene_root *ui_scene_root_of(ui_scene *s, ui_handle surface) { return find_root(s, surface); }
 
 ui_result ui_scene_build(ui_scene *s, ui_handle surface, ui_display_list *dl) {
     ui_scene_root *root = find_root(s, surface);

@@ -13,7 +13,28 @@ ui_result ui_queue_init(ui_queue *q, uint32_t capacity, ui_waker waker) {
     q->capacity = capacity;
     q->head = 0;
     q->count = 0;
+    q->unbounded = false;
     q->waker = waker;
+    return UI_OK;
+}
+
+ui_result ui_queue_init_unbounded(ui_queue *q, uint32_t initial_capacity, ui_waker waker) {
+    ui_result r = ui_queue_init(q, initial_capacity, waker);
+    if (r == UI_OK) q->unbounded = true;
+    return r;
+}
+
+// Doubles the ring, unwrapping it so the oldest message moves to index 0. Lock held.
+static ui_result grow(ui_queue *q) {
+    if (q->capacity > UINT32_MAX / 2) return UI_ERR_OUT_OF_MEMORY;
+    uint32_t cap = q->capacity * 2;
+    ui_msg *ring = malloc((size_t)cap * sizeof *ring);
+    if (!ring) return UI_ERR_OUT_OF_MEMORY;
+    for (uint32_t i = 0; i < q->count; i++) ring[i] = q->ring[(q->head + i) % q->capacity];
+    free(q->ring);
+    q->ring = ring;
+    q->capacity = cap;
+    q->head = 0;
     return UI_OK;
 }
 
@@ -29,14 +50,24 @@ void ui_queue_destroy(ui_queue *q, void (*drop)(ui_msg *msg)) {
 ui_result ui_queue_push(ui_queue *q, const ui_msg *msg) {
     mtx_lock(&q->lock);
     if (q->count == q->capacity) {
-        mtx_unlock(&q->lock);
-        return UI_ERR_FULL;
+        ui_result r = q->unbounded ? grow(q) : UI_ERR_FULL;
+        if (r != UI_OK) {
+            mtx_unlock(&q->lock);
+            return r;
+        }
     }
     q->ring[(q->head + q->count) % q->capacity] = *msg;
     q->count++;
     mtx_unlock(&q->lock);
     if (q->waker.wake) q->waker.wake(q->waker.user);
     return UI_OK;
+}
+
+uint32_t ui_queue_count(ui_queue *q) {
+    mtx_lock(&q->lock);
+    uint32_t n = q->count;
+    mtx_unlock(&q->lock);
+    return n;
 }
 
 bool ui_queue_pop(ui_queue *q, ui_msg *out) {

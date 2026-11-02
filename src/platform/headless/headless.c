@@ -1,6 +1,7 @@
 // Headless platform: surfaces with no window. Frames are produced only on request
 // (ui_app_frame), so there is nothing to pace; wait() just sleeps on the wake fd.
 #include <errno.h>
+#include <stdint.h>
 #include <poll.h>
 #include <stdlib.h>
 #include <sys/eventfd.h>
@@ -63,10 +64,22 @@ static ui_result surface_set_position(ui_psurface *s, int32_t x, int32_t y) {
     return UI_ERR_UNSUPPORTED;
 }
 
+// Headless frames happen only when ui_app_frame asks for one; there is nothing to request.
+static void surface_request_frame(ui_psurface *s) { (void)s; }
+
+#define HEADLESS_PERIOD_NS 16666667u // 60 Hz: the nominal rate for headless pacing math
+
+static uint64_t surface_period_ns(ui_psurface *s) {
+    (void)s;
+    return HEADLESS_PERIOD_NS;
+}
+
 static ui_result wait_events(ui_platform *p, uint64_t timeout_ns) {
     headless_platform *h = (headless_platform *)p;
     struct pollfd fd = {.fd = h->wake_fd, .events = POLLIN};
-    int ms = timeout_ns == UINT64_MAX ? -1 : (int)(timeout_ns / 1000000u);
+    // Round up: waking early for a timer would spin until it is due.
+    int ms = timeout_ns >= (uint64_t)INT32_MAX * 1000000u ? -1
+                                                          : (int)((timeout_ns + 999999u) / 1000000u);
     if (poll(&fd, 1, ms) < 0 && errno != EINTR) return UI_ERR_PLATFORM;
     uint64_t drain;
     if (fd.revents & POLLIN) (void)!read(h->wake_fd, &drain, sizeof drain);
@@ -86,6 +99,8 @@ static const ui_platform_vtable vtable = {
     .surface_native = surface_native,
     .surface_pre_present = surface_pre_present,
     .surface_set_position = surface_set_position,
+    .surface_request_frame = surface_request_frame,
+    .surface_period_ns = surface_period_ns,
     .wait = wait_events,
     .wake = wake,
 };

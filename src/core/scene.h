@@ -27,7 +27,12 @@ typedef struct ui_node {
 typedef struct ui_scene_root {
     ui_handle surface;     // null when unused
     uint32_t first_child, last_child;
+    bool dirty;            // something under this root changed since the core last drew it
+    bool animating;        // a spring under this root is still running
 } ui_scene_root;
+
+// Receives set_timer ops, which belong to the core rather than to any node.
+typedef void (*ui_scene_timer_fn)(void *user, uint32_t id, uint64_t deadline_ns);
 
 typedef struct ui_scene_stats {
     uint64_t applied, dropped, rejected;
@@ -42,6 +47,8 @@ typedef struct ui_scene {
     ui_scene_stats stats;
     uint32_t *scratch; // traversal stack
     uint32_t scratch_capacity;
+    ui_scene_timer_fn timer_fn;
+    void *timer_user;
 } ui_scene;
 
 void ui_scene_init(ui_scene *s, const ui_logger *log);
@@ -54,14 +61,16 @@ void ui_scene_remove_root(ui_scene *s, ui_handle surface);
 // Validates the whole buffer, then applies every op in order at animation time `now_ns`.
 // A malformed buffer is rejected entirely (UI_ERR_MALFORMED) and nothing is applied, so a
 // flush is all-or-nothing. Ops on stale handles are dropped individually and reported in
-// debug builds.
+// debug builds. Every applied node op marks its root dirty; set_timer goes to timer_fn.
 ui_result ui_scene_apply(ui_scene *s, const uint8_t *data, size_t size, uint64_t now_ns);
 
-// Advances every running spring to `now_ns`.
+// Advances every running spring to `now_ns`. Roots with a spring that was running are
+// marked dirty (the settling frame still changes the picture); `animating` is updated to
+// whether one is still running.
 void ui_scene_animate(ui_scene *s, uint64_t now_ns);
 
-// True if any spring is still running.
-bool ui_scene_animating(const ui_scene *s);
+// The root for a surface, or NULL. Callers read and clear `dirty`.
+ui_scene_root *ui_scene_root_of(ui_scene *s, ui_handle surface);
 
 // Appends the surface's tree to `dl` in paint order (parents before children).
 ui_result ui_scene_build(ui_scene *s, ui_handle surface, ui_display_list *dl);

@@ -200,6 +200,25 @@ void ui_wl_pre_present(ui_psurface *s, const ui_present_info *info) {
     wl_presentation_feedback_request(s, info);
 }
 
+// Main thread. A surface that went idle has no frame in flight and no callback pending.
+// Request one and commit with no new buffer: the compositor answers at its next repaint,
+// so the frame that follows is paced exactly like the ones before the idle period.
+void ui_wl_request_frame(ui_psurface *s) {
+    wl_pending *frame = calloc(1, sizeof *frame);
+    if (!frame) {
+        // Without a callback we would never draw again; draw on the platform default.
+        report_frame(s, predict_present(s, ui_wl_now_ns()));
+        return;
+    }
+    frame->surface = s;
+    frame->frame = wl_surface_frame(s->surface_wrapper);
+    wl_callback_add_listener(frame->frame, &frame_listener, frame);
+    pending_add(s, frame);
+    wl_surface_commit(s->surface);
+}
+
+uint64_t ui_wl_period_ns(ui_psurface *s) { return period(s); }
+
 // Main thread, after the render thread has stopped.
 void ui_wl_pacing_destroy(ui_psurface *s) {
     wl_pending *p = s->pending;

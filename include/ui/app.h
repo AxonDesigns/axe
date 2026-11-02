@@ -131,6 +131,7 @@ ui_result ui_image_write_ppm(const ui_image *image, const char *path);
 // Counters for tests and diagnostics. Thread: main.
 typedef struct ui_app_stats {
     uint64_t frames_committed;
+    uint64_t frames_skipped_idle;    // frame opportunities with nothing to draw
     uint64_t display_lists_replaced; // render fell behind; pending list replaced, not queued
     uint64_t commands_applied;
     uint64_t commands_dropped;       // stale or wrong-kind handles, unknown ops

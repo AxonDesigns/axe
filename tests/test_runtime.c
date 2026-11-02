@@ -59,6 +59,7 @@ static void test_wire_roundtrip(void) {
     CHECK(ui_wire_event_surface_resized(&b, s, 320, 200, 150) == UI_OK);
     CHECK(ui_wire_event_frame_committed(&b, s, 42, 123456789012345ull) == UI_OK);
     CHECK(ui_wire_event_surface_close(&b, s) == UI_OK);
+    CHECK(ui_wire_event_timer_fired(&b, 9, 2000000000ull, 2000000123ull) == UI_OK);
     // An op from a future version must be skipped by old readers.
     uint8_t *future = ui_wire_buf_op(&b, 999, 8);
     CHECK(future != NULL);
@@ -79,6 +80,9 @@ static void test_wire_roundtrip(void) {
     CHECK(ev.frame_committed.predicted_present_ns == 123456789012345ull);
     CHECK(ui_event_next(&r, &ev) == UI_OK);
     CHECK(ev.type == UI_EVENT_SURFACE_CLOSE_REQUESTED);
+    CHECK(ui_event_next(&r, &ev) == UI_OK);
+    CHECK(ev.type == UI_EVENT_TIMER_FIRED && ev.timer_fired.id == 9);
+    CHECK(ev.timer_fired.deadline_ns == 2000000000ull && ev.timer_fired.now_ns == 2000000123ull);
     CHECK(ui_event_next(&r, &ev) == UI_ERR_END);
 
     // Corruptions are rejected, never read past the end.
@@ -98,6 +102,7 @@ static void test_writer_validation(void) {
     float t[4] = {0};
     CHECK(ui_cmd_start_spring(w, n, (ui_property)77, t, 100, 10) == UI_ERR_INVALID_ARGUMENT);
     CHECK(ui_cmd_start_spring(w, n, UI_PROP_RECT, t, 0, 10) == UI_ERR_INVALID_ARGUMENT);
+    CHECK(ui_cmd_set_timer(w, 1, UINT64_MAX) == UI_ERR_INVALID_ARGUMENT); // reserved: cancel
     CHECK_EQ_INT(ui_cmd_writer_op_count(w), 0);
     uint8_t *bytes;
     size_t size;
@@ -308,6 +313,29 @@ static void test_queue_bounded(void) {
     ui_queue_destroy(&q, NULL);
 }
 
+static void test_queue_unbounded_keeps_order(void) {
+    ui_queue q;
+    CHECK(ui_queue_init_unbounded(&q, 4, (ui_waker){0}) == UI_OK);
+    // Wrap the ring first so growth has to unwrap it.
+    ui_msg m = {.type = UI_MSG_EVENTS_DONE};
+    ui_msg out;
+    for (uint64_t i = 0; i < 3; i++) {
+        m.u64 = i;
+        ui_queue_push(&q, &m);
+    }
+    for (int i = 0; i < 3; i++) ui_queue_pop(&q, &out);
+    for (uint64_t i = 0; i < 10000; i++) {
+        m.u64 = i;
+        CHECK(ui_queue_push(&q, &m) == UI_OK); // never UI_ERR_FULL
+    }
+    CHECK_EQ_INT(ui_queue_count(&q), 10000);
+    bool ordered = true;
+    for (uint64_t i = 0; i < 10000; i++) ordered &= ui_queue_pop(&q, &out) && out.u64 == i;
+    CHECK(ordered);
+    CHECK(!ui_queue_pop(&q, &out));
+    ui_queue_destroy(&q, NULL);
+}
+
 int main(void) {
     RUN(test_handle_generations);
     RUN(test_handle_claim);
@@ -320,5 +348,6 @@ int main(void) {
     RUN(test_clock_controls);
     RUN(test_mailbox_replaces);
     RUN(test_queue_bounded);
+    RUN(test_queue_unbounded_keeps_order);
     return test_failures ? 1 : 0;
 }

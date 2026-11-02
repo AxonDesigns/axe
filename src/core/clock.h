@@ -18,6 +18,9 @@ void ui_clock_init(ui_clock *c, ui_time_source source, bool paused);
 uint64_t ui_clock_host_now(const ui_clock *c);
 // Animation time corresponding to host time `host_ns` (e.g. a predicted present time).
 uint64_t ui_clock_at(const ui_clock *c, uint64_t host_ns);
+// Host time at which animation time `anim_ns` is reached, or UINT64_MAX while paused
+// (a paused clock only moves when stepped). Times already reached map to host_base.
+uint64_t ui_clock_host_at(const ui_clock *c, uint64_t anim_ns);
 void ui_clock_pause(ui_clock *c, bool paused);
 void ui_clock_step(ui_clock *c, uint64_t delta_ns);
 void ui_clock_set_scale(ui_clock *c, double scale);

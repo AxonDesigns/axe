@@ -37,6 +37,7 @@ ui_result demo_logic_init(demo_logic *d) {
     memset(d, 0, sizeof *d);
     const char *stall = getenv("UI_STALL_LOGIC");
     d->stall = stall && stall[0] && strcmp(stall, "0") != 0;
+    d->period_ns = DEMO_PERIOD_NS;
     return ui_handle_allocator_create(&d->handles);
 }
 
@@ -65,7 +66,6 @@ static ui_result on_resized(demo_logic *d, const ui_event *ev, ui_cmd_writer *cm
 }
 
 static ui_result on_frame(demo_logic *d, const ui_event *ev, ui_cmd_writer *cmds) {
-    uint64_t t = ev->frame_committed.predicted_present_ns;
     if (d->stall_pending) {
         // The spring sent last turn is now running in the core. Block this actor like a
         // slow logic turn would; the core must keep animating without us.
@@ -73,14 +73,21 @@ static ui_result on_frame(demo_logic *d, const ui_event *ev, ui_cmd_writer *cmds
         fprintf(stderr, "[demo] stalling logic for 500 ms\n");
         thrd_sleep(&(struct timespec){.tv_nsec = 500000000}, NULL);
     }
-    if (!d->timer_started) {
-        d->timer_started = true;
-        d->next_switch_ns = t + DEMO_PERIOD_NS;
-        return UI_OK;
-    }
-    if (t < d->next_switch_ns || ui_handle_is_null(d->node)) return UI_OK;
-    d->next_switch_ns += DEMO_PERIOD_NS;
-    if (d->next_switch_ns <= t) d->next_switch_ns = t + DEMO_PERIOD_NS;
+    if (d->timer_started) return UI_OK;
+    // The first frame gives us the clock; from here a core timer drives the cycle, so the
+    // demo keeps going while the window is idle and commits no frames.
+    d->timer_started = true;
+    d->next_switch_ns = ev->frame_committed.predicted_present_ns + d->period_ns;
+    return ui_cmd_set_timer(cmds, DEMO_TIMER_ID, d->next_switch_ns);
+}
+
+static ui_result on_timer(demo_logic *d, const ui_event *ev, ui_cmd_writer *cmds) {
+    if (ev->timer_fired.id != DEMO_TIMER_ID || ui_handle_is_null(d->node)) return UI_OK;
+    // Re-arm from the deadline, not from when it fired, so the period does not drift; skip
+    // ahead if the clock jumped past several periods.
+    d->next_switch_ns = ev->timer_fired.deadline_ns + d->period_ns;
+    if (d->next_switch_ns <= ev->timer_fired.now_ns)
+        d->next_switch_ns = ev->timer_fired.now_ns + d->period_ns;
     d->anchor = (d->anchor + 1) % DEMO_ANCHORS;
     float rect[4], color[4];
     demo_logic_rect(d->anchor, d->width, d->height, rect);
@@ -88,6 +95,7 @@ static ui_result on_frame(demo_logic *d, const ui_event *ev, ui_cmd_writer *cmds
     ui_result r = ui_cmd_start_spring(cmds, d->node, UI_PROP_RECT, rect, DEMO_STIFFNESS, DEMO_DAMPING);
     if (r == UI_OK)
         r = ui_cmd_start_spring(cmds, d->node, UI_PROP_COLOR, color, DEMO_STIFFNESS, DEMO_DAMPING);
+    if (r == UI_OK) r = ui_cmd_set_timer(cmds, DEMO_TIMER_ID, d->next_switch_ns);
     if (r == UI_OK && d->stall) d->stall_pending = true;
     return r;
 }
@@ -102,6 +110,7 @@ static ui_result on_events(void *user, const void *events, size_t size, ui_cmd_w
         switch (ev.type) {
         case UI_EVENT_SURFACE_RESIZED: r = on_resized(d, &ev, cmds); break;
         case UI_EVENT_FRAME_COMMITTED: r = on_frame(d, &ev, cmds); break;
+        case UI_EVENT_TIMER_FIRED: r = on_timer(d, &ev, cmds); break;
         case UI_EVENT_SURFACE_CLOSE_REQUESTED: break;
         }
         if (r != UI_OK) return r;

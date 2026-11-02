@@ -34,6 +34,7 @@ typedef enum ui_trace_kind {
     UI_TRACE_PHASE_BEGIN,
     UI_TRACE_PHASE_END,
     UI_TRACE_PRESENTED,       // the compositor reports the frame reached the screen
+    UI_TRACE_FRAME_IDLE,      // a frame opportunity had nothing to draw: the surface idles
 } ui_trace_kind;
 
 typedef struct ui_trace_event {

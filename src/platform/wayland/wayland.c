@@ -2,6 +2,7 @@
 // seat. Frame pacing lives in pacing.c. Everything here runs on the main thread; the render
 // thread only calls ui_wl_pre_present.
 #include <errno.h>
+#include <stdint.h>
 #include <poll.h>
 #include <stdlib.h>
 #include <string.h>
@@ -474,7 +475,9 @@ static ui_result wait_events(ui_platform *base, uint64_t timeout_ns) {
         {.fd = wl_display_get_fd(p->display), .events = POLLIN},
         {.fd = p->wake_fd, .events = POLLIN},
     };
-    int ms = timeout_ns == UINT64_MAX ? -1 : (int)(timeout_ns / 1000000u);
+    // Round up: waking early for a timer would spin until it is due.
+    int ms = timeout_ns >= (uint64_t)INT32_MAX * 1000000u ? -1
+                                                          : (int)((timeout_ns + 999999u) / 1000000u);
     int n = poll(fds, 2, ms);
     if (n < 0 && errno != EINTR) {
         wl_display_cancel_read(p->display);
@@ -509,6 +512,8 @@ static const ui_platform_vtable vtable = {
     .surface_native = surface_native,
     .surface_pre_present = ui_wl_pre_present,
     .surface_set_position = surface_set_position,
+    .surface_request_frame = ui_wl_request_frame,
+    .surface_period_ns = ui_wl_period_ns,
     .wait = wait_events,
     .wake = wake,
 };

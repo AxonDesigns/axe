@@ -22,6 +22,13 @@ uint64_t ui_clock_at(const ui_clock *c, uint64_t host_ns) {
     return c->anim_base + (uint64_t)((double)(host_ns - c->host_base) * c->scale);
 }
 
+uint64_t ui_clock_host_at(const ui_clock *c, uint64_t anim_ns) {
+    if (c->paused) return UINT64_MAX;
+    if (anim_ns <= c->anim_base) return c->host_base;
+    double host = (double)c->host_base + (double)(anim_ns - c->anim_base) / c->scale;
+    return host >= (double)UINT64_MAX ? UINT64_MAX : (uint64_t)host;
+}
+
 static void rebase(ui_clock *c) {
     uint64_t host = ui_clock_host_now(c);
     c->anim_base = ui_clock_at(c, host);

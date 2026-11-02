@@ -1,6 +1,7 @@
 // Temporary C logic actor standing in for the language runtime. It talks to the core only
 // through the wire buffers: it creates one rounded rect when the surface appears and every
-// two seconds (of animation-clock time) springs it to the next corner and color.
+// two seconds (of animation-clock time, through a core timer) springs it to the next
+// corner and color.
 #pragma once
 
 #include <stdbool.h>
@@ -10,6 +11,7 @@
 
 #define DEMO_ANCHORS 4u
 #define DEMO_PERIOD_NS 2000000000ull
+#define DEMO_TIMER_ID 1u
 #define DEMO_STIFFNESS 170.0f
 #define DEMO_DAMPING 18.25f // damping ratio 0.7: a small overshoot, settled well within 2 s
 
@@ -21,6 +23,7 @@ typedef struct demo_logic {
     bool timer_started;
     uint64_t next_switch_ns;
     uint32_t anchor;
+    uint64_t period_ns;    // time between springs; DEMO_PERIOD_NS by default
     bool stall;            // UI_STALL_LOGIC: block 500 ms while each spring is in flight
     bool stall_pending;
 } demo_logic;

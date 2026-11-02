@@ -28,6 +28,8 @@ enum {
     UI_WIRE_SIZE_FRAME_COMMITTED = 24,   // surface, frame_id u64, predicted_present_ns u64
     UI_WIRE_SIZE_SURFACE_RESIZED = 20,   // surface, width, height, scale_120 u32
     UI_WIRE_SIZE_SURFACE_CLOSE = 8,      // surface
+    UI_WIRE_SIZE_SET_TIMER = 16,         // id u32, reserved u32, deadline_ns u64
+    UI_WIRE_SIZE_TIMER_FIRED = 24,       // id u32, reserved u32, deadline_ns u64, now_ns u64
 };
 
 // Growable encoder. The header is written by ui_wire_buf_finish.
@@ -116,3 +118,8 @@ ui_result ui_wire_event_frame_committed(ui_wire_buf *b, ui_handle surface, uint6
 ui_result ui_wire_event_surface_resized(ui_wire_buf *b, ui_handle surface, float width,
                                         float height, uint32_t scale_120);
 ui_result ui_wire_event_surface_close(ui_wire_buf *b, ui_handle surface);
+ui_result ui_wire_event_timer_fired(ui_wire_buf *b, uint32_t id, uint64_t deadline_ns,
+                                    uint64_t now_ns);
+
+// set_timer's deadline meaning "disarm".
+#define UI_WIRE_TIMER_CANCEL UINT64_MAX

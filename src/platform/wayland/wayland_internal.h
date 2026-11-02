@@ -88,4 +88,6 @@ struct ui_psurface {
 void ui_wl_pre_present(ui_psurface *s, const ui_present_info *info);
 void ui_wl_pacing_first_frame(ui_psurface *s);
 void ui_wl_pacing_destroy(ui_psurface *s);
+void ui_wl_request_frame(ui_psurface *s);
+uint64_t ui_wl_period_ns(ui_psurface *s);
 uint64_t ui_wl_now_ns(void);

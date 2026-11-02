@@ -54,7 +54,7 @@ ui_result ui_app_create(const ui_app_desc *desc, ui_app **out) {
     if (r != UI_OK) goto fail_platform;
     app->core.platform = app->platform;
 
-    r = ui_logic_init(&app->logic, &desc->logic, &app->log, &app->core.actor.queue);
+    r = ui_logic_init(&app->logic, &desc->logic, &app->log, &app->core.from_logic);
     if (r != UI_OK) goto fail_logic;
     ui_render_desc render_desc = {
         .log = &app->log,
@@ -141,6 +141,14 @@ ui_result ui_app_frame(ui_app *app) {
     if (app->running) return UI_ERR_WRONG_STATE;
     app->running = true;
     ui_result r = app->sched->frame(app);
+    app->running = false;
+    return r;
+}
+
+ui_result ui_app_frame_without_logic(ui_app *app) {
+    if (app->running) return UI_ERR_WRONG_STATE;
+    app->running = true;
+    ui_result r = app->sched->frame_without_logic(app);
     app->running = false;
     return r;
 }

@@ -185,6 +185,24 @@ ui_result ui_cmd_start_spring(ui_cmd_writer *w, ui_handle node, ui_property prop
     return UI_OK;
 }
 
+static ui_result put_timer(ui_cmd_writer *w, uint32_t id, uint64_t deadline_ns) {
+    uint8_t *p = ui_wire_buf_op(&w->buf, UI_OP_SET_TIMER, UI_WIRE_SIZE_SET_TIMER);
+    if (!p) return UI_ERR_OUT_OF_MEMORY;
+    p = ui_wire_put_u32(p, id);
+    p = ui_wire_put_u32(p, 0);
+    ui_wire_put_u64(p, deadline_ns);
+    return UI_OK;
+}
+
+ui_result ui_cmd_set_timer(ui_cmd_writer *w, uint32_t id, uint64_t deadline_ns) {
+    if (deadline_ns == UI_WIRE_TIMER_CANCEL) return UI_ERR_INVALID_ARGUMENT;
+    return put_timer(w, id, deadline_ns);
+}
+
+ui_result ui_cmd_cancel_timer(ui_cmd_writer *w, uint32_t id) {
+    return put_timer(w, id, UI_WIRE_TIMER_CANCEL);
+}
+
 ui_result ui_cmd_writer_take(ui_cmd_writer *w, uint8_t **out_bytes, size_t *out_size) {
     *out_bytes = ui_wire_buf_finish(&w->buf, out_size);
     return *out_bytes ? UI_OK : UI_ERR_END;
@@ -217,6 +235,17 @@ ui_result ui_wire_event_surface_close(ui_wire_buf *b, ui_handle surface) {
     uint8_t *p = ui_wire_buf_op(b, UI_EVENT_SURFACE_CLOSE_REQUESTED, UI_WIRE_SIZE_SURFACE_CLOSE);
     if (!p) return UI_ERR_OUT_OF_MEMORY;
     ui_wire_put_handle(p, surface);
+    return UI_OK;
+}
+
+ui_result ui_wire_event_timer_fired(ui_wire_buf *b, uint32_t id, uint64_t deadline_ns,
+                                    uint64_t now_ns) {
+    uint8_t *p = ui_wire_buf_op(b, UI_EVENT_TIMER_FIRED, UI_WIRE_SIZE_TIMER_FIRED);
+    if (!p) return UI_ERR_OUT_OF_MEMORY;
+    p = ui_wire_put_u32(p, id);
+    p = ui_wire_put_u32(p, 0);
+    p = ui_wire_put_u64(p, deadline_ns);
+    ui_wire_put_u64(p, now_ns);
     return UI_OK;
 }
 
@@ -260,6 +289,12 @@ ui_result ui_event_next(ui_event_reader *reader, ui_event *out) {
         case UI_EVENT_SURFACE_CLOSE_REQUESTED:
             if (op.payload_size != UI_WIRE_SIZE_SURFACE_CLOSE) return UI_ERR_MALFORMED;
             out->surface = ui_wire_get_handle(op.payload);
+            return UI_OK;
+        case UI_EVENT_TIMER_FIRED:
+            if (op.payload_size != UI_WIRE_SIZE_TIMER_FIRED) return UI_ERR_MALFORMED;
+            out->timer_fired.id = ui_wire_get_u32(op.payload);
+            out->timer_fired.deadline_ns = ui_wire_get_u64(op.payload + 8);
+            out->timer_fired.now_ns = ui_wire_get_u64(op.payload + 16);
             return UI_OK;
         default:
             continue; // unknown event from a newer core: skip it
