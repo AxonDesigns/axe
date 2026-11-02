@@ -74,6 +74,11 @@ ui_result ui_app_create(const ui_app_desc *desc, ui_app **out) {
         goto fail_surface;
     }
 
+    if (ui_env_flag("UI_TRACE")) {
+        r = ui_trace_printer_install(app, &app->printer);
+        if (r != UI_OK) UI_WARN(&app->log, MODULE, "UI_TRACE ignored: %s", ui_result_str(r));
+    }
+
     r = app->sched->start(app);
     if (r != UI_OK) {
         UI_ERROR(&app->log, MODULE, "cannot start actors: %s", ui_result_str(r));
@@ -85,6 +90,7 @@ ui_result ui_app_create(const ui_app_desc *desc, ui_app **out) {
     return UI_OK;
 
 fail_start:
+    ui_trace_printer_destroy(app, app->printer);
     ui_core_remove_surfaces(&app->core);
 fail_surface:
     ui_render_destroy(app->render);
@@ -104,6 +110,7 @@ void ui_app_destroy(ui_app *app) {
     if (!app) return;
     // Render first: GPU surfaces must go before the platform surfaces they draw into.
     if (app->started) app->sched->stop(app);
+    ui_trace_printer_destroy(app, app->printer);
     ui_core_remove_surfaces(&app->core);
     ui_render_destroy(app->render);
     ui_logic_destroy(&app->logic);

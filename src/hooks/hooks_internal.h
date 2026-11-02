@@ -39,11 +39,20 @@ void ui_hooks_emit_presented(ui_hooks *h, ui_handle surface, uint64_t frame_id,
             ui_hooks_emit_presented((h), (surface), (frame), (present_ns), (refresh_ns));      \
     } while (0)
 #else
-#define UI_HOOK(h, kind, phase, surface, frame) ((void)0)
-#define UI_HOOK_PRESENTED(h, surface, frame, present_ns, refresh_ns) ((void)0)
+// sizeof marks the arguments as used without evaluating them: no code is generated.
+#define UI_HOOK(h, kind, phase, surface, frame)                                                \
+    ((void)sizeof(h), (void)sizeof(surface), (void)sizeof(frame))
+#define UI_HOOK_PRESENTED(h, surface, frame, present_ns, refresh_ns)                           \
+    ((void)sizeof(h), (void)sizeof(surface), (void)sizeof(frame), (void)sizeof(present_ns),     \
+     (void)sizeof(refresh_ns))
 #endif
 
 #define UI_HOOK_PHASE_BEGIN(h, phase, surface, frame)                                          \
     UI_HOOK(h, UI_TRACE_PHASE_BEGIN, phase, surface, frame)
 #define UI_HOOK_PHASE_END(h, phase, surface, frame)                                            \
     UI_HOOK(h, UI_TRACE_PHASE_END, phase, surface, frame)
+
+// Prints per-phase timings every second when UI_TRACE=1. Thread: main, before running.
+typedef struct ui_trace_printer ui_trace_printer;
+ui_result ui_trace_printer_install(ui_app *app, ui_trace_printer **out);
+void ui_trace_printer_destroy(ui_app *app, ui_trace_printer *printer);

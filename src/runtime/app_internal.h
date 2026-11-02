@@ -38,4 +38,5 @@ struct ui_app {
     ui_handle main_surface;
     bool started;
     bool running;        // inside ui_app_run or ui_app_frame
+    ui_trace_printer *printer;
 };

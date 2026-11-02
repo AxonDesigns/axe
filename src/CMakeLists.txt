@@ -22,6 +22,7 @@ add_library(ui STATIC
     core/scene.c
     core/spring.c
     hooks/hooks.c
+    hooks/trace_printer.c
     platform/headless/headless.c
     platform/wayland/pacing.c
     platform/wayland/wayland.c
