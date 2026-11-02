@@ -522,8 +522,10 @@ static bool draw_window(ui_render *r, render_surface *s, const ui_display_list *
     ui_present_info info = {
         .token = dl->platform_token,
         .frame_id = dl->frame_id,
+        .predicted_present_host_ns = dl->predicted_present_host_ns,
         .logical_width = dl->logical_width,
         .logical_height = dl->logical_height,
+        .scale_120 = dl->scale_120,
     };
     s->platform->vt->surface_pre_present(s->psurface, &info);
     wgpuSurfacePresent(s->surface);

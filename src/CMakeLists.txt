@@ -23,6 +23,7 @@ add_library(ui STATIC
     core/spring.c
     hooks/hooks.c
     platform/headless/headless.c
+    platform/wayland/pacing.c
     platform/wayland/wayland.c
     render/render.c)
 target_include_directories(ui

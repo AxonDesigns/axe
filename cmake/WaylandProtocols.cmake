@@ -21,5 +21,5 @@ function(ui_wayland_protocol target xml)
         COMMENT "wayland-scanner ${name}"
         VERBATIM)
     target_sources(${target} PRIVATE "${out}/${name}-client-protocol.h" "${out}/${name}-protocol.c")
-    target_include_directories(${target} PUBLIC "${out}")
+    target_include_directories(${target} SYSTEM PUBLIC "${out}")
 endfunction()

@@ -45,7 +45,9 @@ typedef struct ui_native_surface {
 typedef struct ui_present_info {
     uint64_t token;
     uint64_t frame_id;
+    uint64_t predicted_present_host_ns; // what the core expected; checked against feedback
     float logical_width, logical_height;
+    uint32_t scale_120;
 } ui_present_info;
 
 typedef struct ui_platform_vtable {
