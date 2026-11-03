@@ -3,6 +3,158 @@
 Choices the architecture document leaves open, recorded as they are made. Newest
 milestone first.
 
+## Milestone 3a: language binding plumbing
+
+### The user's choices in review
+- **Time base:** a new `clock` event (7) comes first in every event buffer, and one buffer
+  is sent at startup.
+- **IDL format:** a custom line-based format with its grammar in `docs/idl.md`.
+- **Errors:** the ops a failed task wrote are kept.
+- **u64 is a `number`.**
+  - Times (`u64 time` in the IDL) aren't rejected past 2^53: they decode rounded, and JS sees
+    them in ms since the app started.
+  - Exact counters (`frame_id`) throw past 2^53, and the encoder takes only safe integers for
+    them.
+- **Microtasks:** a checkpoint after each event and each timer callback.
+- **Leaks:** a subtree is reported when its root's `Node` object is collected and no
+  ancestor's object is alive.
+- **`axe-run` options** (`--size`, `--title`, `--font`) configure the window: the surface
+  exists before JS runs. Logged for later:
+  - JS-created surfaces (a `create_surface` op) for multi-window apps;
+  - a manifest, with packaging.
+- **TypeScript 7 for type-checking only.** Nothing uses the compiler's programmatic API; the
+  TSX transform (M3b) will be an esbuild plugin or a tool of its own.
+- **Generated public enums** (`include/ui/wire_ids.h`).
+- **`measure()` on a gone node** rejects with `StaleNodeError`.
+- **`performance.now()` is wall time with web semantics.** The animation clock is `app.time`
+  and the times on events. The test runner maps `performance.now()` to the animation clock.
+- **`app.onSurface` replays** existing surfaces to a late handler.
+- **`setText`'s `families` is a list of names** (`["Noto Sans", "sans-serif"]`), joined into
+  one CSS-style list on the wire.
+
+### IDL and generator
+- **`original N` on every op and event, checked.** Reserved bytes taken over by a `since`
+  field count as inside the original, as `header_bytes` did. Reserved padding past the
+  original needs no `since`.
+- **What the generator rejects:**
+  - a `default` other than 0 on an appended field;
+  - an appended enum without a value 0;
+  - an appended count or size;
+  - a header-less op growing its fixed part.
+- **`--compat-base` compares two schemas** (CI: the PR's base, or the previous commit).
+- **Checks in the IDL are the constraints the core drops on.** Context-dependent ones stay in
+  the scene: `set_text`'s fields that may come from the node, handles, span order.
+- **The C API's `ui_cmd_*` stay hand-written** as argument checks and conveniences over the
+  generated encoders, with no offsets left in them. Their rejections are unchanged, including
+  `load_font` not checking UTF-8 (the core drops such a path).
+- **Generated C:**
+  - fixed parts as structs, with `_read` (zero-filling) and `_write`;
+  - `_tail_of`, size accessors, tail element accessors;
+  - `_check` returning the failing field's name, which drop messages now print;
+  - `_put`;
+  - framing, and the style value validators.
+- **The scene keeps `ui_scene_validate`** as a one-line wrapper of the generated validator.
+- **The generated TypeScript:**
+  - packs sub-word fields into 32-bit writes;
+  - uses literal `case` values, because QuickJS evaluates case expressions in turn;
+  - inlines integer checks and small copies.
+
+### Migration proof
+`tests/wire/proof.md` has the details.
+
+- **Encoding:** a dual-check build ran the pre-IDL encoders on every call of the suite and the
+  examples, byte for byte.
+- **Decoding:** 11,759 recorded buffers and seeds, plus 5.4 million fuzzer inputs (301 s),
+  decoded identically.
+- **What stays:** 575 fixtures with their pre-IDL dumps, checked by `test_wire_fixtures`.
+- **The fuzzer's one finding wasn't a bug.** A short type-7 event is malformed for the new
+  reader (`clock`) and skipped by the old one; the dumps renumber type 7 before comparing.
+
+### Engine and QuickJS-ng
+- **QuickJS-ng v0.18.0**, built from its four engine sources. No `quickjs-libc`, so apps
+  have no `std` or `os`.
+- **Always `-O2`**, as HarfBuzz is; the sanitizers still instrument it.
+- **The engine interface follows N-API:** scoped values, strong and weak refs, and a pending
+  exception reported by an empty value or `false`. Weak refs go through `WeakRef`.
+- **Compiling a module gives its imports empty stand-ins.** QuickJS loads imports even when
+  only compiling, and bytecode binds them by name at evaluation. So `axe-jsc` uses an engine
+  of its own.
+- **QuickJS-ng quirks worked around:**
+  - `JS_ThrowInternalError` is uncatchable, so a native that returns no value without
+    throwing throws a TypeError instead;
+  - a `FinalizationRegistry` target that is its own unregister token is never finalized, so
+    nodes register a separate token.
+
+### The host
+- **One command buffer per turn:**
+  - JS writes it in place, in host memory exposed as an ArrayBuffer;
+  - the host takes that memory at the flush and appends its timer's re-arm;
+  - a buffer is detached before its memory moves.
+- **Events reach JS zero-copy** for the turn's length. The clock is dispatched too: it marks
+  the turn's start, for `app.onTurnStart`.
+- **JS timers share one wire timer** (id `0xFFFFFFFF`), armed for the earliest deadline:
+  - deadlines are the turn's time plus the delay;
+  - timers set during a batch wait for a later turn;
+  - an interval re-arms from its deadline, or from now after a jump;
+  - intervals are at least 1 ms.
+- **The core fires timers again after a frame's apply.** A timer armed for a time already
+  past fired one step later under the single scheduler than under the threaded one, which
+  happens to take an extra step. Now both fire it in the same step.
+- **Long tasks are measured per task** (an event with its checkpoint, a timer callback, the
+  evaluation, the flush), 50 ms by default.
+- **Hooks API version 1:** the `SCRIPT_*` kinds, plus `text` and `duration_ns`.
+- **The prelude:** console, timers, the text codecs and `performance` are a JS prelude over
+  a few natives, which are reachable only through its closures. A lone surrogate encodes as
+  U+FFFD.
+- **`ui_app_desc.script`:** the desc is copied, except the bundle's bytes.
+  `ui_script_desc.internal` lets Axe's tools (the test runner) define modules.
+
+### TypeScript, toolchain and tests
+- **No Node.js at build time.** CMake runs esbuild's and tsc's native binaries from
+  `ts/node_modules`, installed with `npm ci --ignore-scripts`; the install scripts aren't
+  needed.
+- **Debug and release app builds:** `axe_ts_app` builds read the bundle's source in debug
+  builds and embed its bytecode in the others.
+- **The handle allocator in JS** is the C one's: generations, a LIFO free list, subtrees
+  freed in pre-order. The tree mirror lives in typed arrays per slot, so `Node` objects are
+  held only by the app (which the leak rule needs).
+- **The TS `layout_cards` follows the C one op for op**, `loadFont` instead of a startup font
+  included. `layout_cards_equivalence` compares at 0, 1.3, 2.6, 4.1, 6.2 and 12.4 s under both
+  schedulers, and again in dark right-to-left mode. Byte-identical in debug, release
+  (bytecode) and asan.
+- **The test runner (`axe-test-js`):**
+  - `step(ms)` applies what the turn wrote, then steps the clock;
+  - each step comes with a timer, since a stepped clock with nothing to draw sends no events.
+- **Examples link `ui_keep_loaded`** in sanitizer builds, as the tests do (they run under
+  `layout_cards_equivalence`).
+
+### Benchmarks
+Release, local, noisy machine (medians; best within a few percent):
+
+- **Encoding through `@axe/core`, per op:**
+
+  | Op | Time |
+  | --- | --- |
+  | `setRect` | 1.3 us |
+  | `setColor` | 1.4 us |
+  | `setProps` (3 entries) | 11 us |
+  | `setStyles` | 2.7 us |
+  | `setText` (short) | 16 us |
+  | `Node.create` + `destroy` | 6.7 us |
+  | bare `@axe/wire` `setRect` | 1.0 us |
+
+  A mixed group comes to about 0.2 Mops/s, 5 MB/s. The calibration: a loop iteration with a
+  call is 0.29 us. The cost is the interpreter's pace (roughly 20–50 ns a bytecode op), not
+  a hotspot.
+- **Startup** (host, evaluation and first turn of `layout_cards`): 5.9 ms from source,
+  2.6 ms from bytecode. To first frame with a GPU: about 195 ms either way, dominated by the
+  device and the first frame.
+- **JS heap after the first turn:** 128 KiB for an empty app, 390 KiB for `layout_cards`.
+- **Event to handler:** 5.3 us per turn of one `frame_committed`; 2.9 us per event in a turn
+  of 64.
+- **bench-callgrind** gets `script_encode`, `startup_source`, `startup_bytecode` and
+  `script_dispatch`; their counts are deterministic.
+
 ## Milestone 2.2: the benchmark guard
 
 ### Baselines from CI
