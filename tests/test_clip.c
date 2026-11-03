@@ -106,7 +106,49 @@ static void test_clip(void) {
     ui_image_free(&open.image);
 }
 
+static void test_huge_rects(void) {
+    // Rects may hold any finite value, so clips can lie far outside the int range (or
+    // overflow to infinity when added up): the scissor must still come out in range
+    // (UBSan checks the conversions).
+    ui_logger quiet = {UI_LOG_ERROR};
+    ui_scene s;
+    ui_scene_init(&s, &quiet);
+    ui_handle surface = {(uint32_t)UI_HANDLE_SURFACE << UI_HANDLE_SLOT_BITS, 1};
+    ui_scene_add_root(&s, surface);
+    ui_cmd_writer *w;
+    ui_cmd_writer_create(&w);
+    const float rects[][4] = {{3e21f, -3e21f, 1e30f, 5}, {-3e38f, -3e38f, 3e38f, 3e38f},
+                              {3e38f, 3e38f, 3e38f, 3e38f}};
+    ui_handle parent = surface;
+    for (uint32_t i = 0; i < 3; i++) {
+        ui_handle n = {i + 1, 1}, leaf = {i + 10, 1};
+        ui_cmd_create_node(w, n, parent);
+        ui_cmd_set_rect(w, n, rects[i][0], rects[i][1], rects[i][2], rects[i][3]);
+        ui_cmd_set_clip(w, n, true);
+        ui_cmd_create_node(w, leaf, n);
+        ui_cmd_set_rect(w, leaf, 0, 0, 10, 10);
+        ui_cmd_set_color(w, leaf, 1, 0, 0, 1);
+        parent = n;
+    }
+    uint8_t *bytes;
+    size_t size;
+    ui_cmd_writer_take(w, &bytes, &size);
+    CHECK(ui_scene_apply(&s, bytes, size, 0) == UI_OK);
+    CHECK_EQ_INT(s.stats.dropped, 0);
+    ui_display_list dl = {.surface = surface, .width = WIDTH, .height = HEIGHT,
+                          .logical_width = WIDTH, .logical_height = HEIGHT, .scale_120 = 120};
+    ui_display_list_reset(&dl);
+    CHECK(ui_scene_build(&s, surface, &dl, NULL) == UI_OK);
+    for (uint32_t i = 0; i < dl.batch_count; i++)
+        CHECK(dl.batches[i].clip.width >= 0 && dl.batches[i].clip.height >= 0);
+    ui_display_list_free(&dl);
+    free(bytes);
+    ui_cmd_writer_destroy(w);
+    ui_scene_destroy(&s);
+}
+
 int main(void) {
     RUN(test_clip);
+    RUN(test_huge_rects);
     return test_failures != 0;
 }

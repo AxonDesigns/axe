@@ -671,10 +671,16 @@ static ui_result build_text(ui_paragraph *p, float ox, float oy, float width, fl
     return UI_OK;
 }
 
+// Pixel coordinates for a scissor: [0, 2^30], NaN to 0 (fmaxf returns the other operand).
+static float scissor_px(float v) { return fminf(fmaxf(v, 0.f), 0x1p30f); }
+
+// Clips hold whatever the rects produce, huge or infinite (a node may sit at x = 1e30), so
+// they are clamped before the conversion to integers. The renderer clamps to the surface.
 static ui_dl_clip scissor_of(const float c[4]) {
-    if (!isfinite(c[0]) && !isfinite(c[2])) return UI_DL_NO_CLIP;
-    float x0 = floorf(fmaxf(c[0], 0)), y0 = floorf(fmaxf(c[1], 0));
-    float x1 = ceilf(fminf(c[2], 1e9f)), y1 = ceilf(fminf(c[3], 1e9f));
+    if (c[0] == -INFINITY && c[1] == -INFINITY && c[2] == INFINITY && c[3] == INFINITY)
+        return UI_DL_NO_CLIP;
+    float x0 = floorf(scissor_px(c[0])), y0 = floorf(scissor_px(c[1]));
+    float x1 = ceilf(scissor_px(c[2])), y1 = ceilf(scissor_px(c[3]));
     return (ui_dl_clip){(int32_t)x0, (int32_t)y0, (int32_t)fmaxf(x1 - x0, 0),
                         (int32_t)fmaxf(y1 - y0, 0)};
 }
