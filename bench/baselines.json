@@ -1,0 +1,16 @@
+{
+  "threshold_percent": 2,
+  "provisional": true,
+  "reason": "First baselines, counted before any CI run exists; replace with the first bench-callgrind artifact",
+  "source": "axe-ci-ubuntu:24.04 Docker image (Ubuntu 24.04, Clang 22.1.8, valgrind 3.22), commit 84d949c",
+  "counts": {
+    "bench_layout/full_cold": 95100610,
+    "bench_layout/full_warm": 41165845,
+    "bench_layout/incremental": 5885285,
+    "bench_layout/inherited": 4616441,
+    "bench_layout/token": 5494150,
+    "bench_text/raster": 24977607,
+    "bench_text/relayout": 6048054,
+    "bench_text/shape": 65528244
+  }
+}
