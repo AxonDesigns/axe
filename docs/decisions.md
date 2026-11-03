@@ -15,6 +15,14 @@ milestone first.
   library mapped until exit, and the suppressions match again. The cause on this machine
   wasn't pinned down (no driver or loader update; a reboot in between).
 
+### Text nodes with in-flow children
+- **A mistake, reported, not refused:** layout keeps placing such children over the text
+  (as in M2), but a debug warning names the node once (a node flag) and the new stat
+  `text_nodes_with_children` counts such nodes. Refusing them would break apps that do it
+  today; the warning tells them how to fix it. Absolutely positioned children are exempt.
+- Detected where layout lays the text leaf out, so a hidden child or one added later is
+  seen exactly when it would be drawn over the text (`test_layout`'s `test_text_children`).
+
 ### Content during layout animations
 - **Clip by default** (as planned): while a node's presentation size differs from its
   layout size, its text and children are clipped to its padding box as drawn. The clip is

@@ -817,6 +817,7 @@ static void frame(ui_core *c) {
     note_deferred(c);
     release_prepared_glyphs(c);
     c->stats.text_invalid_sequences = c->scene.stats.text_invalid;
+    c->stats.text_nodes_with_children = c->scene.stats.text_nodes_with_children;
     ui_atlas_stats as;
     ui_atlas_get_stats(c->atlas, &as);
     c->stats.glyphs_rasterized = as.rasterized;

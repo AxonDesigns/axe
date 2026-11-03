@@ -437,6 +437,33 @@ static void test_borders(void) {
     teardown(&f);
 }
 
+// A node with text and in-flow children is a mistake: counted once (and warned about in
+// debug builds), however many frames lay it out. Absolute children are fine.
+static void test_text_children(void) {
+    fixture f;
+    setup(&f, 300, 200);
+    ui_cmd_create_node(f.w, node(1), f.surfaces[0]);
+    set_text(&f, 1, "Label");
+    ui_cmd_create_node(f.w, node(2), node(1));
+    props(&f, 2, (ui_style_decl[]){{UI_STYLE_POSITION, ui_keyword(UI_POSITION_ABSOLUTE)},
+                                   {UI_STYLE_WIDTH, ui_px(8)}, {UI_STYLE_HEIGHT, ui_px(8)}}, 3);
+    frame(&f);
+    CHECK_EQ_INT(f.s.stats.text_nodes_with_children, 0); // an overlay
+    ui_cmd_create_node(f.w, node(3), node(1));
+    props(&f, 3, &(ui_style_decl){UI_STYLE_WIDTH, ui_px(20)}, 1);
+    frame(&f);
+    CHECK_EQ_INT(f.s.stats.text_nodes_with_children, 1);
+    set_text(&f, 1, "Label changed"); // laid out again: still counted once
+    frame(&f);
+    CHECK_EQ_INT(f.s.stats.text_nodes_with_children, 1);
+    ui_cmd_create_node(f.w, node(4), f.surfaces[0]);
+    set_text(&f, 4, "Another");
+    ui_cmd_create_node(f.w, node(5), node(4));
+    frame(&f);
+    CHECK_EQ_INT(f.s.stats.text_nodes_with_children, 2);
+    teardown(&f);
+}
+
 int main(void) {
     ui_font_registry_create(&(ui_font_registry_desc){.log = &quiet}, &fonts);
     ui_font_registry_add_file(fonts, FONT("NotoSans-Regular-Static.ttf"), 0, NULL);
@@ -452,6 +479,7 @@ int main(void) {
     RUN(test_styled_text);
     RUN(test_rtl);
     RUN(test_borders);
+    RUN(test_text_children);
     ui_text_context_free(&text);
     ui_font_registry_destroy(fonts);
     return test_failures != 0;

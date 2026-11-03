@@ -94,6 +94,7 @@ typedef struct ui_node {
     bool cascade_dirty;    // and gather its cascade again first (style.h)
     bool resolved;         // resolved before: changes may animate from now on
     bool inherits_other;   // a non-inherited property takes `inherit`: follows every parent change
+    bool warned_children;  // reported as a text node with in-flow children (layout)
     uint16_t text_declared; // UI_TEXT_SET_* bits of the text values its cascade decides
     // The entries that apply to it, by increasing precedence (pointers into style
     // definitions and its overrides; gathered again whenever those change).
@@ -161,6 +162,7 @@ typedef struct ui_scene_prepared {
 typedef struct ui_scene_stats {
     uint64_t applied, dropped, rejected;
     uint64_t styles_computed; // node computations by ui_scene_resolve (tests count them)
+    uint64_t text_nodes_with_children; // text nodes found with in-flow children, once each
     uint64_t text_invalid; // ill-formed UTF-8 subparts replaced in set_text
 } ui_scene_stats;
 

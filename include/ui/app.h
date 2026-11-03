@@ -161,6 +161,7 @@ typedef struct ui_app_stats {
     uint64_t commands_dropped;       // stale or wrong-kind handles, unknown ops
     uint64_t buffers_rejected;       // malformed command buffers
     uint64_t text_invalid_sequences; // ill-formed UTF-8 subparts replaced with U+FFFD
+    uint64_t text_nodes_with_children; // nodes with text and in-flow children (a mistake), once each
     uint64_t glyphs_rasterized;      // glyphs added to the atlas (prepared or rasterized now)
     uint64_t glyphs_evicted;
     uint64_t glyphs_rejected;        // too large for the atlas, or no space left

@@ -21,7 +21,12 @@ properties are style properties (`docs/styles.md`).
   - Its max-content width is its widest line unwrapped.
   - Its height comes from the lines at the width it gets.
   - `text-align` and right-to-left start alignment work at any width.
-  - In-flow children of a text node lay out in the same content box, over the text.
+  - **A text node has no in-flow children.** Text and children don't share a content box
+    in CSS either: put the text in a child of its own, next to the others. A text node with
+    in-flow children still lays them out over the text, in the same content box, but debug
+    builds warn once per node and `ui_app_stats.text_nodes_with_children` counts such
+    nodes. Absolutely positioned children are fine: they are overlays (a badge on a
+    label).
 - **`position: absolute`** takes a node out of the flow and places it in its parent's
   padding box. Every node is a containing block, as if every element were
   `position: relative`.

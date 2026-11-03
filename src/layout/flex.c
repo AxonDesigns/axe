@@ -417,7 +417,21 @@ static void compute_box(ctx *c, const box *b, const float known[2], const float 
         if (!is_known(size[1])) size[1] = clampf(content[1] + pbs[1], self_min[1], self_max[1]);
         *baseline = is_known(bl) ? pb[0] + bl : NAN;
         if (perform) {
-            // In-flow children lay out in the same content box, over the text.
+            // In-flow children lay out in the same content box, over the text. That is a
+            // mistake (docs/layout.md): warned about once per node, and counted. Absolute
+            // children are overlays, which is fine.
+            ui_node *self = &c->s->nodes[b->slot];
+            if (!self->warned_children) {
+                for (uint32_t ch = b->first_child; ch != UI_NO_SLOT; ch = c->s->nodes[ch].next_sibling) {
+                    if (hidden(c, ch) || absolute(c, ch)) continue;
+                    self->warned_children = true;
+                    c->s->stats.text_nodes_with_children++;
+                    UI_DEBUG_REPORT(c->s->log, "layout",
+                                    "node %u has text and in-flow children: put the text in a child of its own",
+                                    b->slot);
+                    break;
+                }
+            }
             if (b->first_child != UI_NO_SLOT) {
                 box children_only = *b;
                 children_only.text = NULL;
