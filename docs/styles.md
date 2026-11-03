@@ -84,6 +84,33 @@ token, a state, an override, a redefined style, or new text with another color.
 | 10 | `max_lines` | whole number ≤ 65535 (0 = unlimited), or none | `set_text`'s |
 | 0x8000 \| P | transition of P | spring, or none | none |
 
+Layout properties ([`docs/layout.md`](layout.md)); keywords are the `ui_flex_*`,
+`ui_display` and `ui_position` values in `include/ui/wire.h`:
+
+| Id | Property | Values | Initial |
+| --- | --- | --- | --- |
+| 32 | `display` | keyword: flex, none | flex |
+| 33 | `position` | keyword: relative, absolute | relative |
+| 34 | `flex_direction` | keyword: row, row-reverse, column, column-reverse | row |
+| 35 | `flex_wrap` | keyword: nowrap, wrap, wrap-reverse | nowrap |
+| 36 | `justify_content` | keyword: normal, start, end, center, space-between, -around, -evenly | normal (start) |
+| 37 | `align_items` | keyword: normal, start, end, center, baseline, stretch | normal (stretch) |
+| 38 | `align_self` | keyword: auto, start, end, center, baseline, stretch | auto |
+| 39 | `align_content` | keyword: normal, start, end, center, stretch, space-* | normal (stretch) |
+| 40, 41 | `flex_grow`, `flex_shrink` | number ≥ 0 | 0, 1 |
+| 42 | `flex_basis` | px, percent (≥ 0) or auto | auto |
+| 43, 44 | `row_gap`, `column_gap` | px or percent, ≥ 0 | 0 |
+| 45, 46 | `width`, `height` (border box) | px or percent (≥ 0), or auto | auto |
+| 47, 48 | `min_width`, `min_height` | px or percent (≥ 0), or auto | auto |
+| 49, 50 | `max_width`, `max_height` | px or percent (≥ 0), or none | none |
+| 51–54 | margins (top, right, bottom, left) | px or percent (may be negative), or auto | 0 |
+| 55–58 | padding (top, right, bottom, left) | px or percent, ≥ 0 | 0 |
+| 59–62 | insets (top, right, bottom, left) | px or percent (may be negative), or auto | auto |
+| 63 | `aspect_ratio` | number > 0 (width / height), or auto | auto |
+
+Percentages of padding and margins resolve against the containing block's width, as in
+CSS. `border_width` (3) also takes part in layout.
+
 Every value property also accepts `token`. The text properties don't change shaping, so
 setting them never reshapes text. Family, size, weight, slant and language stay on
 `set_text`, which is prepared off the core thread (`docs/text.md`).

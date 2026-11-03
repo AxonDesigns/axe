@@ -145,6 +145,15 @@ typedef struct ui_paragraph {
     bool hits_valid;
     // How often each level was recomputed (tests, devtools).
     uint64_t shape_count, layout_count;
+    // Measurements for layout, valid while the shaping and the line parameters are: the
+    // results at a few widths, and the min-content width.
+    struct ui_text_measure_entry {
+        float scale, max_width;
+        float width, height, baseline;
+    } measures[4];
+    uint8_t measure_count, measure_next;
+    float min_content_scale; // 0: not measured
+    float min_content;
 } ui_paragraph;
 
 struct ui_paragraph_desc {
@@ -179,6 +188,21 @@ void ui_paragraph_adopt_shaped(ui_paragraph *p, ui_shaped_paragraph *shaped);
 void ui_paragraph_set_params(ui_paragraph *p, uint32_t max_lines, ui_align align,
                              float line_height);
 void ui_paragraph_free(ui_paragraph *p);
+
+// What layout needs to know about a paragraph, in physical px.
+typedef struct ui_text_measure {
+    float width;    // the widest line's visible width
+    float height;   // all lines (whole px)
+    float baseline; // the first line's baseline from the top
+} ui_text_measure;
+
+// The paragraph laid out at `max_width` (INFINITY: unbounded, which gives the max-content
+// width). Remembered for a few widths, so layout's repeated questions cost nothing.
+ui_result ui_paragraph_measure(ui_paragraph *p, ui_text_context *c, float scale, float max_width,
+                               ui_text_measure *out);
+// The min-content width: the widest grapheme cluster, since a line breaks between any two
+// when nothing else fits (CSS overflow-wrap: anywhere). Trailing whitespace hangs.
+ui_result ui_paragraph_min_content(ui_paragraph *p, ui_text_context *c, float scale, float *out);
 
 // The layout at `scale` for `max_width` physical px (INFINITY or negative: unbounded).
 // NULL on failure with *result set (allocation, or UI_ERR_WRONG_STATE without fonts).

@@ -331,9 +331,31 @@ bool ui_styles_token_value(const ui_styles *s, const ui_value *v, ui_value *out)
 
 // ---- Resolution --------------------------------------------------------------------------
 
+void ui_layout_style_init(ui_layout_style *l) {
+    memset(l, 0, sizeof *l);
+    l->shrink = 1;
+    l->basis.unit = UI_LEN_AUTO;
+    for (int a = 0; a < 2; a++) {
+        l->size[a].unit = UI_LEN_AUTO;
+        l->min[a].unit = UI_LEN_AUTO;
+        l->max[a].unit = UI_LEN_NONE;
+    }
+    for (int i = 0; i < 4; i++) l->inset[i].unit = UI_LEN_AUTO;
+}
+
 void ui_computed_init(ui_computed *c) {
     memset(c, 0, sizeof *c);
     c->opacity = 1;
+    ui_layout_style_init(&c->layout);
+}
+
+static ui_length length_of(const ui_value *v) {
+    switch (v->kind) {
+    case UI_VALUE_PX: return (ui_length){v->number, UI_LEN_PX};
+    case UI_VALUE_PERCENT: return (ui_length){v->number, UI_LEN_PERCENT};
+    case UI_VALUE_NONE: return (ui_length){0, UI_LEN_NONE};
+    default: return (ui_length){0, UI_LEN_AUTO};
+    }
 }
 
 static int anim_of(uint16_t prop) {
@@ -344,6 +366,45 @@ static int anim_of(uint16_t prop) {
     case UI_STYLE_OPACITY: return UI_ANIM_OPACITY;
     case UI_STYLE_TEXT_COLOR: return UI_ANIM_TEXT_COLOR;
     default: return -1;
+    }
+}
+
+static void apply_layout(ui_layout_style *l, uint16_t prop, const ui_value *v) {
+    uint8_t k = (uint8_t)v->keyword;
+    switch ((ui_style_prop)prop) {
+    case UI_STYLE_DISPLAY: l->display = k; break;
+    case UI_STYLE_POSITION: l->position = k; break;
+    case UI_STYLE_FLEX_DIRECTION: l->direction = k; break;
+    case UI_STYLE_FLEX_WRAP: l->wrap = k; break;
+    case UI_STYLE_JUSTIFY_CONTENT: l->justify = k; break;
+    case UI_STYLE_ALIGN_ITEMS: l->align_items = k; break;
+    case UI_STYLE_ALIGN_SELF: l->align_self = k; break;
+    case UI_STYLE_ALIGN_CONTENT: l->align_content = k; break;
+    case UI_STYLE_FLEX_GROW: l->grow = v->number; break;
+    case UI_STYLE_FLEX_SHRINK: l->shrink = v->number; break;
+    case UI_STYLE_FLEX_BASIS: l->basis = length_of(v); break;
+    case UI_STYLE_COLUMN_GAP: l->gap[0] = length_of(v); break;
+    case UI_STYLE_ROW_GAP: l->gap[1] = length_of(v); break;
+    case UI_STYLE_WIDTH: l->size[0] = length_of(v); break;
+    case UI_STYLE_HEIGHT: l->size[1] = length_of(v); break;
+    case UI_STYLE_MIN_WIDTH: l->min[0] = length_of(v); break;
+    case UI_STYLE_MIN_HEIGHT: l->min[1] = length_of(v); break;
+    case UI_STYLE_MAX_WIDTH: l->max[0] = length_of(v); break;
+    case UI_STYLE_MAX_HEIGHT: l->max[1] = length_of(v); break;
+    case UI_STYLE_MARGIN_TOP:
+    case UI_STYLE_MARGIN_RIGHT:
+    case UI_STYLE_MARGIN_BOTTOM:
+    case UI_STYLE_MARGIN_LEFT: l->margin[prop - UI_STYLE_MARGIN_TOP] = length_of(v); break;
+    case UI_STYLE_PADDING_TOP:
+    case UI_STYLE_PADDING_RIGHT:
+    case UI_STYLE_PADDING_BOTTOM:
+    case UI_STYLE_PADDING_LEFT: l->padding[prop - UI_STYLE_PADDING_TOP] = length_of(v); break;
+    case UI_STYLE_TOP:
+    case UI_STYLE_RIGHT:
+    case UI_STYLE_BOTTOM:
+    case UI_STYLE_LEFT: l->inset[prop - UI_STYLE_TOP] = length_of(v); break;
+    case UI_STYLE_ASPECT_RATIO: l->aspect_ratio = v->kind == UI_VALUE_NUMBER ? v->number : 0; break;
+    default: break;
     }
 }
 
@@ -384,6 +445,7 @@ static void apply(const ui_styles *s, const ui_style_entry *e, ui_computed *c) {
         c->max_lines = v.kind == UI_VALUE_NONE ? 0 : (uint32_t)v.number;
         c->text_set |= UI_TEXT_SET_MAX_LINES;
         break;
+    default: apply_layout(&c->layout, e->prop, &v); break;
     }
 }
 

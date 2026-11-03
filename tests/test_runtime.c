@@ -143,6 +143,7 @@ static void test_scene_apply_and_stale(void) {
     CHECK_EQ_INT(sc.stats.dropped, 0);
 
     ui_display_list dl = {.scale_120 = 180}; // 1.5x
+    ui_scene_layout(&sc, surf, 400, 300, 1.5f, NULL);
     CHECK(ui_scene_build(&sc, surf, &dl, NULL) == UI_OK);
     CHECK_EQ_INT(dl.rect_count, 2);
     CHECK_NEAR(dl.rects[0].x, 15, 1e-4);         // 10 * 1.5
@@ -160,6 +161,7 @@ static void test_scene_apply_and_stale(void) {
     CHECK_EQ_INT(sc.stats.applied, 7);
     CHECK_EQ_INT(sc.stats.dropped, 2);
     ui_display_list_reset(&dl);
+    ui_scene_layout(&sc, surf, 400, 300, 1.5f, NULL);
     ui_scene_build(&sc, surf, &dl, NULL);
     CHECK_EQ_INT(dl.rect_count, 0);
 

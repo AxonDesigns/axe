@@ -42,6 +42,7 @@ enum {
     UI_WIRE_SIZE_SET_PROPS_HEADER = 12,  // node, header_bytes u16, entry_count u16; entries
     UI_WIRE_SIZE_SET_TOKEN_HEADER = 4,   // id u32; one entry (property 0)
     UI_WIRE_SIZE_SET_STATE = 16,         // node, mask u32, value u32
+    UI_WIRE_SIZE_MOVE_NODE = 24,         // node, parent, before (null: append)
 };
 
 // A style entry: u16 property, u8 kind, u8 words (its size in 4-byte words, header

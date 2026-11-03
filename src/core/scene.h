@@ -8,6 +8,7 @@
 #include "core/display_list.h"
 #include "core/spring.h"
 #include "core/text_op.h"
+#include "layout/layout.h"
 #include "runtime/common.h"
 #include "runtime/handle_table.h"
 #include "style/style.h"
@@ -43,7 +44,12 @@ typedef struct ui_node {
     uint32_t parent;       // node slot, or UI_NO_SLOT when attached to a surface root
     uint32_t root;         // index into ui_scene.roots
     uint32_t first_child, last_child, next_sibling, prev_sibling;
-    float rect[4];         // logical px relative to the parent
+    float rect[4];         // drawn: logical px relative to the parent (its layout rect)
+    // set_rect's frame: the absolute position and size it overrides, which a rect spring
+    // animates (docs/layout.md).
+    float frame[4];
+    bool framed;
+    ui_layout_node layout;
     // What is drawn. Each follows its resolved value in `computed`, through a spring while
     // one runs.
     float color[4];        // background: linear, straight alpha
@@ -72,6 +78,9 @@ typedef struct ui_scene_root {
     bool dirty;            // something under this root changed since the core last drew it
     bool animating;        // a spring under this root is still running
     float scale;           // the surface's scale (the core keeps it current); text shapes at it
+    bool layout_dirty;     // a node under it changed what layout depends on
+    float layout_size[2];  // the surface size it was last laid out for
+    float layout_scale;
 } ui_scene_root;
 
 // Receives set_timer ops, which belong to the core rather than to any node.
@@ -118,6 +127,7 @@ typedef struct ui_scene {
     uint32_t node_capacity;
     ui_scene_root roots[UI_MAX_SURFACES];
     ui_scene_stats stats;
+    ui_layout_stats layout_stats;
     ui_styles styles;
     uint32_t *style_dirty;    // slots to resolve (their style_dirty is set)
     uint32_t style_dirty_count, style_dirty_capacity;
@@ -173,6 +183,14 @@ void ui_scene_animate(ui_scene *s, uint64_t now_ns);
 ui_node *ui_scene_node(ui_scene *s, ui_handle h);
 // The handle of the live node in `slot`.
 ui_handle ui_scene_handle_of(const ui_scene *s, uint32_t slot);
+
+// Lays out the surface's tree if anything under it changed or the surface's size or scale
+// did (layout/layout.h). Returns true if it ran.
+bool ui_scene_layout(ui_scene *s, ui_handle surface, float width, float height, float scale,
+                     ui_text_context *text);
+// Implemented in layout/flex.c.
+void ui_layout_root(ui_scene *s, uint32_t root, float width, float height, float scale,
+                    ui_text_context *text, ui_layout_stats *stats);
 
 // The root for a surface, or NULL. Callers read and clear `dirty`.
 ui_scene_root *ui_scene_root_of(ui_scene *s, ui_handle surface);

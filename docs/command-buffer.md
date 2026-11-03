@@ -65,7 +65,7 @@ the [op history](#op-history) lists appended fields.
 | --- | --- | --- | --- |
 | 1 | `create_node` | node handle, parent handle (a node, or a surface for a root-level node) | 16 |
 | 2 | `destroy_node` | node handle; destroys the whole subtree | 8 |
-| 3 | `set_rect` | node, `f32 x, y, width, height` (logical px, relative to the parent; width and height ≥ 0) | 24 |
+| 3 | `set_rect` | node, `f32 x, y, width, height` (logical px; width and height ≥ 0): the node's absolute frame in its parent's padding box ([`docs/layout.md`](layout.md), "set_rect") | 24 |
 | 4 | `set_corner_radius` | node, `f32 radius` (logical px, ≥ 0) | 12 |
 | 5 | `set_color` | node, `f32 r, g, b, a` (sRGB, straight alpha, clamped to [0, 1]) | 24 |
 | 6 | `start_spring` | node, `u16 property`, `u16 count`, `f32 stiffness`, `f32 damping`, `f32 target[count]` | 20 + 4·count |
@@ -80,6 +80,7 @@ the [op history](#op-history) lists appended fields.
 | 15 | `set_props` | node, `u16 header_bytes` (12), `u16 entry_count`, entries | 12 + entries |
 | 16 | `set_token` | `u32 id`, one entry (property 0) | 4 + entry |
 | 17 | `set_state` | node, `u32 mask`, `u32 value` | 16 |
+| 18 | `move_node` | node, parent handle (a node, or a surface for a root-level node), `before` handle (a sibling under that parent; null appends) | 24 |
 
 `set_color`, `set_corner_radius` and `set_clip` set the node's overrides of the matching
 style properties ([`docs/styles.md`](styles.md), "Older ops"). Styles, tokens, states and

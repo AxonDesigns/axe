@@ -170,6 +170,15 @@ ui_result ui_cmd_set_color(ui_cmd_writer *w, ui_handle node, float r, float g, f
     return UI_OK;
 }
 
+ui_result ui_cmd_move_node(ui_cmd_writer *w, ui_handle node, ui_handle parent, ui_handle before) {
+    uint8_t *p = ui_wire_buf_op(&w->buf, UI_OP_MOVE_NODE, UI_WIRE_SIZE_MOVE_NODE);
+    if (!p) return UI_ERR_OUT_OF_MEMORY;
+    p = ui_wire_put_handle(p, node);
+    p = ui_wire_put_handle(p, parent);
+    ui_wire_put_handle(p, before);
+    return UI_OK;
+}
+
 ui_result ui_cmd_set_clip(ui_cmd_writer *w, ui_handle node, bool clip) {
     uint8_t *p = ui_wire_buf_op(&w->buf, UI_OP_SET_CLIP, UI_WIRE_SIZE_SET_CLIP);
     if (!p) return UI_ERR_OUT_OF_MEMORY;

@@ -33,6 +33,7 @@ typedef enum ui_op {
     UI_OP_SET_PROPS = 15,
     UI_OP_SET_TOKEN = 16,
     UI_OP_SET_STATE = 17,
+    UI_OP_MOVE_NODE = 18,
 } ui_op;
 
 // Animatable node properties and their component counts.
@@ -97,6 +98,9 @@ uint32_t ui_cmd_writer_op_count(const ui_cmd_writer *writer);
 // writer is unchanged. Handles are not validated here; the core validates them.
 ui_result ui_cmd_create_node(ui_cmd_writer *w, ui_handle node, ui_handle parent);
 ui_result ui_cmd_destroy_node(ui_cmd_writer *w, ui_handle node);
+// Moves a node (with its subtree) under `parent` (a node, or a surface for a root-level
+// node), before sibling `before`; a null `before` appends. Reorders when the parent stays.
+ui_result ui_cmd_move_node(ui_cmd_writer *w, ui_handle node, ui_handle parent, ui_handle before);
 ui_result ui_cmd_set_rect(ui_cmd_writer *w, ui_handle node, float x, float y, float width,
                           float height);
 ui_result ui_cmd_set_corner_radius(ui_cmd_writer *w, ui_handle node, float radius);
@@ -141,6 +145,40 @@ typedef enum ui_style_prop {
     UI_STYLE_LINE_HEIGHT = 8,      // number in (0, 100] (multiple of the size), or auto
     UI_STYLE_TEXT_ALIGN = 9,       // keyword ui_text_align
     UI_STYLE_MAX_LINES = 10,       // number (whole, <= 65535; 0 = unlimited), or none
+    // Layout: flexbox with CSS semantics (docs/layout.md). Every node is a flex container;
+    // sizes are border-box. Lengths are px or percent as noted.
+    UI_STYLE_DISPLAY = 32,         // keyword ui_display
+    UI_STYLE_POSITION = 33,        // keyword ui_position (absolute: relative to the parent)
+    UI_STYLE_FLEX_DIRECTION = 34,  // keyword ui_flex_direction
+    UI_STYLE_FLEX_WRAP = 35,       // keyword ui_flex_wrap
+    UI_STYLE_JUSTIFY_CONTENT = 36, // keyword ui_flex_align: normal, start, end, center, space-*
+    UI_STYLE_ALIGN_ITEMS = 37,     // keyword ui_flex_align: normal, start, end, center, baseline, stretch
+    UI_STYLE_ALIGN_SELF = 38,      // keyword ui_flex_align: auto, start, end, center, baseline, stretch
+    UI_STYLE_ALIGN_CONTENT = 39,   // keyword ui_flex_align: normal, start, end, center, stretch, space-*
+    UI_STYLE_FLEX_GROW = 40,       // number >= 0
+    UI_STYLE_FLEX_SHRINK = 41,     // number >= 0
+    UI_STYLE_FLEX_BASIS = 42,      // px >= 0, percent >= 0, or auto
+    UI_STYLE_ROW_GAP = 43,         // px or percent, >= 0
+    UI_STYLE_COLUMN_GAP = 44,      // px or percent, >= 0
+    UI_STYLE_WIDTH = 45,           // px or percent, >= 0, or auto
+    UI_STYLE_HEIGHT = 46,
+    UI_STYLE_MIN_WIDTH = 47,       // px or percent, >= 0, or auto
+    UI_STYLE_MIN_HEIGHT = 48,
+    UI_STYLE_MAX_WIDTH = 49,       // px or percent, >= 0, or none
+    UI_STYLE_MAX_HEIGHT = 50,
+    UI_STYLE_MARGIN_TOP = 51,      // px or percent, or auto
+    UI_STYLE_MARGIN_RIGHT = 52,
+    UI_STYLE_MARGIN_BOTTOM = 53,
+    UI_STYLE_MARGIN_LEFT = 54,
+    UI_STYLE_PADDING_TOP = 55,     // px or percent, >= 0
+    UI_STYLE_PADDING_RIGHT = 56,
+    UI_STYLE_PADDING_BOTTOM = 57,
+    UI_STYLE_PADDING_LEFT = 58,
+    UI_STYLE_TOP = 59,             // insets: px or percent, or auto
+    UI_STYLE_RIGHT = 60,
+    UI_STYLE_BOTTOM = 61,
+    UI_STYLE_LEFT = 62,
+    UI_STYLE_ASPECT_RATIO = 63,    // number > 0 (width / height), or auto
 } ui_style_prop;
 
 // The transition of a property: a spring that animates the property's value whenever what
@@ -192,6 +230,45 @@ static inline ui_value ui_transition(float stiffness, float damping) {
     return (ui_value){.kind = UI_VALUE_SPRING, .spring = {stiffness, damping}};
 }
 #endif
+
+typedef enum ui_display {
+    UI_DISPLAY_FLEX = 0,
+    UI_DISPLAY_NONE = 1, // neither laid out nor drawn, with its subtree
+} ui_display;
+
+typedef enum ui_position {
+    UI_POSITION_RELATIVE = 0, // in the flex flow
+    UI_POSITION_ABSOLUTE = 1, // out of it, placed by insets in the parent's padding box
+} ui_position;
+
+typedef enum ui_flex_direction {
+    UI_FLEX_ROW = 0,
+    UI_FLEX_ROW_REVERSE = 1,
+    UI_FLEX_COLUMN = 2,
+    UI_FLEX_COLUMN_REVERSE = 3,
+} ui_flex_direction;
+
+typedef enum ui_flex_wrap {
+    UI_FLEX_NOWRAP = 0,
+    UI_FLEX_WRAP = 1,
+    UI_FLEX_WRAP_REVERSE = 2,
+} ui_flex_wrap;
+
+// Values of justify-content, align-items, align-self and align-content (each takes a
+// subset). NORMAL is each property's initial value: flex-start for justify-content,
+// stretch for align-items and align-content, and "the parent's align-items" (auto) for
+// align-self.
+typedef enum ui_flex_align {
+    UI_FLEX_NORMAL = 0,
+    UI_FLEX_START = 1,
+    UI_FLEX_END = 2,
+    UI_FLEX_CENTER = 3,
+    UI_FLEX_BASELINE = 4,
+    UI_FLEX_STRETCH = 5,
+    UI_FLEX_SPACE_BETWEEN = 6,
+    UI_FLEX_SPACE_AROUND = 7,
+    UI_FLEX_SPACE_EVENLY = 8,
+} ui_flex_align;
 
 typedef enum ui_clip {
     UI_CLIP_NONE = 0,

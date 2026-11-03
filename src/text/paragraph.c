@@ -107,6 +107,11 @@ void ui_paragraph_free(ui_paragraph *p) {
     memset(p, 0, sizeof *p);
 }
 
+static void forget_measures(ui_paragraph *p) {
+    p->measure_count = 0;
+    p->min_content_scale = 0;
+}
+
 void ui_paragraph_set_source(ui_paragraph *p, ui_text_source *s) {
     ui_text_source_retain(s);
     ui_text_source_release(p->source);
@@ -128,6 +133,7 @@ void ui_paragraph_set_source(ui_paragraph *p, ui_text_source *s) {
     p->shaped_valid = false;
     p->layout_valid = false;
     p->hits_valid = false;
+    forget_measures(p);
 }
 
 ui_result ui_paragraph_set(ui_paragraph *p, const ui_paragraph_desc *d) {
@@ -146,6 +152,7 @@ void ui_paragraph_adopt_shaped(ui_paragraph *p, ui_shaped_paragraph *shaped) {
     p->shaped_valid = true;
     p->layout_valid = false;
     p->hits_valid = false;
+    forget_measures(p);
 }
 
 void ui_paragraph_set_params(ui_paragraph *p, uint32_t max_lines, ui_align align,
@@ -157,6 +164,7 @@ void ui_paragraph_set_params(ui_paragraph *p, uint32_t max_lines, ui_align align
     p->line_height = line_height;
     p->layout_valid = false;
     p->hits_valid = false;
+    forget_measures(p);
 }
 
 static ui_text_input input_of(const ui_paragraph *p) {
@@ -648,6 +656,7 @@ const ui_paragraph_layout *ui_paragraph_layout_get(ui_paragraph *p, ui_text_cont
         ui_text_input in = input_of(p);
         p->shaped_valid = false;
         p->layout_valid = false;
+        forget_measures(p);
         *result = ui_shape_paragraph(&c->shaper, c->fonts, &in, scale, &p->shaped);
         if (*result != UI_OK) return NULL;
         p->shaped_valid = true;
@@ -665,4 +674,64 @@ const ui_paragraph_layout *ui_paragraph_layout_get(ui_paragraph *p, ui_text_cont
         p->layout_count++;
     }
     return &p->layout;
+}
+
+ui_result ui_paragraph_measure(ui_paragraph *p, ui_text_context *c, float scale, float max_width,
+                               ui_text_measure *out) {
+    if (!(max_width >= 0)) max_width = INFINITY;
+    // A reshape (the font generation moved) forgets the measures: let layout_get decide.
+    bool current = p->shaped_valid && p->shaped.scale == scale && p->shaped.generation >= c->generation;
+    for (uint32_t i = 0; current && i < p->measure_count; i++) {
+        const struct ui_text_measure_entry *e = &p->measures[i];
+        if (e->scale != scale || e->max_width != max_width) continue;
+        *out = (ui_text_measure){e->width, e->height, e->baseline};
+        return UI_OK;
+    }
+    ui_result res;
+    const ui_paragraph_layout *l = ui_paragraph_layout_get(p, c, scale, max_width, &res);
+    if (!l) {
+        if (res != UI_ERR_WRONG_STATE) return res;
+        *out = (ui_text_measure){0}; // no fonts: nothing to measure
+        return UI_OK;
+    }
+    *out = (ui_text_measure){l->width, l->height, l->line_count ? l->lines[0].baseline : 0};
+    struct ui_text_measure_entry *e = &p->measures[p->measure_next];
+    *e = (struct ui_text_measure_entry){scale, max_width, out->width, out->height, out->baseline};
+    p->measure_next = (uint8_t)((p->measure_next + 1) % UI_ARRAY_LEN(p->measures));
+    if (p->measure_count < UI_ARRAY_LEN(p->measures)) p->measure_count++;
+    return UI_OK;
+}
+
+ui_result ui_paragraph_min_content(ui_paragraph *p, ui_text_context *c, float scale, float *out) {
+    ui_text_measure m;
+    ui_result res = ui_paragraph_measure(p, c, scale, INFINITY, &m); // shapes if needed
+    if (res != UI_OK) return res;
+    if (p->min_content_scale == scale && p->shaped_valid) {
+        *out = p->min_content;
+        return UI_OK;
+    }
+    const ui_shaped_paragraph *sp = &p->shaped;
+    float widest = 0;
+    if (p->shaped_valid && sp->cp_count) {
+        uint32_t n = sp->cp_count;
+        if (ui_grow((void **)&c->advances, &c->advance_capacity, n + 1, sizeof *c->advances) != UI_OK)
+            return UI_ERR_OUT_OF_MEMORY;
+        memset(c->advances, 0, (n + 1) * sizeof *c->advances);
+        for (uint32_t r = 0; r < sp->run_count; r++) {
+            const ui_glyph_pos *g = sp->glyphs + sp->runs[r].glyph_start;
+            for (uint32_t i = 0; i < sp->runs[r].glyph_count; i++)
+                c->advances[ui_shaped_cp_at(sp, g[i].cluster)] += (float)g[i].advance / 64.f;
+        }
+        // Grapheme clusters; whitespace hangs at a line's end, so it never forces width.
+        float cluster = 0;
+        for (uint32_t i = 0; i < n; i++) {
+            if (sp->graphemes[i]) cluster = 0;
+            if (!hangs(sp->cps[i])) cluster += c->advances[i];
+            widest = fmaxf(widest, cluster);
+        }
+    }
+    p->min_content = fminf(widest, m.width);
+    p->min_content_scale = scale;
+    *out = p->min_content;
+    return UI_OK;
 }

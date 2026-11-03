@@ -102,6 +102,16 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
             }
             ui_text_selection_rects(para, &ctx, 0, para->len, rects, 8, &count);
         }
+        // What layout asks: min-content no wider than max-content, and heights that don't
+        // shrink as the width does.
+        float min_w = 0;
+        ui_text_measure wide, narrow;
+        if (ui_paragraph_min_content(para, &ctx, scale, &min_w) == UI_OK &&
+            ui_paragraph_measure(para, &ctx, scale, INFINITY, &wide) == UI_OK &&
+            ui_paragraph_measure(para, &ctx, scale, min_w, &narrow) == UI_OK) {
+            if (min_w > wide.width + 1e-3f * (1 + wide.width)) abort();
+            if (para->max_lines == 0 && narrow.height + 1e-3f < wide.height) abort();
+        }
     }
     ui_scene_destroy(&s);
     return 0;

@@ -21,6 +21,7 @@ add_library(ui STATIC
     core/clock.c
     core/core.c
     core/display_list.c
+    layout/flex.c
     core/prepare.c
     core/scene.c
     core/text_op.c

@@ -177,3 +177,20 @@ target_compile_definitions(test_style PRIVATE _DEFAULT_SOURCE)
 target_link_libraries(test_style PRIVATE ui m)
 ui_target_warnings(test_style)
 add_test(NAME style COMMAND test_style)
+
+# Layout against Chrome's results for the fixtures in tools/layout-fixtures.
+add_executable(test_layout_conformance test_layout_conformance.c layout/fixtures_generated.c)
+target_include_directories(test_layout_conformance PRIVATE ${PROJECT_SOURCE_DIR}/src ${CMAKE_CURRENT_SOURCE_DIR})
+target_compile_definitions(test_layout_conformance PRIVATE _DEFAULT_SOURCE
+    UI_TEST_FONTS="${CMAKE_CURRENT_SOURCE_DIR}/fonts")
+target_link_libraries(test_layout_conformance PRIVATE ui m)
+ui_target_warnings(test_layout_conformance)
+add_test(NAME layout_conformance COMMAND test_layout_conformance)
+
+# Layout on the scene: root, set_rect, display none, move_node, text, incremental relayout.
+add_executable(test_layout test_layout.c)
+target_include_directories(test_layout PRIVATE ${PROJECT_SOURCE_DIR}/src)
+target_compile_definitions(test_layout PRIVATE _DEFAULT_SOURCE UI_TEST_FONTS="${CMAKE_CURRENT_SOURCE_DIR}/fonts")
+target_link_libraries(test_layout PRIVATE ui m)
+ui_target_warnings(test_layout)
+add_test(NAME layout COMMAND test_layout)

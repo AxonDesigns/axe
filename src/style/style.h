@@ -65,6 +65,29 @@ enum {
     UI_TEXT_SET_MAX_LINES = 8,
 };
 
+// A length as resolved: its unit, and the value in px or percent. Zero is 0 px.
+enum { UI_LEN_PX = 0, UI_LEN_PERCENT, UI_LEN_AUTO, UI_LEN_NONE };
+typedef struct ui_length {
+    float value;
+    uint8_t unit;
+} ui_length;
+
+// Layout values (docs/layout.md); ui_layout_style_init gives CSS's initial values.
+typedef struct ui_layout_style {
+    uint8_t display, position, direction, wrap;
+    uint8_t justify, align_items, align_self, align_content; // ui_flex_align
+    float grow, shrink;
+    float aspect_ratio;    // 0: auto
+    ui_length basis;
+    ui_length gap[2];      // along x (column-gap) and y (row-gap)
+    ui_length size[2];     // width, height
+    ui_length min[2];      // auto: the automatic minimum size
+    ui_length max[2];      // none by default
+    ui_length margin[4];   // top, right, bottom, left
+    ui_length padding[4];
+    ui_length inset[4];
+} ui_layout_style;
+
 // What a node's styles, state and overrides resolve to.
 typedef struct ui_computed {
     float background[4];   // linear light, straight alpha
@@ -79,6 +102,7 @@ typedef struct ui_computed {
     uint8_t text_align;    // ui_text_align
     uint32_t max_lines;    // 0: unlimited
     float transition[UI_ANIM_PAINT_COUNT][2]; // stiffness, damping; stiffness 0: none
+    ui_layout_style layout;
 } ui_computed;
 
 void ui_styles_init(ui_styles *s);
@@ -107,6 +131,9 @@ bool ui_style_walk_define(const uint8_t *payload, uint32_t size);
 bool ui_styles_token_value(const ui_styles *s, const ui_value *v, ui_value *out);
 
 void ui_computed_init(ui_computed *c);
+// CSS's initial values: auto sizes, basis, minimums and insets; no maximums; flex 0 1 auto;
+// zero margins, padding and gaps.
+void ui_layout_style_init(ui_layout_style *l);
 
 // Resolves a node: initial values; the matching blocks of its styles by specificity (number
 // of states), then list order, then declaration order; then `overrides`.
