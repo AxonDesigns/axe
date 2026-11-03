@@ -28,6 +28,9 @@ Vulkan and WGSL) and always in the `release` profile.
 | Rust | 1.93 (`rust-toolchain.toml`, matches wgpu-native's pin) |
 | Clang / Clang++ | 19 or newer (C23, `#embed`); CI pins 22, developed with 22–23. C++ only for HarfBuzz (C++17) |
 | CMake | 3.28 or newer |
+| Node.js | 24 (CI); npm installs the TypeScript tools only, nothing at run time uses Node |
+| esbuild | 0.28.2, pinned by `ts/package-lock.json` (MIT); bundles TypeScript apps and tests |
+| TypeScript | 7.0.2, pinned by `ts/package-lock.json` (Apache-2.0); type-checking only |
 | Python | 3.10 or newer, stdlib only: the wire IDL generator (`tools/idl`, also run by CTest) and the Unicode tables |
 
 ## System libraries (Linux, for now)

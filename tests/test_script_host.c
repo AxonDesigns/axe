@@ -143,8 +143,10 @@ static void test_turn_order(void) {
     CHECK(c.count >= 4);
     CHECK(index_of(&c, "eval at 0") == 0);
     CHECK(index_of(&c, "eval then") == 1);
-    CHECK(index_of(&c, "event 2 20") == 2); // surface_resized: the clock event isn't dispatched
-    CHECK(index_of(&c, "then 2") == 3);     // before the next event's handler
+    CHECK(index_of(&c, "event 7 8") == 2);  // the clock: the turn's start
+    CHECK(index_of(&c, "then 7") == 3);     // before the next event's handler
+    CHECK(index_of(&c, "event 2 20") == 4); // surface_resized
+    CHECK(index_of(&c, "then 2") == 5);
     CHECK(c.hook_count == 0);
     if (test_failures) dump(&c);
 }

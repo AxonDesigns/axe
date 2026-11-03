@@ -1,0 +1,53 @@
+// @axe/core: apps, surfaces, nodes, styles and tokens, over the wire (docs/typescript.md).
+// Imperative and minimal: signals and TSX (milestone 3b) build on it.
+export { app, Surface, type FrameInfo, type SurfaceSize } from "./app.js";
+export { Node, StaleNodeError, type Layout, type NodeOptions, type SpringOptions } from "./node.js";
+export { loadFont, FontLoadError } from "./fonts.js";
+export { type TextOptions, type TextSpanOptions, type TextStyleOptions } from "./text.js";
+export {
+  Style,
+  Token,
+  auto,
+  inherit,
+  initial,
+  keyword,
+  none,
+  number,
+  percent,
+  px,
+  rgba,
+  spring,
+  string,
+  unset,
+  type Decls,
+  type Overrides,
+  type StyleBlock,
+  type StyleDesc,
+  type TokenType,
+  type Transitions,
+} from "./style.js";
+export {
+  ClipFlags,
+  Clip,
+  ContentAnimation,
+  Direction,
+  Display,
+  FlexAlign,
+  FlexDirection,
+  FlexWrap,
+  Position,
+  Property,
+  State,
+  StyleProp,
+  TextAlign,
+  TextDirection,
+  TextSlant,
+  Utf8OffsetMap,
+  utf16OffsetFromUtf8,
+  utf8OffsetFromUtf16,
+  type ColorValue,
+  type Handle,
+  type PxValue,
+  type Rect,
+  type StyleValue,
+} from "@axe/wire";

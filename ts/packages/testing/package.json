@@ -1,0 +1,13 @@
+{
+  "name": "@axe/testing",
+  "version": "0.0.0",
+  "private": true,
+  "description": "A small test framework for TypeScript tests run by axe-test-js.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@axe/core": "0.0.0"
+  }
+}

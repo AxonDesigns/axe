@@ -36,7 +36,6 @@ export interface TextSpan {
 
 export interface StyleEntry {
   readonly property: number;
-  readonly kind: number;
   readonly value: StyleValue;
 }
 
@@ -95,7 +94,7 @@ function writeStyleEntry(w: CommandWriter, at: number, v: StyleEntry): number {
   void f32;
   const size = sizeofStyleEntry(v);
   const word = at >> 2;
-  u32[word + 0] = (v.property | (v.kind) << 16 | (size >>> 2) << 24) >>> 0;
+  u32[word + 0] = (v.property | (v.value.kind) << 16 | (size >>> 2) << 24) >>> 0;
   at += 4;
   at = writeStyleValue(w, at, v.value);
   return at;

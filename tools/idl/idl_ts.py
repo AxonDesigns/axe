@@ -227,8 +227,14 @@ def field_conds(r: Record, f: Field, x: str) -> list[str]:
 # ---- Commands -------------------------------------------------------------------------------
 
 
+def union_kind_of(r: Record, f: Field) -> TailItem | None:
+    """The union tail item `f` selects, if f is a union's kind field: its value comes from the
+    union value itself."""
+    return next((t for t in r.tail if t.kind == "union" and t.count_field == f.name), None)
+
+
 def user_fields(r: Record) -> list[Field]:
-    return [f for f in r.fields if not f.reserved and not f.assign]
+    return [f for f in r.fields if not f.reserved and not f.assign and not union_kind_of(r, f)]
 
 
 def ts_type(s: Schema, f: Field) -> str:
@@ -274,6 +280,9 @@ def as_object(r: Record) -> bool:
 def assigned_value(r: Record, f: Field, src: str) -> str | None:
     if f.reserved:
         return "0"
+    u = union_kind_of(r, f)
+    if u:
+        return f"{src}{camel(u.name)}.kind"
     if f.assign == "header":
         return str(r.size)
     if f.assign == "header0":

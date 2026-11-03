@@ -1,7 +1,7 @@
 # Sanitizer builds keep shared objects loaded until exit, so leak reports name the GPU
-# driver libraries that tools/lsan.supp suppresses (tests/keep_loaded.c).
+# driver libraries that tools/lsan.supp suppresses (tests/keep_loaded.c; the object library
+# is defined at the root, for the examples the tests run too).
 if("address" IN_LIST UI_SANITIZE)
-    add_library(ui_keep_loaded OBJECT keep_loaded.c)
     link_libraries(ui_keep_loaded)
 endif()
 
@@ -251,3 +251,56 @@ target_link_libraries(test_script_host PRIVATE ui m)
 ui_target_warnings(test_script_host)
 add_test(NAME script_host COMMAND test_script_host)
 set_tests_properties(script_host PROPERTIES ENVIRONMENT "UI_GPU=software" TIMEOUT 120)
+
+# TypeScript: each test file is bundled and run inside the script host by axe-test-js,
+# headless on a paused clock (docs/typescript.md, "Tests"); tsc type-checks every package,
+# test and example with strict settings.
+add_executable(axe-test-js ts/runner.c)
+target_include_directories(axe-test-js PRIVATE ${PROJECT_SOURCE_DIR}/src)
+target_compile_definitions(axe-test-js PRIVATE AXE_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
+target_link_libraries(axe-test-js PRIVATE ui)
+ui_target_warnings(axe-test-js)
+
+function(axe_ts_test name file)
+    set(js "${CMAKE_CURRENT_BINARY_DIR}/ts/${name}.js")
+    axe_ts_bundle("${js}" "${file}")
+    add_custom_target(ts_${name}_bundle ALL DEPENDS "${js}")
+    add_test(NAME ts_${name} COMMAND axe-test-js "${js}")
+    set_tests_properties(ts_${name} PROPERTIES ENVIRONMENT "UI_GPU=software" TIMEOUT 300)
+endfunction()
+file(GLOB _ts_tests CONFIGURE_DEPENDS "${PROJECT_SOURCE_DIR}/ts/packages/*/test/*.test.ts")
+foreach(file IN LISTS _ts_tests)
+    get_filename_component(name "${file}" NAME_WE)
+    axe_ts_test(${name} "${file}")
+endforeach()
+
+add_test(NAME ts_typecheck COMMAND "${AXE_TSC}" -p "${PROJECT_SOURCE_DIR}/ts/tsconfig.json")
+
+# The C and TypeScript layout_cards draw byte-identical images at the same times, under both
+# schedulers (the shuffles, theme switches and direction changes included).
+if(UI_BUILD_EXAMPLES)
+    add_test(NAME layout_cards_equivalence
+             COMMAND ${CMAKE_COMMAND} -DC=$<TARGET_FILE:layout_cards> -DTS=$<TARGET_FILE:layout_cards_ts>
+                     -DOUT=${CMAKE_CURRENT_BINARY_DIR}/equivalence "-DTIMES=0;1.3;2.6;4.1;6.2;12.4"
+                     -P ${CMAKE_CURRENT_SOURCE_DIR}/ts/equivalence.cmake)
+    add_test(NAME layout_cards_equivalence_dark_rtl
+             COMMAND ${CMAKE_COMMAND} -DC=$<TARGET_FILE:layout_cards> -DTS=$<TARGET_FILE:layout_cards_ts>
+                     -DOUT=${CMAKE_CURRENT_BINARY_DIR}/equivalence-dark-rtl "-DTIMES=0;3.3"
+                     "-DARGS=--dark;--rtl" -P ${CMAKE_CURRENT_SOURCE_DIR}/ts/equivalence.cmake)
+    add_test(NAME spring_rect_ts COMMAND spring_rect_ts --headless --at 5 --strict
+             --out ${CMAKE_CURRENT_BINARY_DIR}/spring_rect_ts.ppm)
+    set_tests_properties(layout_cards_equivalence layout_cards_equivalence_dark_rtl spring_rect_ts
+                         PROPERTIES ENVIRONMENT "UI_GPU=software" TIMEOUT 600)
+endif()
+
+# A busy JS loop doesn't stop frames or springs (the C version: test_stall).
+axe_ts_bundle(${CMAKE_CURRENT_BINARY_DIR}/ts/stall.js ${CMAKE_CURRENT_SOURCE_DIR}/ts/stall.ts)
+add_custom_target(ts_stall_bundle ALL DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/ts/stall.js)
+add_executable(test_stall_js test_stall_js.c)
+target_include_directories(test_stall_js PRIVATE ${PROJECT_SOURCE_DIR}/src)
+target_compile_definitions(test_stall_js PRIVATE _DEFAULT_SOURCE UI_STALL_BUNDLE="${CMAKE_CURRENT_BINARY_DIR}/ts/stall.js")
+target_link_libraries(test_stall_js PRIVATE ui m)
+add_dependencies(test_stall_js ts_stall_bundle)
+ui_target_warnings(test_stall_js)
+add_test(NAME stall_js COMMAND test_stall_js)
+set_tests_properties(stall_js PROPERTIES ENVIRONMENT "UI_GPU=software" TIMEOUT 120)

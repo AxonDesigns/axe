@@ -2,9 +2,16 @@
 
 ## Build and test
 
-Clang 19 or newer (22 in CI), CMake, Ninja, Rust 1.93, and the system packages listed in
-`.github/actions/setup/action.yml`. Clone with `--recursive`, then vendor the Rust crates
-once with `tools/vendor-rust.sh`.
+Clang 19 or newer (22 in CI), CMake, Ninja, Rust 1.93, Python 3.10, Node.js 24 with npm, and
+the system packages listed in `.github/actions/setup/action.yml`. Clone with `--recursive`,
+then, once:
+
+```sh
+tools/vendor-rust.sh                      # wgpu-native's crates
+npm ci --ignore-scripts --prefix ts       # esbuild and tsc, pinned by ts/package-lock.json
+```
+
+Node.js and npm are only for that second step: the build calls the tools' native binaries.
 
 ```sh
 cmake --preset debug && cmake --build --preset debug && ctest --preset debug
@@ -13,6 +20,14 @@ cmake --preset debug && cmake --build --preset debug && ctest --preset debug
 The presets are `debug`, `release`, `asan` (ASan + UBSan) and `fuzz` (libFuzzer + ASan +
 UBSan). Tests run headless on lavapipe. Before committing, the debug, release and asan
 suites must all pass.
+
+## TypeScript
+
+The packages, examples and tests in `ts/` and `examples/*/main.ts` are built and tested by
+CMake: each `ts/packages/*/test/*.test.ts` is a CTest test (`ts_<name>`), run inside the
+script host by `axe-test-js`, and `ts_typecheck` runs `tsc` with strict settings. See
+[docs/typescript.md](docs/typescript.md). `layout_cards_equivalence` requires the C and
+TypeScript `layout_cards` to draw byte-identical images; change both together.
 
 ## Fuzzing
 

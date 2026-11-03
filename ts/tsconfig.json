@@ -1,7 +1,9 @@
 {
   "compilerOptions": {
     "target": "es2023",
-    "lib": ["es2023"],
+    "lib": [
+      "es2023"
+    ],
     "module": "esnext",
     "moduleResolution": "bundler",
     "strict": true,
@@ -15,7 +17,24 @@
     "allowImportingTsExtensions": false,
     "skipLibCheck": false,
     "types": [],
-    "noEmit": true
+    "noEmit": true,
+    "paths": {
+      "@axe/wire": [
+        "./packages/wire/src/index.ts"
+      ],
+      "@axe/core": [
+        "./packages/core/src/index.ts"
+      ],
+      "@axe/testing": [
+        "./packages/testing/src/index.ts"
+      ]
+    }
   },
-  "include": ["packages/*/src/**/*.ts", "packages/*/test/**/*.ts", "types/**/*.d.ts", "../examples/**/*.ts"]
+  "include": [
+    "packages/*/src/**/*.ts",
+    "packages/*/test/**/*.ts",
+    "types/**/*.d.ts",
+    "../examples/**/*.ts",
+    "../tests/ts/**/*.ts"
+  ]
 }

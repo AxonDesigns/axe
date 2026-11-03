@@ -21,6 +21,14 @@ set(UI_SANITIZE "" CACHE STRING "Semicolon-separated sanitizers, e.g. address;un
 
 include(cmake/Warnings.cmake)
 include(cmake/Sanitizers.cmake)
+include(cmake/TypeScript.cmake)
+
+# Sanitizer builds: the tests, and the examples they run, keep shared objects loaded until
+# exit, so leak reports name the driver libraries tools/lsan.supp suppresses
+# (tests/keep_loaded.c).
+if("address" IN_LIST UI_SANITIZE)
+    add_library(ui_keep_loaded OBJECT tests/keep_loaded.c)
+endif()
 
 add_subdirectory(third_party)
 add_subdirectory(src)

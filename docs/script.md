@@ -79,7 +79,8 @@ Logic runs in turns, one per event buffer the core sends ([`command-buffer.md`](
    by a microtask checkpoint. The first event buffer is sent at startup, so this happens
    immediately, and always before the app's first event.
 3. **Each event, in order.** The host's own timer event runs the due JS timers; every
-   other event (`clock` aside) is passed to the dispatcher `@axe/core` registered. A
+   other event, `clock` included (it marks the turn's start), is passed to the dispatcher
+   `@axe/core` registered. A
    **microtask checkpoint follows each event and each timer callback**, as on the web, where
    each is a task: a Promise continuation runs before the next event's handler.
 4. **Flush.** `@axe/core` finishes the turn's command buffer, the host appends its wire

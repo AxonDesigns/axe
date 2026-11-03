@@ -75,3 +75,20 @@ declare module "axe:host" {
   /** The app's arguments (axe-run's arguments after `--`). */
   export const args: readonly string[];
 }
+
+/** The test runner's bindings (tests/ts/runner.c); @axe/testing wraps them. */
+declare module "axe:test" {
+  export function requestStep(ms: number): void;
+  export function done(failed: number, total: number): void;
+  /** kind: 0 exception, 1 rejection, 2 long task, 3 leak. */
+  export function hooks(): { kind: number; text: string }[];
+  export function gc(): void;
+  export function cBuffer(name: string): ArrayBuffer;
+  export function cEvents(): ArrayBuffer;
+}
+
+/** tests/test_stall_js.c's bindings. */
+declare module "axe:stall" {
+  export function blocked(): void;
+  export function released(): boolean;
+}

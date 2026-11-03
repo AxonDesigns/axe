@@ -10,3 +10,15 @@ target_compile_definitions(text_contrast_shots PRIVATE _DEFAULT_SOURCE
     AXE_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
 target_link_libraries(text_contrast_shots PRIVATE ui m)
 ui_target_warnings(text_contrast_shots)
+
+# The script toolchain (docs/typescript.md): axe-jsc compiles bundles to bytecode at build
+# time; axe-run runs a bundle.
+add_executable(axe-jsc axe-jsc/main.c)
+target_include_directories(axe-jsc PRIVATE ${PROJECT_SOURCE_DIR}/src)
+target_link_libraries(axe-jsc PRIVATE ui)
+ui_target_warnings(axe-jsc)
+
+add_executable(axe-run axe-run/main.c)
+target_compile_definitions(axe-run PRIVATE _DEFAULT_SOURCE)
+target_link_libraries(axe-run PRIVATE ui)
+ui_target_warnings(axe-run)

@@ -1,9 +1,10 @@
 // The script host (docs/script.md): an app's bundle in turns, on the logic thread.
 //
 // A turn handles one event buffer: the clock event sets the turn's time, the bundle runs in
-// the first turn, every event goes to @axe/core's dispatcher (and the host's own timer event
-// to the due JS timers), each followed by a microtask checkpoint, and the turn ends by
-// flushing one command buffer, to which the host adds its timer's re-arm.
+// the first turn, every event goes to @axe/core's dispatcher (the clock too: the turn's
+// start; the host's own timer event goes to the due JS timers instead), each followed by a
+// microtask checkpoint, and the turn ends by flushing one command buffer, to which the host
+// adds its timer's re-arm.
 #include "script/host/host.h"
 
 #include <math.h>
@@ -685,6 +686,7 @@ static const char *event_name(uint16_t type) {
     case UI_EVENT_TIMER_FIRED: return "event timer_fired";
     case UI_EVENT_FONT_LOADED: return "event font_loaded";
     case UI_EVENT_LAYOUT_MEASURED: return "event layout_measured";
+    case UI_EVENT_CLOCK: return "the turn's start";
     default: return "an event";
     }
 }
@@ -742,7 +744,6 @@ void ui_script_host_turn(ui_script_host *h, const uint8_t *events, size_t size, 
             res = UI_ERR_MALFORMED;
             break;
         }
-        if (op.opcode == UI_EVENT_CLOCK) continue;
         if (op.opcode == UI_EVENT_TIMER_FIRED) {
             ui_wire_timer_fired t;
             ui_wire_timer_fired_read(op.payload, op.payload_size, &t);

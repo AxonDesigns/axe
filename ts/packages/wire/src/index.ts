@@ -5,3 +5,4 @@ export * from "./gen/ids.js";
 export * from "./gen/commands.js";
 export * from "./gen/events.js";
 export * from "./gen/styles.js";
+export * from "./reader.js";
