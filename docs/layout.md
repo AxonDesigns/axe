@@ -248,3 +248,12 @@ one fixture next to Chrome's.
   fixtures pin Chrome's behavior.
 - Fixtures run at scale 1; at other scales layout is the same in logical px, and only text
   measures in physical pixels.
+- While a node's size animates, its text and children already have their final layout:
+  text wrapped for a wider box can overflow a box that is still narrow, until it settles.
+- Moving text steps vertically by whole pixels, since baselines always snap
+  (`docs/styles.md`, "Snapping").
+- A node moved to another surface, and a node shown again, appear in place rather than
+  animating.
+- `layout_measured` reports rects only; the presentation rect it reports is that of the
+  frame it answers in, and hit testing against presentation rects arrives with input
+  (milestone 4).
