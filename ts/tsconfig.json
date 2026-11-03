@@ -35,6 +35,7 @@
     "packages/*/test/**/*.ts",
     "types/**/*.d.ts",
     "../examples/**/*.ts",
-    "../tests/ts/**/*.ts"
+    "../tests/ts/**/*.ts",
+    "../bench/**/*.ts"
   ]
 }

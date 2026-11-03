@@ -4,7 +4,7 @@ bench/baselines.json (CONTRIBUTING.md, "Benchmarks").
 
 Instruction counts don't move between runs on the same machine, unlike times, so CI can
 catch a regression of a few percent. Each case is a noinline `bench_case_*` function in
-bench/bench_layout.c or bench/bench_text.c; with `--callgrind` each benchmark runs its CPU
+bench/bench_layout.c, bench/bench_text.c or bench/bench_script.c; with `--callgrind` each benchmark runs its CPU
 cases once, and Callgrind collects inside those functions only (--toggle-collect). A case's
 count is its inclusive count.
 
@@ -35,7 +35,7 @@ import tempfile
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 BASELINES = ROOT / "bench" / "baselines.json"
-BENCHES = ["bench_layout", "bench_text"]
+BENCHES = ["bench_layout", "bench_text", "bench_script"]
 CASE = re.compile(r"^\s*([\d,]+)\s.*?[:\s](bench_case_\w+?)(?:\.\w+)?(?:\s|$)")
 
 

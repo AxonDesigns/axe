@@ -19,7 +19,6 @@ import {
   type PxValue,
   type SpringValue,
   type StringValue,
-  type StylePropName,
   type StylePropValues,
   type StyleValue,
   type TokenValue,
@@ -120,22 +119,26 @@ export interface StyleEntry {
 /** Wire entries of declarations and transitions, checked as the core checks them. */
 export function entries(decls: Overrides | undefined, transitions: Transitions | undefined, override: boolean): StyleEntry[] {
   const out: StyleEntry[] = [];
-  const add = (property: number, name: string, v: StyleValue | Token) => {
-    const value = valueOf(v);
-    if (!styleValueValid(property, value, override)) throw new RangeError(`${name}: invalid value ${JSON.stringify(value)}`);
-    out.push({ property, value });
-  };
-  for (const [name, v] of Object.entries(decls ?? {})) {
-    const id = StyleProp[name as StylePropName];
-    if (id === undefined) throw new RangeError(`unknown style property "${name}"`);
-    if (v !== undefined) add(id, name, v as StyleValue | Token);
-  }
-  for (const [name, v] of Object.entries(transitions ?? {})) {
-    const id = StyleProp[name as StylePropName];
-    if (id === undefined) throw new RangeError(`unknown style property "${name}"`);
-    if (v !== undefined) add(transitionOf(id), `transition of ${name}`, v as StyleValue);
-  }
+  // Plain loops: this runs for every setProps and defineStyle.
+  if (decls) add(out, decls as Record<string, StyleValue | Token | undefined>, false, override);
+  if (transitions) add(out, transitions as Record<string, StyleValue | undefined>, true, override);
   return out;
+}
+
+const ids = StyleProp as Record<string, number | undefined>;
+
+function add(out: StyleEntry[], decls: Record<string, StyleValue | Token | undefined>, transition: boolean, override: boolean): void {
+  for (const name in decls) {
+    const v = decls[name];
+    if (v === undefined) continue;
+    const id = ids[name];
+    if (id === undefined) throw new RangeError(`unknown style property "${name}"`);
+    const property = transition ? transitionOf(id) : id;
+    const value = v instanceof Token ? { kind: ValueKind.token, token: v.id } : v;
+    if (!styleValueValid(property, value, override))
+      throw new RangeError(`${transition ? `transition of ${name}` : name}: invalid value ${JSON.stringify(value)}`);
+    out.push({ property, value });
+  }
 }
 
 // ---- Styles ---------------------------------------------------------------------------------

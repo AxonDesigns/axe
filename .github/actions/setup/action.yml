@@ -1,5 +1,6 @@
 # Shared setup for the ci and fuzz workflows: Clang from apt.llvm.org, the system packages,
-# lavapipe as the only Vulkan driver, Rust, and the cached wgpu-native build for a preset.
+# lavapipe as the only Vulkan driver, Rust, the TypeScript tools, and the cached wgpu-native
+# build for a preset.
 # Restore only: the calling job saves the caches (with `if: always()`, so a failing test
 # still saves them) from the keys this action outputs.
 name: setup
@@ -51,6 +52,17 @@ runs:
       shell: bash
       run: rustup toolchain install "${{ inputs.rust-version }}" --profile minimal
 
+    # Node.js only installs the pinned TypeScript tools (esbuild, tsc); the build calls their
+    # native binaries, and nothing at run time needs Node (docs/typescript.md).
+    - name: Install Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: "24"
+
+    - name: Install the TypeScript tools
+      shell: bash
+      run: npm ci --ignore-scripts --no-audit --no-fund --prefix ts
+
     - name: Cache key
       id: key
       shell: bash
@@ -81,4 +93,5 @@ runs:
         clang --version | head -1
         cmake --version | head -1
         cargo +"${{ inputs.rust-version }}" --version
+        node --version
         vulkaninfo --summary | grep -E 'deviceName|driverName'

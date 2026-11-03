@@ -98,6 +98,17 @@ export function encodeUtf8Into(s: string, u8: Uint8Array, at: number): number {
 
 /** UTF-8 bytes of a string. */
 export function encodeUtf8(s: string): Uint8Array {
+  // Short ASCII strings (labels, names) are encoded here: cheaper than a native call.
+  if (s.length <= 64) {
+    const out = new Uint8Array(s.length);
+    let i = 0;
+    for (; i < s.length; i++) {
+      const c = s.charCodeAt(i);
+      if (c >= 0x80) break;
+      out[i] = c;
+    }
+    if (i === s.length) return out;
+  }
   encoder ??= new TextEncoder();
   return encoder.encode(s);
 }

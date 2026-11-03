@@ -202,11 +202,16 @@ def range_conds(x: str, c: Check) -> list[str]:
     return out
 
 
+def uint_check(x: str, st: str) -> str:
+    """An integer of the storage type, inline (a call costs more than the check in QuickJS)."""
+    return f"({x} >>> 0) === {x}" if st == "u32" else f"({x} & {INT_MAX[st]:#x}) === {x}"
+
+
 def field_conds(r: Record, f: Field, x: str) -> list[str]:
     conds = []
     st = f.type.storage or f.type.base
     if st in INT_MAX and not f.assign and not f.reserved and f.type.count == 1:
-        conds.append(f"isUint({x}, {INT_MAX[st]:#x})")
+        conds.append(uint_check(x, st))
     for c in f.checks:
         if c.kind == "finite":
             conds.append(f"Number.isFinite({x})")
@@ -408,9 +413,11 @@ def write_tail(s: Schema, r: Record, src: str, at: str) -> list[str]:
     for t in r.tail:
         v = f"{src}{camel(t.name)}"
         if t.kind == "bytes":
-            out.append(f"  w.u8.set({v}, {at});")
+            # Small regions are copied byte by byte: TypedArray.set costs more for a few bytes.
+            out.append(f"  if ({v}.length > 16) w.u8.set({v}, {at});")
+            out.append(f"  else for (let i = 0; i < {v}.length; i++) w.u8[{at} + i] = {v}[i]!;")
             if t.pad == 4:
-                out.append(f"  w.u8.fill(0, {at} + {v}.length, {at} + (({v}.length + 3) & ~3));")
+                out.append(f"  for (let i = {at} + {v}.length, e = {at} + (({v}.length + 3) & ~3); i < e; i++) w.u8[i] = 0;")
                 out.append(f"  {at} += ({v}.length + 3) & ~3;")
             else:
                 out.append(f"  {at} += {v}.length;")
@@ -675,18 +682,22 @@ def styles_ts(s: Schema) -> str:
     out.append(" * `override` allows unset. */")
     out.append("export function styleValueValid(prop: number, v: StyleValue, override: boolean): boolean {")
     out.append("  if (!stylePropKnown(prop)) return false;")
-    out.append(f"  if (v.kind === ValueKind.unset) return override;")
-    out.append(f"  if (v.kind === ValueKind.inherit || v.kind === ValueKind.initial) return true;")
+    vk = s.enums["value_kind"]
+    out.append(f"  if (v.kind === {vk.value('unset').value}) return override; // unset")
+    out.append(f"  if (v.kind === {vk.value('inherit').value} || v.kind === {vk.value('initial').value}) return true; // inherit, initial")
     out.append(f"  if (prop & 0x8000) return {ts_alternatives(s, s.transition_values, smax)};")
-    out.append(f"  if (v.kind === ValueKind.token) return v.token !== 0 && v.token === (v.token >>> 0);")
+    out.append(f"  if (v.kind === {vk.value('token').value}) return v.token !== 0 && v.token === (v.token >>> 0); // token")
     out.append("  switch (prop) {")
     groups: dict[str, list[int]] = {}
     for p in s.style_props:
         if p.declarable:
             groups.setdefault(ts_alternatives(s, p.values, smax), []).append(p.name)
+    # Literal cases with the name in a comment: QuickJS evaluates case expressions in turn,
+    # so `case StyleProp.width:` would cost a property lookup per case.
+    ids = {p.name: p.id for p in s.style_props}
     for cond, names in groups.items():
         for n in names:
-            out.append(f"    case StyleProp.{camel(n)}:")
+            out.append(f"    case {ids[n]}: // {camel(n)}")
         out.append(f"      return {cond};")
     out.append("    default:")
     out.append("      return false;")
@@ -726,7 +737,7 @@ def ts_alternatives(s: Schema, values: list[ValueSpec], smax: int) -> str:
     conds = []
     u = s.unions["style_value"]
     for v in values:
-        k = f"v.kind === ValueKind.{camel(v.kind)}"
+        k = f"v.kind === {s.enums['value_kind'].value(v.kind).value}"
         if v.kind in ("px", "percent", "number"):
             c = [k, "Number.isFinite(v.number)"]
             if v.check:

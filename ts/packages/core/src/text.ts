@@ -59,6 +59,9 @@ const LANGUAGE = /^[A-Za-z0-9-]{1,35}$/;
 
 const pad4 = (n: number) => (n + 3) & ~3;
 
+// String regions by their families and languages: apps reuse a handful.
+const regions = new Map<string, Uint8Array>();
+
 // The string region: family lists, then language tags, each once.
 class Strings {
   readonly families: string[] = [];
@@ -80,6 +83,17 @@ class Strings {
   }
 
   region(): Uint8Array {
+    const key = `${this.families.join("\n")}\u0001${this.languages.join("\n")}`;
+    let out = regions.get(key);
+    if (!out) {
+      out = this.build();
+      if (regions.size >= 64) regions.clear(); // a few combinations in practice
+      regions.set(key, out);
+    }
+    return out;
+  }
+
+  private build(): Uint8Array {
     const all = [...this.families, ...this.languages];
     if (all.length > MAX_STRINGS) throw new RangeError(`setText: more than ${MAX_STRINGS} families and languages`);
     const parts = all.map((s) => {

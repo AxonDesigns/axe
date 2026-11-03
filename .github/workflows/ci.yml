@@ -1,7 +1,8 @@
 # Linux CI: builds the debug and asan presets and runs every test headless on lavapipe, and
 # runs each libFuzzer target from its seed corpus (the fuzz preset's tests). Longer fuzzing
-# runs nightly in fuzz.yml. bench-callgrind guards the benchmarks' instruction counts, and
-# actionlint checks the workflows. A manual run can be limited to the benchmark guard.
+# runs nightly in fuzz.yml. bench-callgrind guards the benchmarks' instruction counts, idl
+# checks the wire IDL's generated code and evolution rules, and actionlint checks the
+# workflows. A manual run can be limited to the benchmark guard.
 # The wgpu-native build (vendored crates + Cargo target dir) is cached per preset, keyed on
 # the pinned submodule commit and the Rust toolchain, so a warm run only builds our C code.
 name: ci
@@ -106,7 +107,7 @@ jobs:
         run: cmake --preset release
 
       - name: Build
-        run: cmake --build --preset release --target bench_layout bench_text
+        run: cmake --build --preset release --target bench_layout bench_text bench_script
 
       - name: Save vendored crates
         if: always() && steps.setup.outputs.vendor-key != '' && steps.setup.outputs.vendor-hit != 'true'
@@ -132,6 +133,33 @@ jobs:
           name: bench-callgrind
           path: callgrind-counts.json
           if-no-files-found: ignore
+
+  # The wire IDL (docs/idl.md): the committed generated code is what idl/wire.idl gives, and the
+  # change keeps the evolution rules against the base (the PR's base, or the previous commit).
+  idl:
+    name: wire IDL
+    if: inputs.jobs != 'bench'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Generated code is up to date
+        run: python3 -I tools/idl/axe_idl.py --check
+
+      - name: Evolution rules against the base
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          if [ -z "$BASE" ] || ! git cat-file -e "$BASE^{commit}" 2>/dev/null; then
+            echo "no base commit to compare with"
+          else
+            python3 -I tools/idl/axe_idl.py --check --compat-base "$BASE"
+          fi
+
+      - name: Generator tests
+        run: python3 -I tools/idl/test_axe_idl.py
 
   # Lints the workflows with actionlint's release binary, pinned by version and checksum.
   actionlint:

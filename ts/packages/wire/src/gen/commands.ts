@@ -206,7 +206,7 @@ export class CommandWriter extends WireWriter {
 
   /** start_spring (6): node, `u16 property`, `u16 count`, `f32 stiffness`, `f32 damping`, `f32 target[count]` */
   startSpring(node: Handle, property: number, stiffness: number, damping: number, target: ArrayLike<number>): void {
-    if (!(isUint(property, 0xffff) && isProperty(property))) throw bad("start_spring", "property");
+    if (!((property & 0xffff) === property && isProperty(property))) throw bad("start_spring", "property");
     if (!(Number.isFinite(stiffness) && stiffness > 0)) throw bad("start_spring", "stiffness");
     if (!(Number.isFinite(damping) && damping >= 0)) throw bad("start_spring", "damping");
     if (!(target.length <= 0xffff && target.length === propertyComponents(property) && target.length !== 0)) throw bad("start_spring", "count");
@@ -231,7 +231,7 @@ export class CommandWriter extends WireWriter {
 
   /** set_timer (7): `u32 id`, `u32` reserved (0), `u64 deadline_ns` (animation clock; `UINT64_MAX` disarms) */
   setTimer(id: number, deadlineNs: number): void {
-    if (!(isUint(id, 0xffffffff))) throw bad("set_timer", "id");
+    if (!((id >>> 0) === id)) throw bad("set_timer", "id");
     const payload = 16;
     let at = this.op(7, payload);
     const u32 = this.u32, f32 = this.f32;
@@ -245,13 +245,13 @@ export class CommandWriter extends WireWriter {
 
   /** set_text (8): see [Text](#text) */
   setText(fields: SetTextFields, spans: readonly TextSpan[], strings: Uint8Array, ellipsis: Uint8Array, text: Uint8Array): void {
-    if (!(isUint(fields.textBytes, 0xffffffff))) throw bad("set_text", "text_bytes");
-    if (!(isUint(fields.stringCount, 0xffff))) throw bad("set_text", "string_count");
-    if (!(isUint(fields.maxLines, 0xffff))) throw bad("set_text", "max_lines");
-    if (!(isUint(fields.direction, 0xff))) throw bad("set_text", "direction");
-    if (!(isUint(fields.flags, 0xff))) throw bad("set_text", "flags");
-    if (!(isUint(fields.align, 0xff))) throw bad("set_text", "align");
-    if (!(isUint(fields.fromNode, 0xffff))) throw bad("set_text", "from_node");
+    if (!((fields.textBytes >>> 0) === fields.textBytes)) throw bad("set_text", "text_bytes");
+    if (!((fields.stringCount & 0xffff) === fields.stringCount)) throw bad("set_text", "string_count");
+    if (!((fields.maxLines & 0xffff) === fields.maxLines)) throw bad("set_text", "max_lines");
+    if (!((fields.direction & 0xff) === fields.direction)) throw bad("set_text", "direction");
+    if (!((fields.flags & 0xff) === fields.flags)) throw bad("set_text", "flags");
+    if (!((fields.align & 0xff) === fields.align)) throw bad("set_text", "align");
+    if (!((fields.fromNode & 0xffff) === fields.fromNode)) throw bad("set_text", "from_node");
     if (!(text.length <= 0xffff)) throw bad("set_text", "chunk_bytes");
     if (!(spans.length <= 0xffff)) throw bad("set_text", "span_count");
     if (!(strings.length <= 0xffff)) throw bad("set_text", "strings_bytes");
@@ -286,13 +286,16 @@ export class CommandWriter extends WireWriter {
     u32[word + 17] = (fields.align | (0) << 8 | (fields.fromNode) << 16) >>> 0;
     at += 72;
     for (const x of spans) at = writeTextSpan(this, at, x);
-    this.u8.set(strings, at);
+    if (strings.length > 16) this.u8.set(strings, at);
+    else for (let i = 0; i < strings.length; i++) this.u8[at + i] = strings[i]!;
     at += strings.length;
-    this.u8.set(ellipsis, at);
-    this.u8.fill(0, at + ellipsis.length, at + ((ellipsis.length + 3) & ~3));
+    if (ellipsis.length > 16) this.u8.set(ellipsis, at);
+    else for (let i = 0; i < ellipsis.length; i++) this.u8[at + i] = ellipsis[i]!;
+    for (let i = at + ellipsis.length, e = at + ((ellipsis.length + 3) & ~3); i < e; i++) this.u8[i] = 0;
     at += (ellipsis.length + 3) & ~3;
-    this.u8.set(text, at);
-    this.u8.fill(0, at + text.length, at + ((text.length + 3) & ~3));
+    if (text.length > 16) this.u8.set(text, at);
+    else for (let i = 0; i < text.length; i++) this.u8[at + i] = text[i]!;
+    for (let i = at + text.length, e = at + ((text.length + 3) & ~3); i < e; i++) this.u8[i] = 0;
     at += (text.length + 3) & ~3;
     void at;
   }
@@ -310,15 +313,16 @@ export class CommandWriter extends WireWriter {
     u32[word + 1] = node.generation;
     u32[word + 2] = (chunkCount | (12) << 16) >>> 0;
     at += 12;
-    this.u8.set(chunk, at);
-    this.u8.fill(0, at + chunk.length, at + ((chunk.length + 3) & ~3));
+    if (chunk.length > 16) this.u8.set(chunk, at);
+    else for (let i = 0; i < chunk.length; i++) this.u8[at + i] = chunk[i]!;
+    for (let i = at + chunk.length, e = at + ((chunk.length + 3) & ~3); i < e; i++) this.u8[i] = 0;
     at += (chunk.length + 3) & ~3;
     void at;
   }
 
   /** set_clip (10): node, `u32 flags` (bit 0: clip; other bits must be 0) */
   setClip(node: Handle, flags: number): void {
-    if (!(isUint(flags, 0xffffffff) && isClipFlags(flags))) throw bad("set_clip", "flags");
+    if (!((flags >>> 0) === flags && isClipFlags(flags))) throw bad("set_clip", "flags");
     const payload = 12;
     let at = this.op(10, payload);
     const u32 = this.u32, f32 = this.f32;
@@ -332,7 +336,7 @@ export class CommandWriter extends WireWriter {
 
   /** load_font (11): `u32 id`, `u16 path_bytes` (1–4096), `u16 header_bytes` (8), the path in UTF-8 (padded to 4, no NUL) */
   loadFont(id: number, path: Uint8Array): void {
-    if (!(isUint(id, 0xffffffff))) throw bad("load_font", "id");
+    if (!((id >>> 0) === id)) throw bad("load_font", "id");
     if (!(path.length <= 0xffff && path.length >= 1 && path.length <= 4096)) throw bad("load_font", "path_bytes");
     if (!isUtf8(path)) throw bad("load_font", "path");
     if (path.indexOf(0) >= 0) throw bad("load_font", "path");
@@ -345,15 +349,16 @@ export class CommandWriter extends WireWriter {
     u32[word + 0] = id;
     u32[word + 1] = (pathCount | (8) << 16) >>> 0;
     at += 8;
-    this.u8.set(path, at);
-    this.u8.fill(0, at + path.length, at + ((path.length + 3) & ~3));
+    if (path.length > 16) this.u8.set(path, at);
+    else for (let i = 0; i < path.length; i++) this.u8[at + i] = path[i]!;
+    for (let i = at + path.length, e = at + ((path.length + 3) & ~3); i < e; i++) this.u8[i] = 0;
     at += (path.length + 3) & ~3;
     void at;
   }
 
   /** define_style (12): `u32 id`, `u16 header_bytes` (8), `u16 block_count`, blocks (see [`docs/styles.md`](styles.md)) */
   defineStyle(id: number, blocks: readonly StyleBlock[]): void {
-    if (!(isUint(id, 0xffffffff) && id !== 0)) throw bad("define_style", "id");
+    if (!((id >>> 0) === id && id !== 0)) throw bad("define_style", "id");
     if (!(blocks.length <= 0xffff)) throw bad("define_style", "block_count");
     const blocksCount = blocks.length;
     const payload = 8 + blocks.reduce((a, x) => a + sizeofStyleBlock(x), 0);
@@ -370,7 +375,7 @@ export class CommandWriter extends WireWriter {
 
   /** destroy_style (13): `u32 id` */
   destroyStyle(id: number): void {
-    if (!(isUint(id, 0xffffffff) && id !== 0)) throw bad("destroy_style", "id");
+    if (!((id >>> 0) === id && id !== 0)) throw bad("destroy_style", "id");
     const payload = 4;
     let at = this.op(13, payload);
     const u32 = this.u32, f32 = this.f32;
@@ -418,7 +423,7 @@ export class CommandWriter extends WireWriter {
 
   /** set_token (16): `u32 id`, one entry (property 0) */
   setToken(id: number, entry: StyleEntry): void {
-    if (!(isUint(id, 0xffffffff) && id !== 0)) throw bad("set_token", "id");
+    if (!((id >>> 0) === id && id !== 0)) throw bad("set_token", "id");
     const payload = 4 + sizeofStyleEntry(entry);
     let at = this.op(16, payload);
     const u32 = this.u32, f32 = this.f32;
@@ -432,8 +437,8 @@ export class CommandWriter extends WireWriter {
 
   /** set_state (17): node, `u32 mask`, `u32 value` */
   setState(node: Handle, mask: number, value: number): void {
-    if (!(isUint(mask, 0xffffffff))) throw bad("set_state", "mask");
-    if (!(isUint(value, 0xffffffff))) throw bad("set_state", "value");
+    if (!((mask >>> 0) === mask)) throw bad("set_state", "mask");
+    if (!((value >>> 0) === value)) throw bad("set_state", "value");
     const payload = 16;
     let at = this.op(17, payload);
     const u32 = this.u32, f32 = this.f32;
@@ -464,7 +469,7 @@ export class CommandWriter extends WireWriter {
 
   /** request_layout (19): node, `u32 request_id`: answered by `layout_measured` ([`docs/layout.md`](layout.md), "Measurement") */
   requestLayout(node: Handle, requestId: number): void {
-    if (!(isUint(requestId, 0xffffffff))) throw bad("request_layout", "request_id");
+    if (!((requestId >>> 0) === requestId)) throw bad("request_layout", "request_id");
     const payload = 12;
     let at = this.op(19, payload);
     const u32 = this.u32, f32 = this.f32;

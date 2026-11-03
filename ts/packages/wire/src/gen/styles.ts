@@ -124,119 +124,119 @@ const declarableProps: ReadonlySet<number> = new Set([1, 2, 3, 4, 5, 6, 7, 8, 9,
  * `override` allows unset. */
 export function styleValueValid(prop: number, v: StyleValue, override: boolean): boolean {
   if (!stylePropKnown(prop)) return false;
-  if (v.kind === ValueKind.unset) return override;
-  if (v.kind === ValueKind.inherit || v.kind === ValueKind.initial) return true;
-  if (prop & 0x8000) return (v.kind === ValueKind.spring && Number.isFinite(v.stiffness) && v.stiffness > 0 && Number.isFinite(v.damping) && v.damping >= 0) ||
-        (v.kind === ValueKind.none);
-  if (v.kind === ValueKind.token) return v.token !== 0 && v.token === (v.token >>> 0);
+  if (v.kind === 1) return override; // unset
+  if (v.kind === 12 || v.kind === 13) return true; // inherit, initial
+  if (prop & 0x8000) return (v.kind === 10 && Number.isFinite(v.stiffness) && v.stiffness > 0 && Number.isFinite(v.damping) && v.damping >= 0) ||
+        (v.kind === 5);
+  if (v.kind === 9) return v.token !== 0 && v.token === (v.token >>> 0); // token
   switch (prop) {
-    case StyleProp.backgroundColor:
-    case StyleProp.borderColor:
-    case StyleProp.textColor:
-    case StyleProp.borderTopColor:
-    case StyleProp.borderRightColor:
-    case StyleProp.borderBottomColor:
-    case StyleProp.borderLeftColor:
-    case StyleProp.borderStartColor:
-    case StyleProp.borderEndColor:
-      return (v.kind === ValueKind.color && finite4(v.color));
-    case StyleProp.borderWidth:
-    case StyleProp.cornerRadius:
-    case StyleProp.borderTopWidth:
-    case StyleProp.borderRightWidth:
-    case StyleProp.borderBottomWidth:
-    case StyleProp.borderLeftWidth:
-    case StyleProp.cornerRadiusTopLeft:
-    case StyleProp.cornerRadiusTopRight:
-    case StyleProp.cornerRadiusBottomRight:
-    case StyleProp.cornerRadiusBottomLeft:
-    case StyleProp.borderStartWidth:
-    case StyleProp.borderEndWidth:
-    case StyleProp.cornerRadiusTopStart:
-    case StyleProp.cornerRadiusTopEnd:
-    case StyleProp.cornerRadiusBottomStart:
-    case StyleProp.cornerRadiusBottomEnd:
-      return (v.kind === ValueKind.px && Number.isFinite(v.number) && v.number >= 0);
-    case StyleProp.opacity:
-      return (v.kind === ValueKind.number && Number.isFinite(v.number) && v.number >= 0 && v.number <= 1);
-    case StyleProp.clip:
-    case StyleProp.direction:
-    case StyleProp.contentAnimation:
-    case StyleProp.display:
-    case StyleProp.position:
-      return (v.kind === ValueKind.keyword && v.keyword >= 0 && v.keyword < 32 && Number.isInteger(v.keyword) && ((0x3 >>> v.keyword) & 1) === 1);
-    case StyleProp.lineHeight:
-      return (v.kind === ValueKind.number && Number.isFinite(v.number) && v.number > 0 && v.number <= 100) ||
-        (v.kind === ValueKind.auto);
-    case StyleProp.textAlign:
-    case StyleProp.alignItems:
-    case StyleProp.alignSelf:
-      return (v.kind === ValueKind.keyword && v.keyword >= 0 && v.keyword < 32 && Number.isInteger(v.keyword) && ((0x3f >>> v.keyword) & 1) === 1);
-    case StyleProp.maxLines:
-      return (v.kind === ValueKind.number && Number.isFinite(v.number) && v.number >= 0 && v.number <= 65535 && Number.isInteger(v.number)) ||
-        (v.kind === ValueKind.none);
-    case StyleProp.fontFamily:
-      return (v.kind === ValueKind.string && stringOk(v.string, 1014));
-    case StyleProp.fontSize:
-      return (v.kind === ValueKind.px && Number.isFinite(v.number) && v.number > 0 && v.number <= 4096);
-    case StyleProp.fontWeight:
-      return (v.kind === ValueKind.number && Number.isFinite(v.number) && v.number >= 1 && v.number <= 1000 && Number.isInteger(v.number));
-    case StyleProp.fontSlant:
-    case StyleProp.flexWrap:
-      return (v.kind === ValueKind.keyword && v.keyword >= 0 && v.keyword < 32 && Number.isInteger(v.keyword) && ((0x7 >>> v.keyword) & 1) === 1);
-    case StyleProp.language:
-      return (v.kind === ValueKind.string && stringOk(v.string, 64)) ||
-        (v.kind === ValueKind.none);
-    case StyleProp.flexDirection:
-      return (v.kind === ValueKind.keyword && v.keyword >= 0 && v.keyword < 32 && Number.isInteger(v.keyword) && ((0xf >>> v.keyword) & 1) === 1);
-    case StyleProp.justifyContent:
-      return (v.kind === ValueKind.keyword && v.keyword >= 0 && v.keyword < 32 && Number.isInteger(v.keyword) && ((0x1cf >>> v.keyword) & 1) === 1);
-    case StyleProp.alignContent:
-      return (v.kind === ValueKind.keyword && v.keyword >= 0 && v.keyword < 32 && Number.isInteger(v.keyword) && ((0x1ef >>> v.keyword) & 1) === 1);
-    case StyleProp.flexGrow:
-    case StyleProp.flexShrink:
-      return (v.kind === ValueKind.number && Number.isFinite(v.number) && v.number >= 0);
-    case StyleProp.flexBasis:
-    case StyleProp.width:
-    case StyleProp.height:
-    case StyleProp.minWidth:
-    case StyleProp.minHeight:
-      return (v.kind === ValueKind.px && Number.isFinite(v.number) && v.number >= 0) ||
-        (v.kind === ValueKind.percent && Number.isFinite(v.number) && v.number >= 0) ||
-        (v.kind === ValueKind.auto);
-    case StyleProp.rowGap:
-    case StyleProp.columnGap:
-    case StyleProp.paddingTop:
-    case StyleProp.paddingRight:
-    case StyleProp.paddingBottom:
-    case StyleProp.paddingLeft:
-    case StyleProp.paddingStart:
-    case StyleProp.paddingEnd:
-      return (v.kind === ValueKind.px && Number.isFinite(v.number) && v.number >= 0) ||
-        (v.kind === ValueKind.percent && Number.isFinite(v.number) && v.number >= 0);
-    case StyleProp.maxWidth:
-    case StyleProp.maxHeight:
-      return (v.kind === ValueKind.px && Number.isFinite(v.number) && v.number >= 0) ||
-        (v.kind === ValueKind.percent && Number.isFinite(v.number) && v.number >= 0) ||
-        (v.kind === ValueKind.none);
-    case StyleProp.marginTop:
-    case StyleProp.marginRight:
-    case StyleProp.marginBottom:
-    case StyleProp.marginLeft:
-    case StyleProp.top:
-    case StyleProp.right:
-    case StyleProp.bottom:
-    case StyleProp.left:
-    case StyleProp.marginStart:
-    case StyleProp.marginEnd:
-    case StyleProp.insetStart:
-    case StyleProp.insetEnd:
-      return (v.kind === ValueKind.px && Number.isFinite(v.number)) ||
-        (v.kind === ValueKind.percent && Number.isFinite(v.number)) ||
-        (v.kind === ValueKind.auto);
-    case StyleProp.aspectRatio:
-      return (v.kind === ValueKind.number && Number.isFinite(v.number) && v.number > 0) ||
-        (v.kind === ValueKind.auto);
+    case 1: // backgroundColor
+    case 2: // borderColor
+    case 7: // textColor
+    case 70: // borderTopColor
+    case 71: // borderRightColor
+    case 72: // borderBottomColor
+    case 73: // borderLeftColor
+    case 88: // borderStartColor
+    case 89: // borderEndColor
+      return (v.kind === 7 && finite4(v.color));
+    case 3: // borderWidth
+    case 4: // cornerRadius
+    case 66: // borderTopWidth
+    case 67: // borderRightWidth
+    case 68: // borderBottomWidth
+    case 69: // borderLeftWidth
+    case 74: // cornerRadiusTopLeft
+    case 75: // cornerRadiusTopRight
+    case 76: // cornerRadiusBottomRight
+    case 77: // cornerRadiusBottomLeft
+    case 86: // borderStartWidth
+    case 87: // borderEndWidth
+    case 90: // cornerRadiusTopStart
+    case 91: // cornerRadiusTopEnd
+    case 92: // cornerRadiusBottomStart
+    case 93: // cornerRadiusBottomEnd
+      return (v.kind === 2 && Number.isFinite(v.number) && v.number >= 0);
+    case 5: // opacity
+      return (v.kind === 6 && Number.isFinite(v.number) && v.number >= 0 && v.number <= 1);
+    case 6: // clip
+    case 16: // direction
+    case 17: // contentAnimation
+    case 32: // display
+    case 33: // position
+      return (v.kind === 8 && v.keyword >= 0 && v.keyword < 32 && Number.isInteger(v.keyword) && ((0x3 >>> v.keyword) & 1) === 1);
+    case 8: // lineHeight
+      return (v.kind === 6 && Number.isFinite(v.number) && v.number > 0 && v.number <= 100) ||
+        (v.kind === 4);
+    case 9: // textAlign
+    case 37: // alignItems
+    case 38: // alignSelf
+      return (v.kind === 8 && v.keyword >= 0 && v.keyword < 32 && Number.isInteger(v.keyword) && ((0x3f >>> v.keyword) & 1) === 1);
+    case 10: // maxLines
+      return (v.kind === 6 && Number.isFinite(v.number) && v.number >= 0 && v.number <= 65535 && Number.isInteger(v.number)) ||
+        (v.kind === 5);
+    case 11: // fontFamily
+      return (v.kind === 11 && stringOk(v.string, 1014));
+    case 12: // fontSize
+      return (v.kind === 2 && Number.isFinite(v.number) && v.number > 0 && v.number <= 4096);
+    case 13: // fontWeight
+      return (v.kind === 6 && Number.isFinite(v.number) && v.number >= 1 && v.number <= 1000 && Number.isInteger(v.number));
+    case 14: // fontSlant
+    case 35: // flexWrap
+      return (v.kind === 8 && v.keyword >= 0 && v.keyword < 32 && Number.isInteger(v.keyword) && ((0x7 >>> v.keyword) & 1) === 1);
+    case 15: // language
+      return (v.kind === 11 && stringOk(v.string, 64)) ||
+        (v.kind === 5);
+    case 34: // flexDirection
+      return (v.kind === 8 && v.keyword >= 0 && v.keyword < 32 && Number.isInteger(v.keyword) && ((0xf >>> v.keyword) & 1) === 1);
+    case 36: // justifyContent
+      return (v.kind === 8 && v.keyword >= 0 && v.keyword < 32 && Number.isInteger(v.keyword) && ((0x1cf >>> v.keyword) & 1) === 1);
+    case 39: // alignContent
+      return (v.kind === 8 && v.keyword >= 0 && v.keyword < 32 && Number.isInteger(v.keyword) && ((0x1ef >>> v.keyword) & 1) === 1);
+    case 40: // flexGrow
+    case 41: // flexShrink
+      return (v.kind === 6 && Number.isFinite(v.number) && v.number >= 0);
+    case 42: // flexBasis
+    case 45: // width
+    case 46: // height
+    case 47: // minWidth
+    case 48: // minHeight
+      return (v.kind === 2 && Number.isFinite(v.number) && v.number >= 0) ||
+        (v.kind === 3 && Number.isFinite(v.number) && v.number >= 0) ||
+        (v.kind === 4);
+    case 43: // rowGap
+    case 44: // columnGap
+    case 55: // paddingTop
+    case 56: // paddingRight
+    case 57: // paddingBottom
+    case 58: // paddingLeft
+    case 82: // paddingStart
+    case 83: // paddingEnd
+      return (v.kind === 2 && Number.isFinite(v.number) && v.number >= 0) ||
+        (v.kind === 3 && Number.isFinite(v.number) && v.number >= 0);
+    case 49: // maxWidth
+    case 50: // maxHeight
+      return (v.kind === 2 && Number.isFinite(v.number) && v.number >= 0) ||
+        (v.kind === 3 && Number.isFinite(v.number) && v.number >= 0) ||
+        (v.kind === 5);
+    case 51: // marginTop
+    case 52: // marginRight
+    case 53: // marginBottom
+    case 54: // marginLeft
+    case 59: // top
+    case 60: // right
+    case 61: // bottom
+    case 62: // left
+    case 80: // marginStart
+    case 81: // marginEnd
+    case 84: // insetStart
+    case 85: // insetEnd
+      return (v.kind === 2 && Number.isFinite(v.number)) ||
+        (v.kind === 3 && Number.isFinite(v.number)) ||
+        (v.kind === 4);
+    case 63: // aspectRatio
+      return (v.kind === 6 && Number.isFinite(v.number) && v.number > 0) ||
+        (v.kind === 4);
     default:
       return false;
   }
@@ -244,15 +244,15 @@ export function styleValueValid(prop: number, v: StyleValue, override: boolean):
 
 /** True if a theme token may hold this value. */
 export function styleTokenValueValid(v: StyleValue): boolean {
-  return (v.kind === ValueKind.px && Number.isFinite(v.number)) ||
-        (v.kind === ValueKind.percent && Number.isFinite(v.number)) ||
-        (v.kind === ValueKind.number && Number.isFinite(v.number)) ||
-        (v.kind === ValueKind.color && finite4(v.color)) ||
-        (v.kind === ValueKind.keyword && v.keyword === (v.keyword >>> 0)) ||
-        (v.kind === ValueKind.auto) ||
-        (v.kind === ValueKind.none) ||
-        (v.kind === ValueKind.token && v.token !== 0 && v.token === (v.token >>> 0)) ||
-        (v.kind === ValueKind.string && stringOk(v.string, 1014));
+  return (v.kind === 2 && Number.isFinite(v.number)) ||
+        (v.kind === 3 && Number.isFinite(v.number)) ||
+        (v.kind === 6 && Number.isFinite(v.number)) ||
+        (v.kind === 7 && finite4(v.color)) ||
+        (v.kind === 8 && v.keyword === (v.keyword >>> 0)) ||
+        (v.kind === 4) ||
+        (v.kind === 5) ||
+        (v.kind === 9 && v.token !== 0 && v.token === (v.token >>> 0)) ||
+        (v.kind === 11 && stringOk(v.string, 1014));
 }
 
 /** The values each property takes (token references, inherit and initial aside). */

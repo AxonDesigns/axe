@@ -74,11 +74,13 @@ run replays it. Where a unit test can show the bug more directly, add one too.
 
 ## Benchmarks
 
-`bench/bench_layout` and `bench/bench_text` print the median and the best of several runs.
-Run them from a release build:
+`bench/bench_layout`, `bench/bench_text` and `bench/bench_script` (the script host: encoding
+from JS, startup from source and bytecode, memory, event latency) print the median and the
+best of several runs. Run them from a release build:
 
 ```sh
-cmake --build --preset release && build/release/bench/bench_layout && build/release/bench/bench_text
+cmake --build --preset release
+build/release/bench/bench_layout && build/release/bench/bench_text && build/release/bench/bench_script
 ```
 
 Times vary by 10–20% from run to run on a busy desktop. Compare best runs, and quote ranges
