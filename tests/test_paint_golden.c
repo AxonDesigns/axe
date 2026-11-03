@@ -1,6 +1,6 @@
-// Golden images of the paint properties: borders, opacity groups and clipping, at scales 1.0,
-// 1.25 and 1.5 under both schedulers (tests/golden.h has the rules), plus checks that need
-// no golden:
+// Golden images of the paint properties (borders, opacity groups, clipping) and of a flex
+// layout with text, at scales 1.0, 1.25 and 1.5 under both schedulers (tests/golden.h has
+// the rules), plus checks that need no golden:
 //   - a group's overlapping children composite once at the group's opacity (CSS group
 //     opacity), not each at that opacity;
 //   - a box at rest snaps to whole pixels, a moving one (and its subtree) doesn't.
@@ -120,6 +120,65 @@ static void clipping(builder *b, ui_handle root) {
     box(b, c4, -100, 0, 300, 300, 0.5f, 0.2f, 0.7f, 1);
 }
 
+// A flex layout with text, built only through styles: a card (a column of a title, a
+// wrapping paragraph and a footer row with a label and a padded button at either end) next
+// to a growing column: rows with a dot and text centered on it, a row aligned by baseline,
+// and an item aligned to the end.
+static ui_handle flex(builder *b, ui_handle parent, const ui_style_decl *d, uint32_t count) {
+    ui_handle n;
+    ui_handle_alloc(b->alloc, &n);
+    ui_cmd_create_node(b->w, n, parent);
+    if (count) props(b, n, d, count);
+    return n;
+}
+
+#define FLEX(b, parent, ...) \
+    flex(b, parent, (ui_style_decl[]){__VA_ARGS__}, sizeof((ui_style_decl[]){__VA_ARGS__}) / sizeof(ui_style_decl))
+
+static void flex_text(builder *b, ui_handle root) {
+    props(b, root, (ui_style_decl[]){{UI_STYLE_PADDING_TOP, ui_px(10)}, {UI_STYLE_PADDING_LEFT, ui_px(10)},
+                                     {UI_STYLE_PADDING_RIGHT, ui_px(10)}, {UI_STYLE_COLUMN_GAP, ui_px(10)},
+                                     {UI_STYLE_ALIGN_ITEMS, ui_keyword(UI_FLEX_START)}}, 5);
+    ui_handle card = FLEX(b, root, {UI_STYLE_WIDTH, ui_px(150)}, {UI_STYLE_FLEX_DIRECTION, ui_keyword(UI_FLEX_COLUMN)},
+                          {UI_STYLE_PADDING_TOP, ui_px(10)}, {UI_STYLE_PADDING_RIGHT, ui_px(10)},
+                          {UI_STYLE_PADDING_BOTTOM, ui_px(10)}, {UI_STYLE_PADDING_LEFT, ui_px(10)},
+                          {UI_STYLE_ROW_GAP, ui_px(6)}, {UI_STYLE_BORDER_WIDTH, ui_px(1)},
+                          {UI_STYLE_BORDER_COLOR, ui_rgba(0.8f, 0.82f, 0.86f, 1)},
+                          {UI_STYLE_CORNER_RADIUS, ui_px(8)}, {UI_STYLE_BACKGROUND_COLOR, ui_rgba(1, 1, 1, 1)});
+    text(b, FLEX(b, card, {UI_STYLE_MAX_LINES, ui_number(1)}), "Flex card", 16);
+    ui_handle body = FLEX(b, card, {UI_STYLE_LINE_HEIGHT, ui_number(1.3f)});
+    text(b, body, "A paragraph wraps to the card's width.", 11);
+    ui_handle footer = FLEX(b, card, {UI_STYLE_JUSTIFY_CONTENT, ui_keyword(UI_FLEX_SPACE_BETWEEN)},
+                            {UI_STYLE_ALIGN_ITEMS, ui_keyword(UI_FLEX_CENTER)});
+    text(b, FLEX(b, footer, {UI_STYLE_TEXT_COLOR, ui_rgba(0.45f, 0.47f, 0.5f, 1)}), "#12", 11);
+    text(b, FLEX(b, footer, {UI_STYLE_PADDING_TOP, ui_px(3)}, {UI_STYLE_PADDING_BOTTOM, ui_px(3)},
+                 {UI_STYLE_PADDING_LEFT, ui_px(8)}, {UI_STYLE_PADDING_RIGHT, ui_px(8)},
+                 {UI_STYLE_CORNER_RADIUS, ui_px(5)}, {UI_STYLE_BACKGROUND_COLOR, ui_rgba(0.2f, 0.45f, 0.95f, 1)},
+                 {UI_STYLE_TEXT_COLOR, ui_rgba(1, 1, 1, 1)}),
+         "Open", 11);
+    ui_handle side = FLEX(b, root, {UI_STYLE_FLEX_GROW, ui_number(1)},
+                          {UI_STYLE_FLEX_DIRECTION, ui_keyword(UI_FLEX_COLUMN)}, {UI_STYLE_ROW_GAP, ui_px(6)});
+    static const char *const items[] = {"Centered on its dot", "Grows to fill"};
+    static const float dots[][3] = {{0.9f, 0.3f, 0.2f}, {0.2f, 0.7f, 0.4f}};
+    for (int i = 0; i < 2; i++) {
+        ui_handle row = FLEX(b, side, {UI_STYLE_ALIGN_ITEMS, ui_keyword(UI_FLEX_CENTER)}, {UI_STYLE_COLUMN_GAP, ui_px(6)},
+                             {UI_STYLE_BACKGROUND_COLOR, ui_rgba(0.9f, 0.92f, 0.95f, 1)},
+                             {UI_STYLE_PADDING_TOP, ui_px(4)}, {UI_STYLE_PADDING_BOTTOM, ui_px(4)},
+                             {UI_STYLE_PADDING_LEFT, ui_px(6)}, {UI_STYLE_CORNER_RADIUS, ui_px(4)});
+        FLEX(b, row, {UI_STYLE_WIDTH, ui_px(10)}, {UI_STYLE_HEIGHT, ui_px(10)}, {UI_STYLE_CORNER_RADIUS, ui_px(5)},
+             {UI_STYLE_BACKGROUND_COLOR, ui_rgba(dots[i][0], dots[i][1], dots[i][2], 1)});
+        text(b, FLEX(b, row, {UI_STYLE_FLEX_GROW, ui_number(1)}), items[i], 12);
+    }
+    ui_handle base = FLEX(b, side, {UI_STYLE_ALIGN_ITEMS, ui_keyword(UI_FLEX_BASELINE)}, {UI_STYLE_COLUMN_GAP, ui_px(6)},
+                          {UI_STYLE_BORDER_WIDTH, ui_px(1)}, {UI_STYLE_BORDER_COLOR, ui_rgba(0.85f, 0.6f, 0.2f, 1)});
+    text(b, FLEX(b, base, {UI_STYLE_PADDING_TOP, ui_px(6)}), "Big", 24);
+    text(b, flex(b, base, NULL, 0), "baseline", 12);
+    ui_handle end = FLEX(b, side, {UI_STYLE_ALIGN_SELF, ui_keyword(UI_FLEX_END)},
+                         {UI_STYLE_BACKGROUND_COLOR, ui_rgba(0.95f, 0.85f, 0.95f, 1)},
+                         {UI_STYLE_PADDING_LEFT, ui_px(6)}, {UI_STYLE_PADDING_RIGHT, ui_px(6)});
+    text(b, end, "End", 12);
+}
+
 typedef struct paint_case {
     const char *name;
     void (*build)(builder *b, ui_handle root);
@@ -129,6 +188,7 @@ static const paint_case cases[] = {
     {"paint_borders", borders},
     {"paint_opacity", opacity},
     {"paint_clipping", clipping},
+    {"paint_flex_text", flex_text},
 };
 
 typedef struct paint_logic {

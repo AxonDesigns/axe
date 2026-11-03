@@ -134,7 +134,6 @@ static ui_result init_text(ui_core *c, const ui_text_config *cfg) {
     };
     r = ui_preparer_create(&pd, &c->preparer);
     if (r != UI_OK) return r;
-    ui_preparer_start_discovery(c->preparer);
     c->text_contrast = env_float("UI_TEXT_CONTRAST", cfg->contrast > 0 ? cfg->contrast : UI_TEXT_DEFAULT_CONTRAST);
     c->text_gamma = env_float("UI_TEXT_GAMMA", cfg->gamma > 0 ? cfg->gamma : 1.f);
     return UI_OK;
@@ -172,7 +171,7 @@ ui_result ui_core_init(ui_core *c, const ui_core_desc *desc) {
         ui_jobs_destroy(c->own_jobs);
         ui_queue_destroy(&c->from_logic, NULL);
         ui_actor_destroy(&c->actor);
-        ui_preparer_destroy(c->preparer); // discovery starts last, so no job is running
+        ui_preparer_destroy(c->preparer); // discovery starts at the first step: no job runs
         ui_atlas_destroy(c->atlas);
         ui_glyph_cache_destroy(c->glyphs);
         ui_text_context_free(&c->text);
@@ -377,6 +376,9 @@ static void handle(ui_core *c, ui_msg msg) {
 }
 
 static void drain(ui_core *c) {
+    // Font discovery starts with the core's first step, not at init: its completion wakes
+    // the platform, which an app creates after the core (and may fail to create).
+    ui_preparer_start_discovery(c->preparer);
     ui_msg msg;
     // Reserve room for every queued command buffer before taking any, so the logic channel
     // stays lossless and ordered even when memory is short: on failure the messages simply

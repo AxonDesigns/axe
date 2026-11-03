@@ -5,7 +5,8 @@
 //     applies until the worker is released, then both apply in the same frame;
 //   - both schedulers: ui_app_frame applies a buffer queued before it, with the text shaped
 //     and its glyphs rasterized by workers (none on the core), and the pictures match byte
-//     for byte.
+//     for byte;
+//   - an app whose platform fails to start returns the error (font discovery hasn't woken it).
 #include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
@@ -244,8 +245,31 @@ static void test_schedulers_match(void) {
     ui_image_free(&threaded);
 }
 
+// An app whose platform can't start fails cleanly. Regression: font discovery started as a
+// job while the core was created, before the platform; when the platform then failed, the
+// job's completion woke the missing platform and crashed.
+static void test_failed_start(void) {
+    const char *saved = getenv("WAYLAND_DISPLAY");
+    char *copy = saved ? strdup(saved) : NULL;
+    setenv("WAYLAND_DISPLAY", "axe-test-no-such-display", 1);
+    for (int k = 0; k < 2; k++) {
+        ui_app_desc desc = {
+            .scheduler = k ? UI_SCHEDULER_THREADED : UI_SCHEDULER_SINGLE,
+            .gpu = UI_GPU_SOFTWARE,
+            .surface = {.kind = UI_SURFACE_WINDOW, .width = WIDTH, .height = HEIGHT},
+            .text = {.font_files = font_files, .font_file_count = 1, .system_fonts = true},
+        };
+        ui_app *app = NULL;
+        CHECK(ui_app_create(&desc, &app) == UI_ERR_PLATFORM && !app);
+    }
+    if (copy) setenv("WAYLAND_DISPLAY", copy, 1);
+    else unsetenv("WAYLAND_DISPLAY");
+    free(copy);
+}
+
 int main(void) {
     RUN(test_held_preparation);
     RUN(test_schedulers_match);
+    RUN(test_failed_start);
     return test_failures != 0;
 }

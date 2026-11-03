@@ -12,3 +12,8 @@ add_executable(text_paragraph text_paragraph/main.c)
 target_compile_definitions(text_paragraph PRIVATE AXE_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
 target_link_libraries(text_paragraph PRIVATE ui)
 ui_target_warnings(text_paragraph)
+
+add_executable(layout_cards layout_cards/main.c)
+target_compile_definitions(layout_cards PRIVATE AXE_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
+target_link_libraries(layout_cards PRIVATE ui)
+ui_target_warnings(layout_cards)

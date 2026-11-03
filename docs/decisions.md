@@ -5,6 +5,20 @@ milestone first.
 
 ## Milestone 2: layout and styles
 
+### Example and goldens
+- **`examples/layout_cards`**: a wrapping grid of cards (a title, a paragraph, a footer row
+  with a label and a button), all colors from eight theme tokens with color transitions,
+  cards with `transition(layout)`. A timer inserts, moves or removes a card every 2.5 s
+  (`move_node`, with a seeded generator so runs repeat), another switches light and dark
+  every 4 s. `--headless --at S` steps a paused clock to S seconds and writes a PPM, which
+  shows a slide or a theme change mid-flight.
+- **Checked in a nested headless sway** at 1.25× under both schedulers: about 61 fps
+  while animating, idle at rest, no late frames, a resize through `swaymsg` reflows the
+  grid, and closing the window exits cleanly.
+- **New golden `paint_flex_text`** (1.0, 1.25, 1.5): a flex layout with text built only
+  through styles, with wrapping, `space-between`, centering, baseline alignment and
+  `align-self: end`. Checked in the `axe-ci-ubuntu:24.04` image against CI's Mesa.
+
 ### Layout engine
 - **Own flexbox, CSS semantics** (`src/layout/flex.c`, `docs/layout.md`):
   - every node is a flex container with CSS's initial values, sized as border-box;
@@ -295,9 +309,12 @@ milestone first.
     happens at the same point under both schedulers.
   - A lock orders "this text is done at generation g" against registration, so every item
     is either found stale by the registration or sees the new generation itself.
-- **Font discovery initializes on a worker** at startup (`defer_discovery`). Received
-  buffers start preparing only once it is done, so nothing is shaped without the system
-  fonts. Until then buffers wait; frames don't.
+- **Font discovery initializes on a worker** at startup (`defer_discovery`), from the core's
+  first step. Received buffers start preparing only once it is done, so nothing is shaped
+  without the system fonts. Until then buffers wait; frames don't. (It first started while
+  the core was created, before the platform: an app whose platform failed then crashed
+  when the job's completion woke it. Found with the `layout_cards` example; covered by
+  `test_prepare`'s `test_failed_start`.)
 - **Determinism:**
   - `ui_app_frame` and `ui_app_step_core` first wait until every queued buffer is prepared
     (`wait_prepared`), and "idle" now includes no preparation in flight. A buffer queued
