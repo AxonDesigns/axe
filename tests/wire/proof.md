@@ -54,7 +54,8 @@ codec. What stays is `fixtures/`: 575 buffers and, next to each, the dump the pr
 made of it (`.bin.txt`):
 
 - 225 recorded buffers chosen to cover every op and event and the sizes they came in;
-- 175 inputs from the fuzzer's corpus, each as a command buffer and as an event buffer.
+- 175 inputs from the fuzzer's corpus, each as a command buffer and as an event buffer
+  (395 command buffers and 180 event buffers in all).
 
 `tests/test_wire_fixtures.c` dumps each with the generated codec and requires the same text,
 so the generated code keeps decoding what the hand-written code decoded.

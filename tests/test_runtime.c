@@ -199,7 +199,7 @@ static void test_scene_rejects_malformed_atomically(void) {
     size_t size;
     take(w, &bytes, &size);
     // Corrupt the second op's size: the whole buffer must be rejected, including op 1.
-    size_t second = UI_WIRE_HEADER_SIZE + 4 + UI_WIRE_SIZE_CREATE_NODE;
+    size_t second = UI_WIRE_HEADER_SIZE + 4 + UI_WIRE_CREATE_NODE_SIZE;
     ui_wire_put_u16(bytes + second + 2, 8);
     CHECK(ui_scene_apply(&sc, bytes, size, 0) == UI_ERR_MALFORMED);
     CHECK_EQ_INT(sc.stats.applied, 0);

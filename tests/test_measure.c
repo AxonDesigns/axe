@@ -106,7 +106,7 @@ static void test_wire(void) {
     uint8_t *bytes;
     size_t size;
     ui_cmd_writer_take(w, &bytes, &size);
-    CHECK(size == UI_WIRE_HEADER_SIZE + UI_WIRE_OP_HEADER_SIZE + UI_WIRE_SIZE_REQUEST_LAYOUT);
+    CHECK(size == UI_WIRE_HEADER_SIZE + UI_WIRE_OP_HEADER_SIZE + UI_WIRE_REQUEST_LAYOUT_SIZE);
     CHECK(ui_scene_validate(bytes, size) == UI_OK);
     bytes[UI_WIRE_HEADER_SIZE + 2] = 4 + 8; // too short for its opcode: the buffer is rejected
     CHECK(ui_scene_validate(bytes, size) == UI_ERR_MALFORMED);

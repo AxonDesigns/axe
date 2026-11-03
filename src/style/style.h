@@ -155,17 +155,17 @@ void ui_styles_init(ui_styles *s);
 void ui_styles_free(ui_styles *s);
 
 // Applying ops. Each returns false when the op is dropped (invalid, or out of memory). The
-// payloads' framing was validated (ui_style_walk).
-bool ui_styles_define(ui_styles *s, const uint8_t *payload, uint32_t size);
+// payloads' framing was validated (ui_wire_validate_commands); *id is the op's id either way.
+bool ui_styles_define(ui_styles *s, const uint8_t *payload, uint32_t *id);
 bool ui_styles_destroy(ui_styles *s, uint32_t id);
-bool ui_styles_set_token(ui_styles *s, const uint8_t *payload, uint32_t size);
+bool ui_styles_set_token(ui_styles *s, const uint8_t *payload, uint32_t *id);
 const ui_style_def *ui_styles_find(const ui_styles *s, uint32_t id);
 
-// Decodes `count` entries from p[0..bytes) (validated framing) into out (room for count).
+// Decodes `count` entries starting at p (validated framing) into out (room for count).
 // Entries with an unknown property or kind are skipped. False if a known one is invalid
 // (nothing is then kept). Strings are interned: the caller owns a reference to each.
-bool ui_style_decode(ui_styles *s, const uint8_t *p, uint32_t bytes, uint32_t count, bool override,
-                     ui_style_entry *out, uint32_t *out_count);
+bool ui_style_decode(ui_styles *s, const uint8_t *p, uint32_t count, bool override, ui_style_entry *out,
+                     uint32_t *out_count);
 
 // Interned strings. Intern returns the shared bytes with a new reference (NULL: out of
 // memory); release drops one. A value holding a string (ui_value) is retained and released
@@ -177,12 +177,6 @@ void ui_styles_release_value(ui_styles *s, const ui_value *v);
 // Frees the strings nothing refers to any more. Call when no computed value can still
 // point at one (after resolution).
 void ui_styles_collect(ui_styles *s);
-
-// Checks the framing of `count` entries in p[0..bytes): every entry at least its header,
-// none past the end. *end is where they stop.
-bool ui_style_walk(const uint8_t *p, uint32_t bytes, uint32_t count, uint32_t *end);
-// Checks the framing of a define_style payload (blocks and their entries).
-bool ui_style_walk_define(const uint8_t *payload, uint32_t size);
 
 // The token a value refers to resolved through chains of tokens; false for a missing token
 // or a cycle (the declaration then counts as absent).

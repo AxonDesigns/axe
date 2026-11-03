@@ -7,10 +7,11 @@ The language runtime and the core talk only through two binary buffers:
 - **Event buffer**: core → logic. What happened: frames committed, surfaces resized or
   asked to close.
 
-Both share one framing. The C encoder and decoder live in `src/wire/`; the public API is
-`include/ui/wire.h`. Later milestones will generate encoders and decoders from the IDL.
-Writers and readers of different ages interoperate: see
-[Evolving the format](#evolving-the-format).
+Both share one framing. Every op, event and record is described once, in `idl/wire.idl`
+([`docs/idl.md`](idl.md)), and every encoder and decoder is generated from it: the C codec
+(`src/wire/gen/`) used by the C API's writer (`include/ui/wire.h`) and by the core, and the
+TypeScript package `@axe/wire`. The tables below are generated too. Writers and readers of
+different ages interoperate: see [Evolving the format](#evolving-the-format).
 
 ## Encoding rules
 
@@ -327,8 +328,8 @@ Ops and events change without a version bump as long as each change follows thes
 
 ### Op history
 
-Every appended field, with the change that added it. Ops and events not listed are at
-their original size.
+Every appended field, with the change that added it (`since` in the IDL). Ops and events not
+listed are at their original size.
 
 <!-- idl:history -->
 | Op | Original size | Appended |

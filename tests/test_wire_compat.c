@@ -188,7 +188,7 @@ static void as_newer(const ui_wire_op *op, ui_wire_buf *out) {
     }
     case UI_OP_APPEND_TEXT: {
         uint32_t chunk = ui_wire_get_u16(in + 8);
-        memcpy(pending.text + pending.have, in + UI_WIRE_SIZE_APPEND_TEXT_HEADER, chunk);
+        memcpy(pending.text + pending.have, in + UI_WIRE_APPEND_TEXT_SIZE, chunk);
         pending.have += chunk;
         if (pending.have == pending.total) put_newer_text(out);
         return;
@@ -319,8 +319,8 @@ static ui_result apply_patched(uint16_t opcode, const uint8_t *payload, uint32_t
 static void test_too_short(void) {
     // Below an op's original size, the buffer is rejected.
     uint8_t zeros[256] = {0};
-    CHECK(apply_patched(UI_OP_SET_RECT, zeros, UI_WIRE_SIZE_SET_RECT - 4) == UI_ERR_MALFORMED);
-    CHECK(apply_patched(UI_OP_SET_RECT, zeros, UI_WIRE_SIZE_SET_RECT) == UI_OK); // dropped
+    CHECK(apply_patched(UI_OP_SET_RECT, zeros, UI_WIRE_SET_RECT_SIZE - 4) == UI_ERR_MALFORMED);
+    CHECK(apply_patched(UI_OP_SET_RECT, zeros, UI_WIRE_SET_RECT_SIZE) == UI_OK); // dropped
     CHECK(apply_patched(UI_OP_SET_TEXT, zeros, 60) == UI_ERR_MALFORMED);
 
     // set_text sizes that are below the original or not a multiple of 4.
@@ -362,7 +362,7 @@ static void test_unknown_ops(void) {
     ui_wire_buf b;
     ui_wire_buf_init(&b, UI_WIRE_MAGIC_CMD);
     emit(&b, 200, 0);
-    uint8_t *p = emit(&b, UI_OP_CREATE_NODE, UI_WIRE_SIZE_CREATE_NODE);
+    uint8_t *p = emit(&b, UI_OP_CREATE_NODE, UI_WIRE_CREATE_NODE_SIZE);
     ui_wire_put_handle(ui_wire_put_handle(p, node), surface);
     memset(emit(&b, 201, 4), FILL, 4);
     size_t n;
@@ -386,11 +386,11 @@ static void test_unknown_ops(void) {
 static void test_start_spring_unknown(void) {
     ui_wire_buf b;
     ui_wire_buf_init(&b, UI_WIRE_MAGIC_CMD);
-    uint8_t *p = emit(&b, UI_OP_CREATE_NODE, UI_WIRE_SIZE_CREATE_NODE);
+    uint8_t *p = emit(&b, UI_OP_CREATE_NODE, UI_WIRE_CREATE_NODE_SIZE);
     ui_wire_put_handle(ui_wire_put_handle(p, node), surface);
     const struct { uint16_t property, count; float target; } cases[] = {{77, 0, 0}, {77, 1, 5}, {UI_PROP_CORNER_RADIUS, 1, -3}};
     for (size_t i = 0; i < sizeof cases / sizeof *cases; i++) {
-        p = emit(&b, UI_OP_START_SPRING, UI_WIRE_SIZE_START_SPRING_BASE + 4u * cases[i].count);
+        p = emit(&b, UI_OP_START_SPRING, UI_WIRE_START_SPRING_SIZE + 4u * cases[i].count);
         p = ui_wire_put_handle(p, node);
         p = ui_wire_put_u16(p, cases[i].property);
         p = ui_wire_put_u16(p, cases[i].count);
@@ -428,7 +428,7 @@ static void test_styles(void) {
     ui_wire_buf b;
     ui_wire_buf_init(&b, UI_WIRE_MAGIC_CMD);
     memcpy(emit(&b, UI_OP_DEFINE_STYLE, sizeof define), define, sizeof define);
-    uint8_t *p = emit(&b, UI_OP_CREATE_NODE, UI_WIRE_SIZE_CREATE_NODE);
+    uint8_t *p = emit(&b, UI_OP_CREATE_NODE, UI_WIRE_CREATE_NODE_SIZE);
     ui_wire_put_handle(ui_wire_put_handle(p, node), surface);
     // set_props with a 16-byte header and an unknown entry before a known one.
     p = emit(&b, UI_OP_SET_PROPS, 16 + 4 + 8);
@@ -518,7 +518,7 @@ static void test_styles(void) {
     captured cs = {0};
     scene_init(&sc, &cs);
     ui_wire_buf_init(&b, UI_WIRE_MAGIC_CMD);
-    p = emit(&b, UI_OP_CREATE_NODE, UI_WIRE_SIZE_CREATE_NODE);
+    p = emit(&b, UI_OP_CREATE_NODE, UI_WIRE_CREATE_NODE_SIZE);
     ui_wire_put_handle(ui_wire_put_handle(p, node), surface);
     memcpy(emit(&b, UI_OP_SET_PROPS, sizeof string), string, sizeof string);
     string[16] = 2; // now it fits: applied
@@ -538,20 +538,20 @@ static void test_events(void) {
     // are skipped, and the events after them still read correctly.
     ui_wire_buf b;
     ui_wire_buf_init(&b, UI_WIRE_MAGIC_EVENT);
-    uint8_t *p = emit(&b, UI_EVENT_FRAME_COMMITTED, UI_WIRE_SIZE_FRAME_COMMITTED + 8);
-    memset(p, FILL, UI_WIRE_SIZE_FRAME_COMMITTED + 8);
+    uint8_t *p = emit(&b, UI_EVENT_FRAME_COMMITTED, UI_WIRE_FRAME_COMMITTED_SIZE + 8);
+    memset(p, FILL, UI_WIRE_FRAME_COMMITTED_SIZE + 8);
     p = ui_wire_put_handle(p, surface);
     p = ui_wire_put_u64(p, 42);
     ui_wire_put_u64(p, 1000);
-    p = emit(&b, UI_EVENT_TIMER_FIRED, UI_WIRE_SIZE_TIMER_FIRED + 4);
-    memset(p, FILL, UI_WIRE_SIZE_TIMER_FIRED + 4);
+    p = emit(&b, UI_EVENT_TIMER_FIRED, UI_WIRE_TIMER_FIRED_SIZE + 4);
+    memset(p, FILL, UI_WIRE_TIMER_FIRED_SIZE + 4);
     p = ui_wire_put_u32(p, 7);
     p = ui_wire_put_u32(p, 0);
     p = ui_wire_put_u64(p, 5);
     ui_wire_put_u64(p, 6);
     CHECK(ui_wire_surface_close_requested_put(&b, &(ui_wire_surface_close_requested){surface}) == UI_OK);
-    p = emit(&b, UI_EVENT_LAYOUT_MEASURED, UI_WIRE_SIZE_LAYOUT_MEASURED + 12);
-    memset(p, FILL, UI_WIRE_SIZE_LAYOUT_MEASURED + 12);
+    p = emit(&b, UI_EVENT_LAYOUT_MEASURED, UI_WIRE_LAYOUT_MEASURED_SIZE + 12);
+    memset(p, FILL, UI_WIRE_LAYOUT_MEASURED_SIZE + 12);
     p = ui_wire_put_u32(p, 9);
     p = ui_wire_put_u32(p, (uint32_t)UI_OK);
     p = ui_wire_put_handle(p, node);
@@ -575,7 +575,7 @@ static void test_events(void) {
 
     // Shorter than the original size is malformed.
     ui_wire_buf_init(&b, UI_WIRE_MAGIC_EVENT);
-    const uint32_t short_size = UI_WIRE_SIZE_TIMER_FIRED - 8;
+    const uint32_t short_size = UI_WIRE_TIMER_FIRED_SIZE - 8;
     memset(emit(&b, UI_EVENT_TIMER_FIRED, short_size), 0, short_size);
     bytes = ui_wire_buf_finish(&b, &n);
     CHECK(ui_event_reader_init(&rd, bytes, n) == UI_OK);

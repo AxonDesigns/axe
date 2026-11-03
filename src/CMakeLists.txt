@@ -35,7 +35,6 @@ add_library(ui STATIC
     platform/wayland/pacing.c
     platform/wayland/wayland.c
     render/render.c
-    style/props.c
     style/style.c
     text/atlas.c
     text/font_registry.c
@@ -83,12 +82,3 @@ foreach(xml IN ITEMS
 endforeach()
 target_link_libraries(ui_wayland_protocols PUBLIC PkgConfig::WAYLAND)
 target_link_libraries(ui PRIVATE ui_wayland_protocols)
-
-# The migration proof (tests/wire/proof.md): the pre-IDL encoders run next to the generated
-# ones and every call must produce identical bytes. Temporary, for milestone 3a.
-option(UI_WIRE_PROOF "Check the generated wire encoders against the pre-IDL ones" OFF)
-if(UI_WIRE_PROOF)
-    target_sources(ui PRIVATE ${PROJECT_SOURCE_DIR}/tests/wire/legacy_wire.c)
-    target_include_directories(ui PRIVATE ${PROJECT_SOURCE_DIR}/tests/wire)
-    target_compile_definitions(ui PUBLIC UI_WIRE_PROOF=1)
-endif()

@@ -4,8 +4,7 @@
 #include <string.h>
 
 #include "core/text_op.h"
-#include "style/props.h"
-#include "wire/wire.h"
+#include "wire/gen/wire_gen.h"
 
 // One node as the preview knows it: what the buffer does to it (when `over`), and the text
 // values computed for it after the buffer (memo).
@@ -244,12 +243,17 @@ static void styles_of(const ui_preview *p, const pv_node *e, const uint32_t **id
 
 // ---- Reading the buffer ------------------------------------------------------------------
 
+#define READ_OP(type, var)                                                                  \
+    ui_wire_##type var;                                                                     \
+    ui_wire_##type##_read(op->payload, op->payload_size, &var)
+
 static void read_op(ui_preview *p, const ui_wire_op *op, const ui_wire_reader *after) {
     const uint8_t *q = op->payload;
     const ui_scene *s = p->scene;
     switch (op->opcode) {
     case UI_OP_CREATE_NODE: {
-        ui_handle h = ui_wire_get_handle(q), parent = ui_wire_get_handle(q + 8);
+        READ_OP(create_node, o);
+        ui_handle h = o.node, parent = o.parent;
         if (ui_handle_kind_of(h) != UI_HANDLE_NODE) return;
         pv_node *e = get(p, ui_handle_slot(h));
         if (!e) return;
@@ -277,12 +281,14 @@ static void read_op(ui_preview *p, const ui_wire_op *op, const ui_wire_reader *a
         return;
     }
     case UI_OP_DESTROY_NODE: {
-        ui_handle h = ui_wire_get_handle(q);
+        READ_OP(destroy_node, o);
+        ui_handle h = o.node;
         if (alive(p, h)) touch(p, ui_handle_slot(h))->exists = false;
         return;
     }
     case UI_OP_MOVE_NODE: {
-        ui_handle h = ui_wire_get_handle(q), parent = ui_wire_get_handle(q + 8);
+        READ_OP(move_node, o);
+        ui_handle h = o.node, parent = o.parent;
         if (!alive(p, h)) return;
         uint32_t slot = ui_handle_slot(h), root = UI_MAX_SURFACES, parent_slot = UI_NO_SLOT;
         if (ui_handle_kind_of(parent) == UI_HANDLE_SURFACE) {
@@ -295,7 +301,7 @@ static void read_op(ui_preview *p, const ui_wire_op *op, const ui_wire_reader *a
         }
         if (root == UI_MAX_SURFACES) return;
         // As the scene: a `before` must be another node under the new parent.
-        ui_handle before = ui_wire_get_handle(q + 16);
+        ui_handle before = o.before;
         if (!ui_handle_is_null(before)) {
             if (!alive(p, before) || ui_handle_slot(before) == slot) return;
             if (get(p, ui_handle_slot(before))->parent != parent_slot || root_of(p, ui_handle_slot(before)) != root)
@@ -308,13 +314,17 @@ static void read_op(ui_preview *p, const ui_wire_op *op, const ui_wire_reader *a
         return;
     }
     case UI_OP_SET_STYLES: {
-        ui_handle h = ui_wire_get_handle(q);
+        ui_wire_set_styles o;
+        ui_wire_set_styles_read(q, ui_wire_set_styles_header_size(q), &o);
+        ui_wire_set_styles_tail t;
+        ui_wire_set_styles_tail_of(q, &o, &t);
+        ui_handle h = o.node;
         if (!alive(p, h)) return;
-        uint32_t count = ui_wire_get_u16(q + 8);
-        const uint8_t *ids = q + ui_wire_set_styles_header(q);
+        uint32_t count = o.count;
         // As the scene: a 0 id, or more than 255, drops the op.
+        if (count > UINT8_MAX) return;
         for (uint32_t i = 0; i < count; i++)
-            if (!ui_wire_get_u32(ids + 4 * i) || i >= UINT8_MAX) return;
+            if (!ui_wire_set_styles_ids_at(&t, i)) return;
         pv_node *e = touch(p, ui_handle_slot(h));
         const uint32_t *old;
         uint32_t old_count;
@@ -328,7 +338,7 @@ static void read_op(ui_preview *p, const ui_wire_op *op, const ui_wire_reader *a
             return;
         }
         for (uint32_t i = 0; i < count; i++) {
-            list[i] = ui_wire_get_u32(ids + 4 * i);
+            list[i] = ui_wire_set_styles_ids_at(&t, i);
             if (!p->global) p->global = def_has_text(ui_style_view_find(&v, list[i]), false);
         }
         if (e->styles_set) free(e->styles);
@@ -338,15 +348,19 @@ static void read_op(ui_preview *p, const ui_wire_op *op, const ui_wire_reader *a
         return;
     }
     case UI_OP_SET_PROPS: {
-        ui_handle h = ui_wire_get_handle(q);
+        ui_wire_set_props o;
+        ui_wire_set_props_read(q, ui_wire_set_props_header_size(q), &o);
+        ui_wire_set_props_tail t;
+        ui_wire_set_props_tail_of(q, &o, &t);
+        ui_handle h = o.node;
         if (!alive(p, h)) return;
-        uint32_t header = ui_wire_set_props_header(q), count = ui_wire_get_u16(q + 10), n;
+        uint32_t count = o.entry_count, n;
         ui_style_entry local[16], *entries = count <= 16 ? local : malloc(count * sizeof *entries);
         if (!entries) {
             p->failed = true;
             return;
         }
-        if (ui_style_decode(&p->over, q + header, op->payload_size - header, count, true, entries, &n)) {
+        if (ui_style_decode(&p->over, t.entries, count, true, entries, &n)) {
             pv_node *e = touch(p, ui_handle_slot(h));
             copy_overrides(p, e);
             for (uint32_t i = 0; i < n; i++) {
@@ -358,11 +372,12 @@ static void read_op(ui_preview *p, const ui_wire_op *op, const ui_wire_reader *a
         return; // the strings stay interned in `over` until the preview is destroyed
     }
     case UI_OP_SET_STATE: {
-        ui_handle h = ui_wire_get_handle(q);
+        READ_OP(set_state, o);
+        ui_handle h = o.node;
         if (!alive(p, h)) return;
         pv_node *e = touch(p, ui_handle_slot(h));
         uint8_t state = e->state_set ? e->state : s->nodes[e->slot].state;
-        uint32_t mask = ui_wire_get_u32(q + 8), value = ui_wire_get_u32(q + 12);
+        uint32_t mask = o.mask, value = o.value;
         e->state = (uint8_t)((state & ~mask) | (value & mask));
         e->state_set = true;
         if (!p->global && e->state != state) {
@@ -376,7 +391,9 @@ static void read_op(ui_preview *p, const ui_wire_op *op, const ui_wire_reader *a
         return;
     }
     case UI_OP_SET_TEXT: {
-        ui_handle h = ui_wire_get_handle(q);
+        ui_wire_set_text o;
+        ui_wire_set_text_read(q, ui_wire_set_text_header_size(q), &o);
+        ui_handle h = o.node;
         if (!alive(p, h)) return;
         pv_node *e = touch(p, ui_handle_slot(h));
         if (ui_grow((void **)&e->texts, &e->text_capacity, e->text_count + 1, sizeof *e->texts) != UI_OK) {
@@ -393,8 +410,8 @@ static void read_op(ui_preview *p, const ui_wire_op *op, const ui_wire_reader *a
         return;
     }
     case UI_OP_DEFINE_STYLE: {
-        uint32_t id = ui_wire_get_u32(q);
-        if (ui_styles_define(&p->over, q, op->payload_size)) {
+        uint32_t id;
+        if (ui_styles_define(&p->over, q, &id)) {
             drop(p->gone_defs, &p->gone_def_count, id);
             add(p, &p->changed_defs, &p->changed_def_count, &p->changed_def_capacity, id);
             p->global = true;
@@ -402,7 +419,8 @@ static void read_op(ui_preview *p, const ui_wire_op *op, const ui_wire_reader *a
         return;
     }
     case UI_OP_DESTROY_STYLE: {
-        uint32_t id = ui_wire_get_u32(q);
+        READ_OP(destroy_style, o);
+        uint32_t id = o.id;
         ui_styles_destroy(&p->over, id);
         add(p, &p->gone_defs, &p->gone_def_count, &p->gone_def_capacity, id);
         add(p, &p->changed_defs, &p->changed_def_count, &p->changed_def_capacity, id);
@@ -410,10 +428,14 @@ static void read_op(ui_preview *p, const ui_wire_op *op, const ui_wire_reader *a
         return;
     }
     case UI_OP_SET_TOKEN: {
-        uint32_t id = ui_wire_get_u32(q);
-        const uint8_t *entry = q + UI_WIRE_SIZE_SET_TOKEN_HEADER;
-        if (!ui_styles_set_token(&p->over, q, op->payload_size)) return;
-        if (entry[2] == UI_VALUE_UNSET) add(p, &p->gone_tokens, &p->gone_token_count, &p->gone_token_capacity, id);
+        READ_OP(set_token, o);
+        ui_wire_set_token_tail t;
+        ui_wire_set_token_tail_of(q, &o, &t);
+        ui_wire_style_entry entry;
+        ui_wire_style_entry_read(t.entry, UI_WIRE_STYLE_ENTRY_SIZE, &entry);
+        uint32_t id;
+        if (!ui_styles_set_token(&p->over, q, &id)) return;
+        if (entry.kind == UI_VALUE_UNSET) add(p, &p->gone_tokens, &p->gone_token_count, &p->gone_token_capacity, id);
         else drop(p->gone_tokens, &p->gone_token_count, id);
         add(p, &p->changed_tokens, &p->changed_token_count, &p->changed_token_capacity, id);
         p->global = true;

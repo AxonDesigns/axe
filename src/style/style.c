@@ -5,10 +5,7 @@
 #include <string.h>
 
 #include "core/color.h"
-#include "style/props.h"
-#include "wire/wire.h"
-
-#define STYLE_BLOCK_HEADER 8u
+#include "wire/gen/wire_gen.h"
 
 // A removed slot in the string table.
 static ui_istr string_tombstone;
@@ -148,66 +145,7 @@ void ui_styles_collect(ui_styles *s) {
     s->garbage_count = 0;
 }
 
-// ---- Framing and decoding ----------------------------------------------------------------
-
-bool ui_style_walk(const uint8_t *p, uint32_t bytes, uint32_t count, uint32_t *end) {
-    uint32_t off = 0;
-    for (uint32_t i = 0; i < count; i++) {
-        if (bytes - off < UI_WIRE_STYLE_ENTRY_HEADER || off > bytes) return false;
-        uint32_t words = p[off + 3];
-        if (!words || words * 4u > bytes - off) return false;
-        off += words * 4u;
-    }
-    *end = off;
-    return true;
-}
-
-bool ui_style_walk_define(const uint8_t *payload, uint32_t size) {
-    uint32_t header = ui_wire_define_style_header(payload);
-    if (header < UI_WIRE_SIZE_DEFINE_STYLE_HEADER || header % 4 || header > size) return false;
-    uint32_t blocks = ui_wire_get_u16(payload + 6), off = header;
-    for (uint32_t b = 0; b < blocks; b++) {
-        if (size - off < STYLE_BLOCK_HEADER) return false;
-        const uint8_t *bp = payload + off;
-        uint32_t bytes = ui_wire_get_u16(bp), bh = ui_wire_size_or(bp + 6, STYLE_BLOCK_HEADER);
-        uint32_t end;
-        if (bytes < STYLE_BLOCK_HEADER || bytes % 4 || bytes > size - off || bh < STYLE_BLOCK_HEADER ||
-            bh % 4 || bh > bytes || !ui_style_walk(bp + bh, bytes - bh, ui_wire_get_u16(bp + 4), &end))
-            return false;
-        off += bytes;
-    }
-    return true;
-}
-
-// Reads the value of a known kind; false if the entry is too short for it.
-static bool read_value(const uint8_t *e, ui_value *v) {
-    uint8_t kind = e[2];
-    uint32_t words = ui_style_kind_words(kind);
-    if (e[3] < words) return false;
-    const uint8_t *p = e + UI_WIRE_STYLE_ENTRY_HEADER;
-    *v = (ui_value){.kind = (ui_value_kind)kind};
-    switch (kind) {
-    case UI_VALUE_PX:
-    case UI_VALUE_PERCENT:
-    case UI_VALUE_NUMBER: v->number = ui_wire_get_f32(p); break;
-    case UI_VALUE_KEYWORD: v->keyword = ui_wire_get_u32(p); break;
-    case UI_VALUE_TOKEN: v->token = ui_wire_get_u32(p); break;
-    case UI_VALUE_SPRING:
-        v->spring.stiffness = ui_wire_get_f32(p);
-        v->spring.damping = ui_wire_get_f32(p + 4);
-        break;
-    case UI_VALUE_COLOR:
-        for (int i = 0; i < 4; i++) v->color[i] = ui_wire_get_f32(p + 4 * i);
-        break;
-    case UI_VALUE_STRING: // the bytes stay in the buffer until interned
-        v->string.length = ui_wire_get_u16(p);
-        v->string.bytes = (const char *)p + 2;
-        if (2 + v->string.length > (e[3] - 1u) * 4) return false;
-        break;
-    default: break;
-    }
-    return true;
-}
+// ---- Decoding --------------------------------------------------------------------------
 
 // Interns a decoded string value in place (the buffer's bytes become the shared ones).
 static bool intern_value(ui_styles *s, ui_value *v) {
@@ -218,19 +156,21 @@ static bool intern_value(ui_styles *s, ui_value *v) {
     return true;
 }
 
-bool ui_style_decode(ui_styles *s, const uint8_t *p, uint32_t bytes, uint32_t count, bool override,
-                     ui_style_entry *out, uint32_t *out_count) {
-    (void)bytes; // framing checked by ui_style_walk
-    uint32_t n = 0, off = 0;
+bool ui_style_decode(ui_styles *s, const uint8_t *p, uint32_t count, bool override, ui_style_entry *out,
+                     uint32_t *out_count) {
+    uint32_t n = 0;
     bool ok = true;
     for (uint32_t i = 0; ok && i < count; i++) {
-        const uint8_t *e = p + off;
-        off += e[3] * 4u;
-        uint16_t prop = ui_wire_get_u16(e);
+        const uint8_t *e = p;
+        p += ui_wire_style_entry_size(e);
+        ui_wire_style_entry h;
+        ui_wire_style_entry_read(e, UI_WIRE_STYLE_ENTRY_SIZE, &h);
         // Newer writers' properties and kinds are skipped, not errors.
-        if (!ui_style_prop_known(prop) || !ui_style_kind_words(e[2])) continue;
+        if (!ui_wire_style_prop_known(h.property) || !ui_wire_value_kind_words(h.kind)) continue;
         ui_value v;
-        ok = read_value(e, &v) && ui_style_value_valid(prop, &v, override) && intern_value(s, &v);
+        ok = ui_wire_style_value_read(e, &v) && ui_wire_style_value_valid(h.property, &v, override) &&
+             intern_value(s, &v);
+        uint16_t prop = h.property;
         if (ok && v.kind == UI_VALUE_COLOR) ui_color_from_wire(v.color, v.color); // linear, once
         if (ok) out[n++] = ui_style_entry_of(prop, v);
     }
@@ -299,33 +239,44 @@ static bool note_change(uint32_t **list, uint32_t *count, uint32_t *capacity, ui
     return true;
 }
 
-bool ui_styles_define(ui_styles *s, const uint8_t *payload, uint32_t size) {
-    uint32_t id = ui_wire_get_u32(payload);
-    if (!id) return false;
-    uint32_t header = ui_wire_define_style_header(payload);
-    uint32_t blocks = ui_wire_get_u16(payload + 6);
-    uint32_t total = 0, off = header;
+// A block's header and where its entries are.
+static const uint8_t *read_block(const uint8_t *bp, ui_wire_style_block *b) {
+    ui_wire_style_block_read(bp, ui_wire_style_block_header_size(bp), b);
+    ui_wire_style_block_tail t;
+    ui_wire_style_block_tail_of(bp, b, &t);
+    return t.entries;
+}
+
+bool ui_styles_define(ui_styles *s, const uint8_t *payload, uint32_t *out_id) {
+    ui_wire_define_style op;
+    ui_wire_define_style_read(payload, ui_wire_define_style_header_size(payload), &op);
+    ui_wire_define_style_tail tail;
+    ui_wire_define_style_tail_of(payload, &op, &tail);
+    uint32_t id = *out_id = op.id;
+    if (ui_wire_define_style_check(&op)) return false;
+    uint32_t blocks = op.block_count, total = 0;
+    const uint8_t *bp = tail.blocks;
     for (uint32_t b = 0; b < blocks; b++) {
-        total += ui_wire_get_u16(payload + off + 4);
-        off += ui_wire_get_u16(payload + off);
+        ui_wire_style_block blk;
+        read_block(bp, &blk);
+        total += blk.entry_count;
+        bp += ui_wire_style_block_size(bp);
     }
     ui_style_def d = {.id = id};
     d.blocks = malloc((blocks ? blocks : 1) * sizeof *d.blocks);
     d.entries = malloc((total ? total : 1) * sizeof *d.entries);
     d.tokens = malloc((total ? total : 1) * sizeof *d.tokens);
     bool ok = d.blocks && d.entries && d.tokens;
-    off = header;
+    bp = tail.blocks;
     for (uint32_t b = 0; ok && b < blocks; b++) {
-        const uint8_t *bp = payload + off;
-        uint32_t bytes = ui_wire_get_u16(bp), bh = ui_wire_size_or(bp + 6, STYLE_BLOCK_HEADER);
+        ui_wire_style_block blk;
+        const uint8_t *entries = read_block(bp, &blk);
         uint32_t n;
-        ok = ui_style_decode(s, bp + bh, bytes - bh, ui_wire_get_u16(bp + 4), false,
-                             d.entries + d.entry_count, &n);
-        d.blocks[d.block_count++] = (ui_style_block){bp[2], d.entry_count, n};
+        ok = ui_style_decode(s, entries, blk.entry_count, false, d.entries + d.entry_count, &n);
+        d.blocks[d.block_count++] = (ui_style_block){blk.states, d.entry_count, n};
         d.entry_count += n;
-        off += bytes;
+        bp += ui_wire_style_block_size(bp);
     }
-    (void)size;
     for (uint32_t i = 0; ok && i < d.entry_count; i++) {
         if (d.entries[i].value.kind != UI_VALUE_TOKEN) continue;
         uint32_t t = d.entries[i].value.token;
@@ -413,13 +364,18 @@ static const ui_value *token_of(const ui_styles *s, uint32_t id) {
     return found ? &t->value : NULL;
 }
 
-bool ui_styles_set_token(ui_styles *s, const uint8_t *payload, uint32_t size) {
-    uint32_t id = ui_wire_get_u32(payload);
-    const uint8_t *e = payload + UI_WIRE_SIZE_SET_TOKEN_HEADER;
-    (void)size;
+bool ui_styles_set_token(ui_styles *s, const uint8_t *payload, uint32_t *out_id) {
+    ui_wire_set_token op;
+    ui_wire_set_token_read(payload, UI_WIRE_SET_TOKEN_SIZE, &op);
+    ui_wire_set_token_tail tail;
+    ui_wire_set_token_tail_of(payload, &op, &tail);
+    ui_wire_style_entry h;
+    ui_wire_style_entry_read(tail.entry, UI_WIRE_STYLE_ENTRY_SIZE, &h);
+    uint32_t id = *out_id = op.id;
     ui_value v;
-    if (!id || !ui_style_kind_words(e[2]) || !read_value(e, &v)) return false;
-    if (v.kind != UI_VALUE_UNSET && !ui_style_token_value_valid(&v)) return false;
+    if (ui_wire_set_token_check(&op) || !ui_wire_value_kind_words(h.kind) || !ui_wire_style_value_read(tail.entry, &v))
+        return false;
+    if (v.kind != UI_VALUE_UNSET && !ui_wire_style_token_value_valid(&v)) return false;
     if (v.kind == UI_VALUE_COLOR) ui_color_from_wire(v.color, v.color); // linear, as entries
     if (!grow_tokens(s) ||
         !note_change(&s->changed_tokens, &s->changed_token_count, &s->changed_token_capacity, id) ||
@@ -749,7 +705,7 @@ static bool entry_value(const ui_style_view *view, const ui_style_entry *e, ui_v
     // takes a color (the color families, and text color).
     if (v->kind == UI_VALUE_COLOR)
         return (e->family & (UI_FAMILY_BACKGROUND | UI_FAMILY_BORDER_COLOR)) || e->prop == UI_STYLE_TEXT_COLOR;
-    return ui_style_value_valid(e->prop, v, false);
+    return ui_wire_style_value_valid(e->prop, v, false);
 }
 
 static uint32_t apply(const ui_style_view *view, const ui_style_entry *e, const ui_computed *parent,

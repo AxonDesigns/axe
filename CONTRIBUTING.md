@@ -133,13 +133,25 @@ closest local stand-in, and still only for investigation.
 
 ## Wire format
 
-Changes to the command or event buffers follow the rules in
+The command and event buffers are described by `idl/wire.idl` ([docs/idl.md](docs/idl.md)).
+Change the IDL, never the generated code, then regenerate:
+
+```sh
+python3 -I tools/idl/axe_idl.py
+```
+
+That rewrites the C codec, the public enums, the `@axe/wire` TypeScript sources and the
+tables of `docs/command-buffer.md`; commit them with the IDL. CTest's `idl_up_to_date` fails
+while they are stale.
+
+Changes follow the rules in
 [docs/command-buffer.md](docs/command-buffer.md#evolving-the-format): fields are only
-appended, and their defaults are encoded as zero. Readers accept payloads at least as
-large as an op's original size. Variable-length ops carry their header size. Record every
-appended field in the op history there, and extend `tests/test_wire_compat.c` so buffers
-from older and newer writers still apply. Bump `UI_WIRE_VERSION` only for a change the
-rules can't express.
+appended (`since <change>`, with the change listed under `changes`), and their defaults are
+encoded as zero. The generator rejects a schema that breaks them, and
+`python3 -I tools/idl/axe_idl.py --check --compat-base origin/master` checks a change
+against the IDL on master (CI runs it). Extend `tests/test_wire_compat.c` so buffers from
+older and newer writers still apply. Bump `UI_WIRE_VERSION` (`wire` in the IDL) only for a
+change the rules can't express.
 
 ## Decisions
 

@@ -4,9 +4,8 @@
 #include <string.h>
 
 #include "core/color.h"
-#include "style/props.h"
 #include "unicode/utf8.h"
-#include "wire/wire.h"
+#include "wire/gen/wire_gen.h"
 
 #define MODULE "scene"
 
@@ -160,103 +159,8 @@ void ui_scene_remove_root(ui_scene *s, ui_handle surface) {
     root->surface = (ui_handle){0};
 }
 
-static bool finite_n(const float *v, uint32_t n) {
-    for (uint32_t i = 0; i < n; i++) {
-        if (!isfinite(v[i])) return false;
-    }
-    return true;
-}
-
-// Checks the framing of every op without applying anything. A known op's payload must hold
-// at least its original fields and, for variable-length ops, the data its counts describe;
-// bytes past that come from a newer writer and are ignored.
-ui_result ui_scene_validate(const uint8_t *data, size_t size) {
-#ifdef UI_WIRE_PROOF
-    ui_wire_proof_record("scene", data, size);
-#endif
-    ui_wire_reader r;
-    ui_result res = ui_wire_reader_init(&r, UI_WIRE_MAGIC_CMD, data, size);
-    if (res != UI_OK) return res;
-    ui_wire_op op;
-    while ((res = ui_wire_reader_next(&r, &op)) == UI_OK) {
-        uint64_t expected;
-        switch (op.opcode) {
-        case UI_OP_CREATE_NODE: expected = UI_WIRE_SIZE_CREATE_NODE; break;
-        case UI_OP_DESTROY_NODE: expected = UI_WIRE_SIZE_DESTROY_NODE; break;
-        case UI_OP_SET_RECT: expected = UI_WIRE_SIZE_SET_RECT; break;
-        case UI_OP_SET_CORNER_RADIUS: expected = UI_WIRE_SIZE_SET_CORNER_RADIUS; break;
-        case UI_OP_SET_COLOR: expected = UI_WIRE_SIZE_SET_COLOR; break;
-        case UI_OP_SET_TIMER: expected = UI_WIRE_SIZE_SET_TIMER; break;
-        case UI_OP_SET_CLIP: expected = UI_WIRE_SIZE_SET_CLIP; break;
-        case UI_OP_LOAD_FONT: {
-            if (op.payload_size < UI_WIRE_SIZE_LOAD_FONT_HEADER) return UI_ERR_MALFORMED;
-            uint32_t header = ui_wire_load_font_header(op.payload);
-            if (header < UI_WIRE_SIZE_LOAD_FONT_HEADER || header % 4) return UI_ERR_MALFORMED;
-            expected = header + ui_wire_pad4(ui_wire_get_u16(op.payload + 4));
-            break;
-        }
-        case UI_OP_START_SPRING:
-            if (op.payload_size < UI_WIRE_SIZE_START_SPRING_BASE) return UI_ERR_MALFORMED;
-            expected = UI_WIRE_SIZE_START_SPRING_BASE + 4u * ui_wire_get_u16(op.payload + 10);
-            break;
-        case UI_OP_SET_TEXT: {
-            if (op.payload_size < UI_WIRE_MIN_SET_TEXT_HEADER) return UI_ERR_MALFORMED;
-            const uint8_t *p = op.payload;
-            uint32_t header = ui_wire_set_text_header(p), stride = ui_wire_set_text_span(p);
-            uint32_t chunk = ui_wire_get_u16(p + 12), spans = ui_wire_get_u16(p + 16);
-            uint32_t fam = ui_wire_get_u16(p + 20), ell = ui_wire_get_u16(p + 22);
-            if (header < UI_WIRE_MIN_SET_TEXT_HEADER || header % 4 ||
-                stride < UI_WIRE_SIZE_TEXT_SPAN || stride % 4 || fam % 4)
-                return UI_ERR_MALFORMED;
-            expected = header + (uint64_t)spans * stride + fam + ui_wire_pad4(ell) +
-                       ui_wire_pad4(chunk);
-            break;
-        }
-        case UI_OP_APPEND_TEXT: {
-            if (op.payload_size < UI_WIRE_SIZE_APPEND_TEXT_HEADER) return UI_ERR_MALFORMED;
-            uint32_t header = ui_wire_append_text_header(op.payload);
-            if (header < UI_WIRE_SIZE_APPEND_TEXT_HEADER || header % 4) return UI_ERR_MALFORMED;
-            expected = header + ui_wire_pad4(ui_wire_get_u16(op.payload + 8));
-            break;
-        }
-        case UI_OP_DEFINE_STYLE:
-            if (op.payload_size < UI_WIRE_SIZE_DEFINE_STYLE_HEADER ||
-                !ui_style_walk_define(op.payload, op.payload_size))
-                return UI_ERR_MALFORMED;
-            continue;
-        case UI_OP_DESTROY_STYLE: expected = UI_WIRE_SIZE_DESTROY_STYLE; break;
-        case UI_OP_SET_STATE: expected = UI_WIRE_SIZE_SET_STATE; break;
-        case UI_OP_MOVE_NODE: expected = UI_WIRE_SIZE_MOVE_NODE; break;
-        case UI_OP_REQUEST_LAYOUT: expected = UI_WIRE_SIZE_REQUEST_LAYOUT; break;
-        case UI_OP_SET_STYLES: {
-            if (op.payload_size < UI_WIRE_SIZE_SET_STYLES_HEADER) return UI_ERR_MALFORMED;
-            uint32_t header = ui_wire_set_styles_header(op.payload);
-            if (header < UI_WIRE_SIZE_SET_STYLES_HEADER || header % 4) return UI_ERR_MALFORMED;
-            expected = header + 4u * ui_wire_get_u16(op.payload + 8);
-            break;
-        }
-        case UI_OP_SET_PROPS: {
-            if (op.payload_size < UI_WIRE_SIZE_SET_PROPS_HEADER) return UI_ERR_MALFORMED;
-            uint32_t header = ui_wire_set_props_header(op.payload), end;
-            if (header < UI_WIRE_SIZE_SET_PROPS_HEADER || header % 4 || header > op.payload_size ||
-                !ui_style_walk(op.payload + header, op.payload_size - header,
-                               ui_wire_get_u16(op.payload + 10), &end))
-                return UI_ERR_MALFORMED;
-            continue;
-        }
-        case UI_OP_SET_TOKEN: {
-            const uint32_t entry = UI_WIRE_SIZE_SET_TOKEN_HEADER + UI_WIRE_STYLE_ENTRY_HEADER;
-            if (op.payload_size < entry || !op.payload[UI_WIRE_SIZE_SET_TOKEN_HEADER + 3])
-                return UI_ERR_MALFORMED;
-            expected = UI_WIRE_SIZE_SET_TOKEN_HEADER + 4u * op.payload[UI_WIRE_SIZE_SET_TOKEN_HEADER + 3];
-            break;
-        }
-        default: continue; // unknown ops are skipped when applying
-        }
-        if (op.payload_size < expected) return UI_ERR_MALFORMED;
-    }
-    return res == UI_ERR_END ? UI_OK : res;
-}
+// Checks the framing of every op without applying anything (generated from idl/wire.idl).
+ui_result ui_scene_validate(const uint8_t *data, size_t size) { return ui_wire_validate_commands(data, size); }
 
 static bool drop(ui_scene *s, const char *what, ui_handle h) {
     s->stats.dropped++;
@@ -348,8 +252,10 @@ void ui_scene_set_root_direction(ui_scene *s, ui_handle surface, uint8_t directi
     s->roots[i].layout_dirty = true;
 }
 
-static bool apply_create(ui_scene *s, const uint8_t *p) {
-    ui_handle node = ui_wire_get_handle(p), parent = ui_wire_get_handle(p + 8);
+static bool apply_create(ui_scene *s, const ui_wire_op *op) {
+    ui_wire_create_node v;
+    ui_wire_create_node_read(op->payload, op->payload_size, &v);
+    ui_handle node = v.node, parent = v.parent;
     ui_scene_root *root = NULL;
     ui_node *parent_node = NULL;
     if (ui_handle_kind_of(parent) == UI_HANDLE_SURFACE) {
@@ -400,23 +306,26 @@ static bool apply_create(ui_scene *s, const uint8_t *p) {
 
 static bool apply_node_op(ui_scene *s, const ui_wire_op *op, uint64_t now_ns);
 
-bool ui_scene_font_path_valid(const uint8_t *payload, const char **path, uint32_t *len) {
-    *len = ui_wire_get_u16(payload + 4);
-    *path = (const char *)payload + ui_wire_load_font_header(payload);
-    return *len && *len <= UI_FONT_PATH_MAX && !memchr(*path, 0, *len) &&
-           ui_utf8_valid((const uint8_t *)*path, *len);
+bool ui_scene_font_path_valid(const uint8_t *payload, uint32_t *id, const char **path, uint32_t *len) {
+    ui_wire_load_font v;
+    ui_wire_load_font_read(payload, ui_wire_load_font_header_size(payload), &v);
+    ui_wire_load_font_tail t;
+    ui_wire_load_font_tail_of(payload, &v, &t);
+    *id = v.id;
+    *len = v.path_bytes;
+    *path = (const char *)t.path;
+    return !ui_wire_load_font_check(&v, t.path);
 }
 
 static bool apply_load_font(ui_scene *s, const ui_wire_op *op, uint32_t offset) {
     const char *path;
-    uint32_t len;
-    if (!ui_scene_font_path_valid(op->payload, &path, &len)) {
+    uint32_t id, len;
+    if (!ui_scene_font_path_valid(op->payload, &id, &path, &len)) {
         s->stats.dropped++;
-        UI_DEBUG_REPORT(s->log, MODULE, "dropped load_font %u: bad path",
-                        ui_wire_get_u32(op->payload));
+        UI_DEBUG_REPORT(s->log, MODULE, "dropped load_font %u: bad path", id);
         return false;
     }
-    if (s->font_fn) s->font_fn(s->font_user, ui_wire_get_u32(op->payload), path, len, offset);
+    if (s->font_fn) s->font_fn(s->font_user, id, path, len, offset);
     return true;
 }
 
@@ -424,34 +333,68 @@ static bool apply_load_font(ui_scene *s, const ui_wire_op *op, uint32_t offset) 
 static bool apply_style_op(ui_scene *s, const ui_wire_op *op) {
     bool ok;
     const char *what;
+    uint32_t id;
     switch (op->opcode) {
     case UI_OP_DEFINE_STYLE:
-        ok = ui_styles_define(&s->styles, op->payload, op->payload_size);
+        ok = ui_styles_define(&s->styles, op->payload, &id);
         what = "define_style";
         break;
-    case UI_OP_DESTROY_STYLE:
-        ok = ui_styles_destroy(&s->styles, ui_wire_get_u32(op->payload));
+    case UI_OP_DESTROY_STYLE: {
+        ui_wire_destroy_style v;
+        ui_wire_destroy_style_read(op->payload, op->payload_size, &v);
+        id = v.id;
+        ok = ui_styles_destroy(&s->styles, v.id);
         what = "destroy_style";
         break;
+    }
     default:
-        ok = ui_styles_set_token(&s->styles, op->payload, op->payload_size);
+        ok = ui_styles_set_token(&s->styles, op->payload, &id);
         what = "set_token";
         break;
     }
     if (!ok) {
         s->stats.dropped++;
-        UI_DEBUG_REPORT(s->log, MODULE, "dropped %s %u: invalid, unknown or out of memory", what,
-                        ui_wire_get_u32(op->payload));
+        UI_DEBUG_REPORT(s->log, MODULE, "dropped %s %u: invalid, unknown or out of memory", what, id);
         (void)what;
+        (void)id;
     }
     return ok;
 }
 
+#define READ_OP(type, var)                                                                  \
+    ui_wire_##type var;                                                                     \
+    ui_wire_##type##_read(op->payload, op->payload_size, &var)
+
+// The node a node op addresses.
+static ui_handle op_node(const ui_wire_op *op) {
+#define NODE_OF(op_code, type)                                                              \
+    case op_code: {                                                                         \
+        READ_OP(type, v);                                                                   \
+        return v.node;                                                                      \
+    }
+    switch (op->opcode) {
+        NODE_OF(UI_OP_DESTROY_NODE, destroy_node)
+        NODE_OF(UI_OP_SET_RECT, set_rect)
+        NODE_OF(UI_OP_SET_CORNER_RADIUS, set_corner_radius)
+        NODE_OF(UI_OP_SET_COLOR, set_color)
+        NODE_OF(UI_OP_SET_CLIP, set_clip)
+        NODE_OF(UI_OP_START_SPRING, start_spring)
+        NODE_OF(UI_OP_SET_STYLES, set_styles)
+        NODE_OF(UI_OP_SET_PROPS, set_props)
+        NODE_OF(UI_OP_SET_STATE, set_state)
+        NODE_OF(UI_OP_MOVE_NODE, move_node)
+        NODE_OF(UI_OP_REQUEST_LAYOUT, request_layout)
+    default: return (ui_handle){0};
+    }
+#undef NODE_OF
+}
+
 static bool apply_op(ui_scene *s, const ui_wire_op *op, uint64_t now_ns) {
-    const uint8_t *p = op->payload;
-    if (op->opcode == UI_OP_CREATE_NODE) return apply_create(s, p);
+    if (op->opcode == UI_OP_CREATE_NODE) return apply_create(s, op);
     if (op->opcode == UI_OP_SET_TIMER) {
-        if (s->timer_fn) s->timer_fn(s->timer_user, ui_wire_get_u32(p), ui_wire_get_u64(p + 8));
+        ui_wire_set_timer v;
+        ui_wire_set_timer_read(op->payload, op->payload_size, &v);
+        if (s->timer_fn) s->timer_fn(s->timer_user, v.id, v.deadline_ns);
         return true;
     }
     if (op->opcode == UI_OP_DEFINE_STYLE || op->opcode == UI_OP_DESTROY_STYLE ||
@@ -478,8 +421,7 @@ static bool apply_op(ui_scene *s, const ui_wire_op *op, uint64_t now_ns) {
     }
     // Every other known op addresses one node; a change marks that node's surface dirty. A
     // layout request changes nothing: it never makes a frame.
-    ui_handle h = ui_wire_get_handle(p);
-    ui_node *n = node_of(s, h);
+    ui_node *n = node_of(s, op_node(op));
     uint32_t root = n ? n->root : 0;
     bool applied = apply_node_op(s, op, now_ns);
     if (applied && n && op->opcode != UI_OP_REQUEST_LAYOUT) s->roots[root].dirty = true;
@@ -513,17 +455,15 @@ static bool set_paint(ui_scene *s, ui_node *n, uint16_t prop, ui_value v, int sp
     return true;
 }
 
-static bool apply_set_styles(ui_scene *s, ui_node *n, const uint8_t *p) {
-    uint32_t count = ui_wire_get_u16(p + 8);
-    const uint8_t *ids = p + ui_wire_set_styles_header(p);
+static bool apply_set_styles(ui_scene *s, ui_node *n, const ui_wire_set_styles *v,
+                             const ui_wire_set_styles_tail *t) {
+    uint32_t count = v->count;
     uint32_t *list = NULL;
     if (count && !(list = malloc(count * sizeof *list))) return false;
-    for (uint32_t i = 0; i < count; i++) {
-        list[i] = ui_wire_get_u32(ids + 4 * i);
-        if (!list[i] || i >= UINT8_MAX) {
-            free(list);
-            return false;
-        }
+    for (uint32_t i = 0; i < count; i++) list[i] = ui_wire_set_styles_ids_at(t, i);
+    if (ui_wire_set_styles_check(v, list)) {
+        free(list);
+        return false;
     }
     free(n->styles);
     n->styles = list;
@@ -532,11 +472,12 @@ static bool apply_set_styles(ui_scene *s, ui_node *n, const uint8_t *p) {
     return true;
 }
 
-static bool apply_set_props(ui_scene *s, ui_node *n, const uint8_t *p, uint32_t size) {
-    uint32_t header = ui_wire_set_props_header(p), count = ui_wire_get_u16(p + 10), decoded;
+static bool apply_set_props(ui_scene *s, ui_node *n, const ui_wire_set_props *v,
+                            const ui_wire_set_props_tail *t) {
+    uint32_t count = v->entry_count, decoded;
     ui_style_entry local[16], *e = count <= 16 ? local : malloc(count * sizeof *e);
     if (!e) return false;
-    bool ok = ui_style_decode(&s->styles, p + header, size - header, count, true, e, &decoded);
+    bool ok = ui_style_decode(&s->styles, t->entries, count, true, e, &decoded);
     uint32_t i = 0;
     for (; ok && i < decoded; i++) ok = set_override(s, n, e[i].prop, &e[i].value);
     for (; i < decoded; i++) ui_styles_release_value(&s->styles, &e[i].value); // not taken over
@@ -594,9 +535,9 @@ static void rebase(ui_scene *s, ui_node *n, const float from[2], uint32_t old_ro
 }
 
 // move_node: under `parent` (a node or a surface), before sibling `before` (null: last).
-static bool apply_move(ui_scene *s, ui_node *n, const uint8_t *p) {
+static bool apply_move(ui_scene *s, ui_node *n, const ui_wire_move_node *v) {
     uint32_t slot = (uint32_t)(n - s->nodes);
-    ui_handle parent = ui_wire_get_handle(p + 8), before = ui_wire_get_handle(p + 16);
+    ui_handle parent = v->parent, before = v->before;
     ui_scene_root *root = NULL;
     ui_node *pn = NULL;
     if (ui_handle_kind_of(parent) == UI_HANDLE_SURFACE) {
@@ -639,8 +580,7 @@ static bool apply_move(ui_scene *s, ui_node *n, const uint8_t *p) {
 }
 
 static bool apply_node_op(ui_scene *s, const ui_wire_op *op, uint64_t now_ns) {
-    const uint8_t *p = op->payload;
-    ui_handle h = ui_wire_get_handle(p);
+    ui_handle h = op_node(op);
     ui_node *n = node_of(s, h);
     float v[UI_PROP_MAX_COMPONENTS];
     switch (op->opcode) {
@@ -651,52 +591,56 @@ static bool apply_node_op(ui_scene *s, const ui_wire_op *op, uint64_t now_ns) {
             return false;
         }
         return true;
-    case UI_OP_SET_RECT:
+    case UI_OP_SET_RECT: {
         if (!n) return drop(s, "set_rect", h);
-        for (int i = 0; i < 4; i++) v[i] = ui_wire_get_f32(p + 8 + 4 * i);
-        if (!finite_n(v, 4) || v[2] < 0 || v[3] < 0) return drop(s, "set_rect (value)", h);
-        memcpy(n->frame, v, sizeof n->frame);
+        READ_OP(set_rect, o);
+        if (ui_wire_set_rect_check(&o)) return drop(s, "set_rect (value)", h);
+        n->frame[0] = o.x, n->frame[1] = o.y, n->frame[2] = o.width, n->frame[3] = o.height;
         n->framed = true;
         if (n->anim) n->anim->springs[UI_SPRING_RECT].active = false;
         if (!apply_frame(s, n)) return drop(s, "set_rect (out of memory)", h);
         mark_style_dirty(s, (uint32_t)(n - s->nodes), true);
         return true;
-    case UI_OP_SET_CORNER_RADIUS:
+    }
+    case UI_OP_SET_CORNER_RADIUS: {
         if (!n) return drop(s, "set_corner_radius", h);
-        v[0] = ui_wire_get_f32(p + 8);
-        if (!isfinite(v[0]) || v[0] < 0) return drop(s, "set_corner_radius (value)", h);
-        if (!set_paint(s, n, UI_STYLE_CORNER_RADIUS, ui_px(v[0]), UI_SPRING_RADIUS))
+        READ_OP(set_corner_radius, o);
+        if (ui_wire_set_corner_radius_check(&o)) return drop(s, "set_corner_radius (value)", h);
+        if (!set_paint(s, n, UI_STYLE_CORNER_RADIUS, ui_px(o.radius), UI_SPRING_RADIUS))
             return drop(s, "set_corner_radius (out of memory)", h);
         return true;
-    case UI_OP_SET_COLOR:
+    }
+    case UI_OP_SET_COLOR: {
         if (!n) return drop(s, "set_color", h);
-        for (int i = 0; i < 4; i++) v[i] = ui_wire_get_f32(p + 8 + 4 * i);
-        if (!finite_n(v, 4)) return drop(s, "set_color (value)", h);
+        READ_OP(set_color, o);
+        if (ui_wire_set_color_check(&o)) return drop(s, "set_color (value)", h);
+        v[0] = o.r, v[1] = o.g, v[2] = o.b, v[3] = o.a;
         ui_color_from_wire(v, v); // linear, as decoded style entries are
         if (!set_paint(s, n, UI_STYLE_BACKGROUND_COLOR, ui_rgba(v[0], v[1], v[2], v[3]), UI_SPRING_COLOR))
             return drop(s, "set_color (out of memory)", h);
         return true;
+    }
     case UI_OP_SET_CLIP: {
         if (!n) return drop(s, "set_clip", h);
-        uint32_t flags = ui_wire_get_u32(p + 8);
-        if (flags & ~1u) return drop(s, "set_clip (flags)", h);
-        if (!set_paint(s, n, UI_STYLE_CLIP, ui_keyword(flags & 1u), -1))
+        READ_OP(set_clip, o);
+        if (ui_wire_set_clip_check(&o)) return drop(s, "set_clip (flags)", h);
+        if (!set_paint(s, n, UI_STYLE_CLIP, ui_keyword(o.flags & UI_WIRE_CLIP_FLAGS_CLIP), -1))
             return drop(s, "set_clip (out of memory)", h);
         return true;
     }
     case UI_OP_START_SPRING: {
         if (!n) return drop(s, "start_spring", h);
-        ui_property prop = (ui_property)ui_wire_get_u16(p + 8);
-        uint32_t count = ui_wire_get_u16(p + 10);
-        float stiffness = ui_wire_get_f32(p + 12), damping = ui_wire_get_f32(p + 16);
+        READ_OP(start_spring, o);
+        ui_property prop = (ui_property)o.property;
+        uint32_t count = o.count;
         // An unknown property (a newer writer's) has no components: dropped, never read as a
         // radius with no target.
-        if (!count || ui_property_components(prop) != count || !isfinite(stiffness) || stiffness <= 0 ||
-            !isfinite(damping) || damping < 0)
-            return drop(s, "start_spring (property)", h);
-        for (uint32_t i = 0; i < count; i++) v[i] = ui_wire_get_f32(p + 20 + 4 * i);
-        if (!finite_n(v, count) || (prop == UI_PROP_CORNER_RADIUS && v[0] < 0))
-            return drop(s, "start_spring (target)", h);
+        if (!count || ui_property_components(prop) != count) return drop(s, "start_spring (property)", h);
+        ui_wire_start_spring_tail t;
+        ui_wire_start_spring_tail_of(op->payload, &o, &t);
+        for (uint32_t i = 0; i < count; i++) v[i] = ui_wire_start_spring_target_at(&t, i);
+        if (ui_wire_start_spring_check(&o, v)) return drop(s, "start_spring (value)", h);
+        float stiffness = o.stiffness, damping = o.damping;
         ui_node_anim *a = anim_of(n);
         if (!a) return drop(s, "start_spring (out of memory)", h);
         if (prop == UI_PROP_RECT) {
@@ -724,29 +668,43 @@ static bool apply_node_op(ui_scene *s, const ui_wire_op *op, uint64_t now_ns) {
         mark_style_dirty(s, (uint32_t)(n - s->nodes), true);
         return true;
     }
-    case UI_OP_SET_STYLES:
+    case UI_OP_SET_STYLES: {
         if (!n) return drop(s, "set_styles", h);
-        if (!apply_set_styles(s, n, p)) return drop(s, "set_styles (ids)", h);
+        ui_wire_set_styles o;
+        ui_wire_set_styles_read(op->payload, ui_wire_set_styles_header_size(op->payload), &o);
+        ui_wire_set_styles_tail t;
+        ui_wire_set_styles_tail_of(op->payload, &o, &t);
+        if (!apply_set_styles(s, n, &o, &t)) return drop(s, "set_styles (ids)", h);
         return true;
-    case UI_OP_SET_PROPS:
+    }
+    case UI_OP_SET_PROPS: {
         if (!n) return drop(s, "set_props", h);
-        if (!apply_set_props(s, n, p, op->payload_size)) return drop(s, "set_props (values)", h);
+        ui_wire_set_props o;
+        ui_wire_set_props_read(op->payload, ui_wire_set_props_header_size(op->payload), &o);
+        ui_wire_set_props_tail t;
+        ui_wire_set_props_tail_of(op->payload, &o, &t);
+        if (!apply_set_props(s, n, &o, &t)) return drop(s, "set_props (values)", h);
         return true;
-    case UI_OP_MOVE_NODE:
+    }
+    case UI_OP_MOVE_NODE: {
         if (!n) return drop(s, "move_node", h);
-        if (!apply_move(s, n, p)) return drop(s, "move_node (parent or sibling)", h);
+        READ_OP(move_node, o);
+        if (!apply_move(s, n, &o)) return drop(s, "move_node (parent or sibling)", h);
         return true;
-    case UI_OP_REQUEST_LAYOUT:
+    }
+    case UI_OP_REQUEST_LAYOUT: {
         // Queued even for a stale handle: the logic waits for an answer either way.
+        READ_OP(request_layout, o);
         if (ui_grow((void **)&s->requests, &s->request_capacity, s->request_count + 1, sizeof *s->requests) !=
             UI_OK)
             return drop(s, "request_layout (out of memory)", h);
-        s->requests[s->request_count++] = (ui_scene_request){h, ui_wire_get_u32(p + 8)};
+        s->requests[s->request_count++] = (ui_scene_request){h, o.request_id};
         return true;
+    }
     case UI_OP_SET_STATE: {
         if (!n) return drop(s, "set_state", h);
-        uint32_t mask = ui_wire_get_u32(p + 8), value = ui_wire_get_u32(p + 12);
-        uint8_t state = (uint8_t)((n->state & ~mask) | (value & mask));
+        READ_OP(set_state, o);
+        uint8_t state = (uint8_t)((n->state & ~o.mask) | (o.value & o.mask));
         if (state != n->state) mark_style_dirty(s, (uint32_t)(n - s->nodes), true);
         n->state = state;
         return true;
@@ -839,7 +797,9 @@ ui_result ui_scene_apply_prepared(ui_scene *s, const uint8_t *data, size_t size,
         } else if (op.opcode == UI_OP_LOAD_FONT) {
             applied = apply_load_font(s, &op, offset);
         } else if (op.opcode == UI_OP_APPEND_TEXT) {
-            applied = drop(s, "append_text (no set_text before it)", ui_wire_get_handle(op.payload));
+            ui_wire_append_text a;
+            ui_wire_append_text_read(op.payload, ui_wire_append_text_header_size(op.payload), &a);
+            applied = drop(s, "append_text (no set_text before it)", a.node);
         } else {
             applied = apply_op(s, &op, now_ns);
         }

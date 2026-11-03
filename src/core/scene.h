@@ -237,7 +237,7 @@ ui_result ui_scene_apply_prepared(ui_scene *s, const uint8_t *data, size_t size,
 
 // Checks a load_font payload's path: non-empty, at most UI_FONT_PATH_MAX bytes, no NUL,
 // valid UTF-8.
-bool ui_scene_font_path_valid(const uint8_t *payload, const char **path, uint32_t *len);
+bool ui_scene_font_path_valid(const uint8_t *payload, uint32_t *id, const char **path, uint32_t *len);
 
 // Marks every root with text dirty (the fonts changed: text is shaped again, from what was
 // prepared or by the text context's generation check).

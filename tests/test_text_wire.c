@@ -7,7 +7,7 @@
 #include "core/scene.h"
 #include "test.h"
 #include "ui/ui.h"
-#include "wire/wire.h"
+#include "wire/gen/wire_gen.h"
 
 static ui_logger quiet = {UI_LOG_ERROR};
 static const ui_handle surface = {(uint32_t)UI_HANDLE_SURFACE << UI_HANDLE_SLOT_BITS, 1};
@@ -229,7 +229,7 @@ static void test_validation(void) {
     size_t n;
     ui_cmd_writer_take(w, &b, &n);
     uint8_t *second_start = b + UI_WIRE_HEADER_SIZE + UI_WIRE_OP_HEADER_SIZE +
-                            UI_WIRE_SIZE_SET_TEXT_HEADER + UI_WIRE_SIZE_TEXT_SPAN;
+                            UI_WIRE_SET_TEXT_SIZE + UI_WIRE_TEXT_SPAN_SIZE;
     ui_wire_put_u32(second_start, 1);
     uint64_t dropped = s.stats.dropped;
     CHECK(ui_scene_apply(&s, b, n, 0) == UI_OK);
@@ -274,7 +274,7 @@ static void test_from_node(void) {
     ui_cmd_writer_take(w, &b, &n);
     const uint8_t *payload = b + UI_WIRE_HEADER_SIZE + UI_WIRE_OP_HEADER_SIZE;
     CHECK_EQ_INT(ui_wire_get_u16(payload + 70), UI_TEXT_SET_ALL & ~UI_TEXT_SET_COLOR);
-    CHECK_EQ_INT(payload[UI_WIRE_SIZE_SET_TEXT_HEADER + 13], UI_TEXT_SET_SPAN_ALL & ~UI_TEXT_SET_WEIGHT);
+    CHECK_EQ_INT(payload[UI_WIRE_SET_TEXT_SIZE + 13], UI_TEXT_SET_SPAN_ALL & ~UI_TEXT_SET_WEIGHT);
     CHECK(ui_scene_apply(&s, b, n, 0) == UI_OK);
     free(b);
     CHECK_EQ_INT(s.stats.dropped, 0);

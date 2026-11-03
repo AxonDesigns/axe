@@ -123,6 +123,14 @@ target_link_libraries(test_wire_compat PRIVATE ui m)
 ui_target_warnings(test_wire_compat)
 add_test(NAME wire_compat COMMAND test_wire_compat)
 
+# The generated codec reads the fixture buffers as the pre-IDL code did (tests/wire/proof.md).
+add_executable(test_wire_fixtures test_wire_fixtures.c wire/wire_dump.c)
+target_include_directories(test_wire_fixtures PRIVATE ${PROJECT_SOURCE_DIR}/src ${CMAKE_CURRENT_SOURCE_DIR}/wire)
+target_compile_definitions(test_wire_fixtures PRIVATE UI_WIRE_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/wire/fixtures")
+target_link_libraries(test_wire_fixtures PRIVATE ui m)
+ui_target_warnings(test_wire_fixtures)
+add_test(NAME wire_fixtures COMMAND test_wire_fixtures)
+
 # Hit testing.
 add_executable(test_text_hittest test_text_hittest.c)
 target_include_directories(test_text_hittest PRIVATE ${PROJECT_SOURCE_DIR}/src)
@@ -222,14 +230,6 @@ target_link_libraries(test_measure PRIVATE ui m)
 ui_target_warnings(test_measure)
 add_test(NAME measure COMMAND test_measure)
 set_tests_properties(measure PROPERTIES ENVIRONMENT "UI_GPU=software" TIMEOUT 120)
-
-# The migration proof (tests/wire/proof.md); temporary, built with UI_WIRE_PROOF.
-if(UI_WIRE_PROOF)
-    add_executable(wire_proof wire/proof.c wire/proof_dump.c)
-    target_include_directories(wire_proof PRIVATE ${PROJECT_SOURCE_DIR}/src ${CMAKE_CURRENT_SOURCE_DIR}/wire)
-    target_link_libraries(wire_proof PRIVATE ui)
-    ui_target_warnings(wire_proof)
-endif()
 
 # The wire IDL's generator (tools/idl): its own tests, and the committed output must be what
 # idl/wire.idl generates (docs/idl.md).

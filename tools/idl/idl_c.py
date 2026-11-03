@@ -351,6 +351,13 @@ def tail_decls(s: Schema, r: Record) -> list[str]:
             out.append(f"    off += {step};")
     out.append("    (void)h;")
     out.append("}")
+    for ti in r.tail:
+        if ti.kind == "array" and not ti.record:
+            ct = CTYPES[ti.elem]
+            out.append(f"// Element i of `{ti.name}`.")
+            out.append(f"static inline {ct} {n}_{ti.name}_at(const {n}_tail *t, uint32_t i) {{")
+            out.append(f"    return ui_wire_get_{ti.elem}(t->{ti.name} + {SCALARS[ti.elem]}u * i);")
+            out.append("}")
     return out
 
 

@@ -378,6 +378,10 @@ static inline void ui_wire_start_spring_tail_of(const uint8_t *p, const ui_wire_
     t->target = p + off;
     (void)h;
 }
+// Element i of `target`.
+static inline float ui_wire_start_spring_target_at(const ui_wire_start_spring_tail *t, uint32_t i) {
+    return ui_wire_get_f32(t->target + 4u * i);
+}
 // NULL when the op's values are in range, else the name of the first field that isn't (drops in the
 // core, refusals in writers). `target`: the decoded target (count of them).
 const char *ui_wire_start_spring_check(const ui_wire_start_spring *v, const float *target);
@@ -740,6 +744,10 @@ static inline void ui_wire_set_styles_tail_of(const uint8_t *p, const ui_wire_se
     uint32_t off = ui_wire_set_styles_header_size(p);
     t->ids = p + off;
     (void)h;
+}
+// Element i of `ids`.
+static inline uint32_t ui_wire_set_styles_ids_at(const ui_wire_set_styles_tail *t, uint32_t i) {
+    return ui_wire_get_u32(t->ids + 4u * i);
 }
 // NULL when the op's values are in range, else the name of the first field that isn't (drops in the
 // core, refusals in writers). `ids`: the decoded ids (count of them).

@@ -4,6 +4,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "wire/gen/wire_gen.h"
+
 #define MODULE "prepare"
 #define GLYPHS_PER_JOB 64u
 
@@ -291,9 +293,9 @@ ui_prep_buffer *ui_prep_create(ui_preparer *p, const uint8_t *data, size_t size)
     ui_wire_op op;
     while (ui_wire_reader_next(&r, &op) == UI_OK) {
         const char *path;
-        uint32_t len;
+        uint32_t id, len;
         if (op.opcode == UI_OP_SET_TEXT) texts++;
-        if (op.opcode == UI_OP_LOAD_FONT && ui_scene_font_path_valid(op.payload, &path, &len))
+        if (op.opcode == UI_OP_LOAD_FONT && ui_scene_font_path_valid(op.payload, &id, &path, &len))
             fonts++;
         styled |= op.opcode == UI_OP_DEFINE_STYLE || op.opcode == UI_OP_DESTROY_STYLE ||
                   op.opcode == UI_OP_SET_TOKEN || op.opcode == UI_OP_SET_STYLES ||
@@ -316,13 +318,13 @@ ui_prep_buffer *ui_prep_create(ui_preparer *p, const uint8_t *data, size_t size)
     while (ui_wire_reader_next(&r, &op) == UI_OK) {
         uint32_t offset = (uint32_t)(op.payload - UI_WIRE_OP_HEADER_SIZE - data);
         const char *path;
-        uint32_t len;
+        uint32_t id, len;
         if (op.opcode == UI_OP_SET_TEXT) {
             uint32_t i = b->scene.text_count++;
             b->scene.texts[i].offset = offset;
             b->items[i] = (ui_prep_item){.buf = b, .index = i, .op = op, .after = r};
         } else if (op.opcode == UI_OP_LOAD_FONT &&
-                   ui_scene_font_path_valid(op.payload, &path, &len)) {
+                   ui_scene_font_path_valid(op.payload, &id, &path, &len)) {
             ui_prep_font *f = &b->fonts[b->font_count];
             f->buf = b;
             f->offset = offset;

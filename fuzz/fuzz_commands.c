@@ -10,7 +10,7 @@
 
 #include "core/preview.h"
 #include "core/scene.h"
-#include "wire/wire.h"
+#include "wire/gen/wire_gen.h"
 
 int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size);
 

@@ -529,7 +529,10 @@ static void guess_text(ui_core *c, uint32_t at) {
     if (bufs != local) free(bufs);
     for (uint32_t i = 0; pv && i < b->scene.text_count; i++) {
         ui_text_ctx ctx;
-        if (ui_preview_ctx(pv, ui_wire_get_handle(b->items[i].op.payload), &ctx, NULL)) ui_prep_guess(b, i, &ctx);
+        const uint8_t *q = b->items[i].op.payload;
+        ui_wire_set_text t;
+        ui_wire_set_text_read(q, ui_wire_set_text_header_size(q), &t);
+        if (ui_preview_ctx(pv, t.node, &ctx, NULL)) ui_prep_guess(b, i, &ctx);
     }
     ui_preview_destroy(pv);
 }
@@ -861,9 +864,6 @@ static void flush_events(ui_core *c) {
     size_t size;
     uint8_t *bytes = ui_wire_buf_finish(&c->events, &size);
     if (!bytes) return;
-#ifdef UI_WIRE_PROOF
-    ui_wire_proof_record("ev", bytes, size);
-#endif
     ui_msg msg = {.type = UI_MSG_EVENT_BUFFER, .ptr = bytes, .size = size};
     // Cannot be full: at most MAX_EVENTS_IN_FLIGHT buffers are ever queued.
     if (ui_queue_push(&c->logic->queue, &msg) != UI_OK) {

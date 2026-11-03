@@ -1,7 +1,6 @@
 #include "wire/wire.h"
 
 #include <math.h>
-#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -92,42 +91,14 @@ ui_result ui_wire_reader_next(ui_wire_reader *r, ui_wire_op *op) {
 // The byte layout of every op is generated from idl/wire.idl (wire/gen/wire_gen.h); these
 // functions are the C API's argument checks and conveniences on top of it.
 
-#ifdef UI_WIRE_PROOF
-#include "legacy_wire.h"
-#endif
-
 struct ui_cmd_writer {
     ui_wire_buf buf;
-#ifdef UI_WIRE_PROOF
-    legacy_writer *legacy; // the pre-IDL encoder, fed the same calls (tests/wire/proof.md)
-#endif
 };
-
-#ifdef UI_WIRE_PROOF
-// Aborts unless the legacy encoder answered the call the same way and its bytes are identical.
-static ui_result proof(ui_cmd_writer *w, ui_result r, ui_result legacy, const char *op) {
-    const ui_wire_buf *a = &w->buf, *b = &w->legacy->buf;
-    if (r != legacy || a->op_count != b->op_count || a->size != b->size ||
-        (a->size && memcmp(a->data + UI_WIRE_HEADER_SIZE, b->data + UI_WIRE_HEADER_SIZE,
-                           a->size - UI_WIRE_HEADER_SIZE))) {
-        fprintf(stderr, "wire proof: %s differs from the legacy encoder (result %d vs %d, %u vs %u bytes)\n",
-                op, r, legacy, a->size, b->size);
-        abort();
-    }
-    return r;
-}
-#define PROOF(r, legacy_call) proof(w, (r), (legacy_call), __func__)
-#else
-#define PROOF(r, legacy_call) (r)
-#endif
 
 ui_result ui_cmd_writer_create(ui_cmd_writer **out) {
     ui_cmd_writer *w = malloc(sizeof *w);
     if (!w) return UI_ERR_OUT_OF_MEMORY;
     ui_wire_buf_init(&w->buf, UI_WIRE_MAGIC_CMD);
-#ifdef UI_WIRE_PROOF
-    if (legacy_writer_create(&w->legacy) != UI_OK) abort();
-#endif
     *out = w;
     return UI_OK;
 }
@@ -135,78 +106,64 @@ ui_result ui_cmd_writer_create(ui_cmd_writer **out) {
 void ui_cmd_writer_destroy(ui_cmd_writer *writer) {
     if (!writer) return;
     ui_wire_buf_free(&writer->buf);
-#ifdef UI_WIRE_PROOF
-    legacy_writer_destroy(writer->legacy);
-#endif
     free(writer);
 }
 
 uint32_t ui_cmd_writer_op_count(const ui_cmd_writer *writer) { return writer->buf.op_count; }
 
 ui_result ui_cmd_create_node(ui_cmd_writer *w, ui_handle node, ui_handle parent) {
-    ui_result r = ui_wire_create_node_put(&w->buf, &(ui_wire_create_node){node, parent});
-    return PROOF(r, legacy_cmd_create_node(w->legacy, node, parent));
+    return ui_wire_create_node_put(&w->buf, &(ui_wire_create_node){node, parent});
 }
 
 ui_result ui_cmd_destroy_node(ui_cmd_writer *w, ui_handle node) {
-    ui_result r = ui_wire_destroy_node_put(&w->buf, &(ui_wire_destroy_node){node});
-    return PROOF(r, legacy_cmd_destroy_node(w->legacy, node));
+    return ui_wire_destroy_node_put(&w->buf, &(ui_wire_destroy_node){node});
 }
 
 ui_result ui_cmd_set_rect(ui_cmd_writer *w, ui_handle node, float x, float y, float width,
                           float height) {
     ui_wire_set_rect v = {node, x, y, width, height};
-    ui_result r = ui_wire_set_rect_check(&v) ? UI_ERR_INVALID_ARGUMENT : ui_wire_set_rect_put(&w->buf, &v);
-    return PROOF(r, legacy_cmd_set_rect(w->legacy, node, x, y, width, height));
+    return ui_wire_set_rect_check(&v) ? UI_ERR_INVALID_ARGUMENT : ui_wire_set_rect_put(&w->buf, &v);
 }
 
 ui_result ui_cmd_set_corner_radius(ui_cmd_writer *w, ui_handle node, float radius) {
     ui_wire_set_corner_radius v = {node, radius};
-    ui_result r = ui_wire_set_corner_radius_check(&v) ? UI_ERR_INVALID_ARGUMENT
-                                                       : ui_wire_set_corner_radius_put(&w->buf, &v);
-    return PROOF(r, legacy_cmd_set_corner_radius(w->legacy, node, radius));
+    if (ui_wire_set_corner_radius_check(&v)) return UI_ERR_INVALID_ARGUMENT;
+    return ui_wire_set_corner_radius_put(&w->buf, &v);
 }
 
 ui_result ui_cmd_set_color(ui_cmd_writer *w, ui_handle node, float r, float g, float b, float a) {
     ui_wire_set_color v = {node, r, g, b, a};
-    ui_result res = ui_wire_set_color_check(&v) ? UI_ERR_INVALID_ARGUMENT : ui_wire_set_color_put(&w->buf, &v);
-    return PROOF(res, legacy_cmd_set_color(w->legacy, node, r, g, b, a));
+    return ui_wire_set_color_check(&v) ? UI_ERR_INVALID_ARGUMENT : ui_wire_set_color_put(&w->buf, &v);
 }
 
 ui_result ui_cmd_move_node(ui_cmd_writer *w, ui_handle node, ui_handle parent, ui_handle before) {
-    ui_result r = ui_wire_move_node_put(&w->buf, &(ui_wire_move_node){node, parent, before});
-    return PROOF(r, legacy_cmd_move_node(w->legacy, node, parent, before));
+    return ui_wire_move_node_put(&w->buf, &(ui_wire_move_node){node, parent, before});
 }
 
 ui_result ui_cmd_request_layout(ui_cmd_writer *w, ui_handle node, uint32_t request_id) {
-    ui_result r = ui_wire_request_layout_put(&w->buf, &(ui_wire_request_layout){node, request_id});
-    return PROOF(r, legacy_cmd_request_layout(w->legacy, node, request_id));
+    return ui_wire_request_layout_put(&w->buf, &(ui_wire_request_layout){node, request_id});
 }
 
 ui_result ui_cmd_set_clip(ui_cmd_writer *w, ui_handle node, bool clip) {
     uint32_t flags = clip ? UI_WIRE_CLIP_FLAGS_CLIP : 0;
-    ui_result r = ui_wire_set_clip_put(&w->buf, &(ui_wire_set_clip){node, flags});
-    return PROOF(r, legacy_cmd_set_clip(w->legacy, node, clip));
+    return ui_wire_set_clip_put(&w->buf, &(ui_wire_set_clip){node, flags});
 }
 
 ui_result ui_cmd_start_spring(ui_cmd_writer *w, ui_handle node, ui_property property,
                               const float *target, float stiffness, float damping) {
     ui_wire_start_spring v = {node, (uint16_t)property, (uint16_t)ui_property_components(property),
                               stiffness, damping};
-    ui_result r = !target || ui_wire_start_spring_check(&v, target) ? UI_ERR_INVALID_ARGUMENT
-                                                                    : ui_wire_start_spring_put(&w->buf, &v, target);
-    return PROOF(r, legacy_cmd_start_spring(w->legacy, node, property, target, stiffness, damping));
+    if (!target || ui_wire_start_spring_check(&v, target)) return UI_ERR_INVALID_ARGUMENT;
+    return ui_wire_start_spring_put(&w->buf, &v, target);
 }
 
 ui_result ui_cmd_set_timer(ui_cmd_writer *w, uint32_t id, uint64_t deadline_ns) {
-    ui_result r = deadline_ns == UI_WIRE_TIMER_CANCEL ? UI_ERR_INVALID_ARGUMENT
-                                                      : ui_wire_set_timer_put(&w->buf, &(ui_wire_set_timer){id, deadline_ns});
-    return PROOF(r, legacy_cmd_set_timer(w->legacy, id, deadline_ns));
+    if (deadline_ns == UI_WIRE_TIMER_CANCEL) return UI_ERR_INVALID_ARGUMENT;
+    return ui_wire_set_timer_put(&w->buf, &(ui_wire_set_timer){id, deadline_ns});
 }
 
 ui_result ui_cmd_cancel_timer(ui_cmd_writer *w, uint32_t id) {
-    ui_result r = ui_wire_set_timer_put(&w->buf, &(ui_wire_set_timer){id, UI_WIRE_TIMER_CANCEL});
-    return PROOF(r, legacy_cmd_cancel_timer(w->legacy, id));
+    return ui_wire_set_timer_put(&w->buf, &(ui_wire_set_timer){id, UI_WIRE_TIMER_CANCEL});
 }
 
 static bool all_finite(const float *v, uint32_t n) {
@@ -244,7 +201,7 @@ static ui_wire_text_style wire_style(const ui_text_style_desc *st, uint32_t set,
     };
 }
 
-static ui_result put_text(ui_cmd_writer *w, ui_handle node, const ui_text_desc *d) {
+ui_result ui_cmd_set_text(ui_cmd_writer *w, ui_handle node, const ui_text_desc *d) {
     if (!d || (d->length && !d->text) || d->length > UI_TEXT_MAX_BYTES ||
         d->span_count > UI_TEXT_MAX_SPANS || (d->span_count && !d->spans) ||
         d->family_count + d->language_count > UI_TEXT_MAX_STRINGS ||
@@ -343,16 +300,10 @@ static ui_result put_text(ui_cmd_writer *w, ui_handle node, const ui_text_desc *
     return UI_OK;
 }
 
-ui_result ui_cmd_set_text(ui_cmd_writer *w, ui_handle node, const ui_text_desc *d) {
-    return PROOF(put_text(w, node, d), legacy_cmd_set_text(w->legacy, node, d));
-}
-
 ui_result ui_cmd_load_font(ui_cmd_writer *w, uint32_t id, const char *path) {
     size_t n = path ? strlen(path) : 0;
-    ui_result r = !n || n > UI_FONT_PATH_MAX
-                      ? UI_ERR_INVALID_ARGUMENT
-                      : ui_wire_load_font_put(&w->buf, &(ui_wire_load_font){.id = id, .path_bytes = (uint16_t)n}, path);
-    return PROOF(r, legacy_cmd_load_font(w->legacy, id, path));
+    if (!n || n > UI_FONT_PATH_MAX) return UI_ERR_INVALID_ARGUMENT;
+    return ui_wire_load_font_put(&w->buf, &(ui_wire_load_font){.id = id, .path_bytes = (uint16_t)n}, path);
 }
 
 // ---- Styles ------------------------------------------------------------------------------
@@ -367,8 +318,8 @@ static uint64_t decl_bytes(const ui_style_decl *decls, uint32_t count, bool over
     return count ? bytes : 1; // 1: valid and empty (no bytes are written)
 }
 
-static ui_result put_define_style(ui_cmd_writer *w, uint32_t id, const ui_style_block_desc *blocks,
-                                  uint32_t block_count) {
+ui_result ui_cmd_define_style(ui_cmd_writer *w, uint32_t id, const ui_style_block_desc *blocks,
+                              uint32_t block_count) {
     if (!id || block_count > UINT16_MAX || (block_count && !blocks)) return UI_ERR_INVALID_ARGUMENT;
     uint64_t size = 0;
     for (uint32_t b = 0; b < block_count; b++) {
@@ -397,28 +348,19 @@ static ui_result put_define_style(ui_cmd_writer *w, uint32_t id, const ui_style_
     return UI_OK;
 }
 
-ui_result ui_cmd_define_style(ui_cmd_writer *w, uint32_t id, const ui_style_block_desc *blocks,
-                              uint32_t block_count) {
-    return PROOF(put_define_style(w, id, blocks, block_count),
-                 legacy_cmd_define_style(w->legacy, id, blocks, block_count));
-}
-
 ui_result ui_cmd_destroy_style(ui_cmd_writer *w, uint32_t id) {
     ui_wire_destroy_style v = {id};
-    ui_result r = ui_wire_destroy_style_check(&v) ? UI_ERR_INVALID_ARGUMENT : ui_wire_destroy_style_put(&w->buf, &v);
-    return PROOF(r, legacy_cmd_destroy_style(w->legacy, id));
+    return ui_wire_destroy_style_check(&v) ? UI_ERR_INVALID_ARGUMENT : ui_wire_destroy_style_put(&w->buf, &v);
 }
 
 ui_result ui_cmd_set_styles(ui_cmd_writer *w, ui_handle node, const uint32_t *ids,
                             uint32_t count) {
     ui_wire_set_styles v = {.node = node, .count = (uint16_t)count};
-    ui_result r = count > UINT8_MAX || (count && !ids) || ui_wire_set_styles_check(&v, ids)
-                      ? UI_ERR_INVALID_ARGUMENT
-                      : ui_wire_set_styles_put(&w->buf, &v, ids);
-    return PROOF(r, legacy_cmd_set_styles(w->legacy, node, ids, count));
+    if (count > UINT8_MAX || (count && !ids) || ui_wire_set_styles_check(&v, ids)) return UI_ERR_INVALID_ARGUMENT;
+    return ui_wire_set_styles_put(&w->buf, &v, ids);
 }
 
-static ui_result put_props(ui_cmd_writer *w, ui_handle node, const ui_style_decl *decls, uint32_t count) {
+ui_result ui_cmd_set_props(ui_cmd_writer *w, ui_handle node, const ui_style_decl *decls, uint32_t count) {
     if (count > UINT16_MAX || (count && !decls)) return UI_ERR_INVALID_ARGUMENT;
     uint64_t bytes = decl_bytes(decls, count, true);
     if (!bytes) return UI_ERR_INVALID_ARGUMENT;
@@ -431,11 +373,6 @@ static ui_result put_props(ui_cmd_writer *w, ui_handle node, const ui_style_decl
     return r;
 }
 
-ui_result ui_cmd_set_props(ui_cmd_writer *w, ui_handle node, const ui_style_decl *decls,
-                           uint32_t count) {
-    return PROOF(put_props(w, node, decls, count), legacy_cmd_set_props(w->legacy, node, decls, count));
-}
-
 static ui_result put_token(ui_cmd_writer *w, uint32_t id, const ui_value *value) {
     if (!id || (value->kind != UI_VALUE_UNSET && !ui_wire_style_token_value_valid(value)))
         return UI_ERR_INVALID_ARGUMENT;
@@ -446,45 +383,17 @@ static ui_result put_token(ui_cmd_writer *w, uint32_t id, const ui_value *value)
 }
 
 ui_result ui_cmd_set_token(ui_cmd_writer *w, uint32_t id, ui_value value) {
-    return PROOF(put_token(w, id, &value), legacy_cmd_set_token(w->legacy, id, value));
+    return put_token(w, id, &value);
 }
 
 ui_result ui_cmd_set_state(ui_cmd_writer *w, ui_handle node, uint32_t mask, uint32_t value) {
-    ui_result r = ui_wire_set_state_put(&w->buf, &(ui_wire_set_state){node, mask, value});
-    return PROOF(r, legacy_cmd_set_state(w->legacy, node, mask, value));
+    return ui_wire_set_state_put(&w->buf, &(ui_wire_set_state){node, mask, value});
 }
 
 ui_result ui_cmd_writer_take(ui_cmd_writer *w, uint8_t **out_bytes, size_t *out_size) {
     *out_bytes = ui_wire_buf_finish(&w->buf, out_size);
-#ifdef UI_WIRE_PROOF
-    uint8_t *legacy;
-    size_t legacy_size;
-    legacy_writer_take(w->legacy, &legacy, &legacy_size);
-    if (legacy_size != *out_size || (legacy_size && memcmp(legacy, *out_bytes, legacy_size))) {
-        fprintf(stderr, "wire proof: finished buffers differ\n");
-        abort();
-    }
-    free(legacy);
-    if (*out_bytes) ui_wire_proof_record("cmd", *out_bytes, *out_size);
-#endif
     return *out_bytes ? UI_OK : UI_ERR_END;
 }
-
-#ifdef UI_WIRE_PROOF
-// UI_WIRE_RECORD=<dir> writes every finished buffer there once, named by its FNV-1a hash.
-void ui_wire_proof_record(const char *kind, const uint8_t *bytes, size_t size) {
-    const char *dir = getenv("UI_WIRE_RECORD");
-    if (!dir || !*dir) return;
-    uint64_t h = 1469598103934665603ull;
-    for (size_t i = 0; i < size; i++) h = (h ^ bytes[i]) * 1099511628211ull;
-    char path[4096];
-    snprintf(path, sizeof path, "%s/%s-%016llx.bin", dir, kind, (unsigned long long)h);
-    FILE *f = fopen(path, "wbx"); // exclusive: an existing recording is kept
-    if (!f) return;
-    fwrite(bytes, 1, size, f);
-    fclose(f);
-}
-#endif
 
 // ---- Event reader ------------------------------------------------------------------------
 

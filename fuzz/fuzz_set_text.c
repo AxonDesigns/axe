@@ -9,7 +9,7 @@
 
 #include "core/scene.h"
 #include "text/hittest.h"
-#include "wire/wire.h"
+#include "wire/gen/wire_gen.h"
 
 #define FONT(name) UI_FUZZ_FONTS "/" name
 
@@ -49,10 +49,10 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
     ui_scene_add_root(&s, surface);
     ui_wire_buf b;
     ui_wire_buf_init(&b, UI_WIRE_MAGIC_CMD);
-    uint8_t *p = ui_wire_buf_op(&b, UI_OP_CREATE_NODE, UI_WIRE_SIZE_CREATE_NODE);
+    uint8_t *p = ui_wire_buf_op(&b, UI_OP_CREATE_NODE, UI_WIRE_CREATE_NODE_SIZE);
     p = ui_wire_put_handle(p, node);
     ui_wire_put_handle(p, surface);
-    p = ui_wire_buf_op(&b, UI_OP_SET_RECT, UI_WIRE_SIZE_SET_RECT);
+    p = ui_wire_buf_op(&b, UI_OP_SET_RECT, UI_WIRE_SET_RECT_SIZE);
     p = ui_wire_put_handle(p, node);
     for (int i = 0; i < 4; i++) p = ui_wire_put_f32(p, i == 2 ? width : 10);
     // The input becomes the op payloads, with the node handle in front so ops reach it.
