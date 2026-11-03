@@ -686,11 +686,14 @@ static bool apply_node_op(ui_scene *s, const ui_wire_op *op, uint64_t now_ns) {
         ui_property prop = (ui_property)ui_wire_get_u16(p + 8);
         uint32_t count = ui_wire_get_u16(p + 10);
         float stiffness = ui_wire_get_f32(p + 12), damping = ui_wire_get_f32(p + 16);
-        if (ui_property_components(prop) != count || !isfinite(stiffness) || stiffness <= 0 ||
+        // An unknown property (a newer writer's) has no components: dropped, never read as a
+        // radius with no target.
+        if (!count || ui_property_components(prop) != count || !isfinite(stiffness) || stiffness <= 0 ||
             !isfinite(damping) || damping < 0)
             return drop(s, "start_spring (property)", h);
         for (uint32_t i = 0; i < count; i++) v[i] = ui_wire_get_f32(p + 20 + 4 * i);
-        if (!finite_n(v, count)) return drop(s, "start_spring (target)", h);
+        if (!finite_n(v, count) || (prop == UI_PROP_CORNER_RADIUS && v[0] < 0))
+            return drop(s, "start_spring (target)", h);
         ui_node_anim *a = anim_of(n);
         if (!a) return drop(s, "start_spring (out of memory)", h);
         if (prop == UI_PROP_RECT) {

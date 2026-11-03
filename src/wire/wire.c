@@ -198,8 +198,8 @@ ui_result ui_cmd_set_clip(ui_cmd_writer *w, ui_handle node, bool clip) {
 ui_result ui_cmd_start_spring(ui_cmd_writer *w, ui_handle node, ui_property property,
                               const float *target, float stiffness, float damping) {
     uint32_t n = ui_property_components(property);
-    if (!n || !target || !all_finite(target, n) || !isfinite(stiffness) || stiffness <= 0 ||
-        !isfinite(damping) || damping < 0)
+    if (!n || !target || !all_finite(target, n) || (property == UI_PROP_CORNER_RADIUS && target[0] < 0) ||
+        !isfinite(stiffness) || stiffness <= 0 || !isfinite(damping) || damping < 0)
         return UI_ERR_INVALID_ARGUMENT;
     uint8_t *p = ui_wire_buf_op(&w->buf, UI_OP_START_SPRING, UI_WIRE_SIZE_START_SPRING_BASE + 4 * n);
     if (!p) return UI_ERR_OUT_OF_MEMORY;

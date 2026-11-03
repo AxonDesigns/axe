@@ -103,6 +103,8 @@ rate.
 - A `set_*` op on a property stops that property's spring, unless the node's styles declare
   a transition for it, which then animates the change.
 - `count` must equal the property's component count; stiffness must be > 0 and damping ≥ 0.
+  A property this reader doesn't know (from a newer writer) drops the op, as does a negative
+  corner radius target (as for `set_corner_radius`).
 
 ### Clipping
 

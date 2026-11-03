@@ -380,6 +380,40 @@ static void test_unknown_ops(void) {
     free(bytes);
 }
 
+// start_spring on a property from a newer writer (with no components, or some) is dropped;
+// so is a negative radius target. Nothing becomes the node's radius (once, an unknown
+// property with count 0 set the radius from a target never read).
+static void test_start_spring_unknown(void) {
+    ui_wire_buf b;
+    ui_wire_buf_init(&b, UI_WIRE_MAGIC_CMD);
+    uint8_t *p = emit(&b, UI_OP_CREATE_NODE, UI_WIRE_SIZE_CREATE_NODE);
+    ui_wire_put_handle(ui_wire_put_handle(p, node), surface);
+    const struct { uint16_t property, count; float target; } cases[] = {{77, 0, 0}, {77, 1, 5}, {UI_PROP_CORNER_RADIUS, 1, -3}};
+    for (size_t i = 0; i < sizeof cases / sizeof *cases; i++) {
+        p = emit(&b, UI_OP_START_SPRING, UI_WIRE_SIZE_START_SPRING_BASE + 4u * cases[i].count);
+        p = ui_wire_put_handle(p, node);
+        p = ui_wire_put_u16(p, cases[i].property);
+        p = ui_wire_put_u16(p, cases[i].count);
+        p = ui_wire_put_f32(p, 100);
+        p = ui_wire_put_f32(p, 10);
+        if (cases[i].count) ui_wire_put_f32(p, cases[i].target);
+    }
+    size_t n;
+    uint8_t *bytes = ui_wire_buf_finish(&b, &n);
+    ui_scene s;
+    captured c = {0};
+    scene_init(&s, &c);
+    CHECK(ui_scene_apply(&s, bytes, n, 0) == UI_OK);
+    CHECK_EQ_INT(s.stats.applied, 1);
+    CHECK_EQ_INT(s.stats.dropped, 3);
+    ui_scene_resolve(&s, 0);
+    const ui_node *nd = &s.nodes[ui_handle_slot(node)];
+    CHECK(nd->override_count == 0 && nd->computed.corner_radius[0] == 0 && nd->radius[0] == 0);
+    CHECK(ui_scene_check_resolved(&s));
+    ui_scene_destroy(&s);
+    free(bytes);
+}
+
 // Styles from a newer writer: unknown properties and kinds are skipped, longer entries and
 // headers are read for the fields this reader knows. Framing errors reject the buffer.
 static void test_styles(void) {
@@ -555,6 +589,7 @@ int main(void) {
     RUN(test_too_short);
     RUN(test_styles);
     RUN(test_unknown_ops);
+    RUN(test_start_spring_unknown);
     RUN(test_events);
     return test_failures != 0;
 }

@@ -40,6 +40,19 @@ Both checks ran on a throwaway branch, `tmp-guard-check` (deleted afterwards), w
 - **A misfire:** run 41679271921 re-ran the regression commit by mistake and was
   cancelled.
 
+### A bug the fuzzer found on the way
+- **`start_spring` on an unknown property.** The check was `components(property) ==
+  count`, and an unknown property has 0 components, so `count = 0` passed. The op then took
+  the corner-radius branch and stored a target it never read (an uninitialized float). The
+  nightly `fuzz (commands)` job hit it in run 41689458441 (`fuzz.yml` dispatched at
+  acb05fe). The NaN radius tripped the resolution check, whose drawn-value comparison NaN
+  fails. The bug dates from milestone 0's legacy ops, not M2.2.
+- **Fixed in the core and the writer:** an op with an unknown property is dropped, as is a
+  negative radius target, as `set_corner_radius` already did. The writer refuses both. Tests:
+  `test_wire_compat`'s `test_start_spring_unknown`, a case in `test_runtime`, and the crash
+  input as `fuzz/corpus/commands/regress-start-spring-unknown-property`. A 4-minute local
+  run afterwards was clean (269k executions).
+
 ### actionlint
 - **A job in `ci.yml`** downloads actionlint's release binary (v1.7.12), pinned by version
   and sha256 and checked with `sha256sum --check`; no Docker.

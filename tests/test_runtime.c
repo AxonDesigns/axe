@@ -101,6 +101,7 @@ static void test_writer_validation(void) {
     CHECK(ui_cmd_set_color(w, n, NAN, 0, 0, 1) == UI_ERR_INVALID_ARGUMENT);
     float t[4] = {0};
     CHECK(ui_cmd_start_spring(w, n, (ui_property)77, t, 100, 10) == UI_ERR_INVALID_ARGUMENT);
+    CHECK(ui_cmd_start_spring(w, n, UI_PROP_CORNER_RADIUS, (float[]){-1}, 100, 10) == UI_ERR_INVALID_ARGUMENT);
     CHECK(ui_cmd_start_spring(w, n, UI_PROP_RECT, t, 0, 10) == UI_ERR_INVALID_ARGUMENT);
     CHECK(ui_cmd_set_timer(w, 1, UINT64_MAX) == UI_ERR_INVALID_ARGUMENT); // reserved: cancel
     CHECK_EQ_INT(ui_cmd_writer_op_count(w), 0);
