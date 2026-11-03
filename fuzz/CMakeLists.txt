@@ -1,7 +1,7 @@
 # libFuzzer targets (fuzz preset). Each runs as a short CTest smoke test from its seed
 # corpus; new inputs go to the build directory, never into the committed corpus. Run one
 # for longer by hand: build/fuzz/fuzz/fuzz_bidi -max_total_time=600 fuzz/corpus/bidi
-foreach(name IN ITEMS utf8 linebreak bidi set_text)
+foreach(name IN ITEMS utf8 linebreak bidi set_text commands)
     add_executable(fuzz_${name} fuzz_${name}.c)
     target_include_directories(fuzz_${name} PRIVATE ${PROJECT_SOURCE_DIR}/src ${CMAKE_CURRENT_SOURCE_DIR})
     target_compile_definitions(fuzz_${name} PRIVATE UI_FUZZ_FONTS="${PROJECT_SOURCE_DIR}/tests/fonts")
