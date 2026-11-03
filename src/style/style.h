@@ -47,7 +47,8 @@ typedef struct ui_styles {
     uint32_t changed_token_count, changed_token_capacity;
 } ui_styles;
 
-// Transitionable paint properties (UI_STYLE_TRANSITION).
+// Transitionable properties (UI_STYLE_TRANSITION): the paint properties, then the layout
+// rect (layout animations).
 enum {
     UI_ANIM_BACKGROUND = 0,
     UI_ANIM_BORDER_COLOR,
@@ -55,6 +56,8 @@ enum {
     UI_ANIM_OPACITY,
     UI_ANIM_TEXT_COLOR,
     UI_ANIM_PAINT_COUNT,
+    UI_ANIM_LAYOUT = UI_ANIM_PAINT_COUNT,
+    UI_ANIM_COUNT,
 };
 
 // Text values that styles set; the rest come from the node's set_text.
@@ -101,7 +104,7 @@ typedef struct ui_computed {
     float line_height;     // 0: from the fonts' metrics
     uint8_t text_align;    // ui_text_align
     uint32_t max_lines;    // 0: unlimited
-    float transition[UI_ANIM_PAINT_COUNT][2]; // stiffness, damping; stiffness 0: none
+    float transition[UI_ANIM_COUNT][2]; // stiffness, damping; stiffness 0: none
     ui_layout_style layout;
 } ui_computed;
 

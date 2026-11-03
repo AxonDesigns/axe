@@ -139,7 +139,7 @@ static void test_huge_rects(void) {
     ui_display_list dl = {.surface = surface, .width = WIDTH, .height = HEIGHT,
                           .logical_width = WIDTH, .logical_height = HEIGHT, .scale_120 = 120};
     ui_display_list_reset(&dl);
-    ui_scene_layout(&s, surface, WIDTH, HEIGHT, 1, NULL);
+    ui_scene_layout(&s, surface, WIDTH, HEIGHT, 1, NULL, 0);
     CHECK(ui_scene_build(&s, surface, &dl, NULL) == UI_OK);
     for (uint32_t i = 0; i < dl.batch_count; i++)
         CHECK(dl.batches[i].clip.width >= 0 && dl.batches[i].clip.height >= 0);

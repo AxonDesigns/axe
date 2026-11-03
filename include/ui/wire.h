@@ -179,12 +179,16 @@ typedef enum ui_style_prop {
     UI_STYLE_BOTTOM = 61,
     UI_STYLE_LEFT = 62,
     UI_STYLE_ASPECT_RATIO = 63,    // number > 0 (width / height), or auto
+    // The node's layout rect (its position and size from layout). It can't be declared, only
+    // transitioned: UI_STYLE_TRANSITION(UI_STYLE_LAYOUT) animates the node from where it is
+    // drawn to every new layout rect (layout animations, docs/layout.md).
+    UI_STYLE_LAYOUT = 64,
 } ui_style_prop;
 
 // The transition of a property: a spring that animates the property's value whenever what
 // it resolves to changes, whatever the reason. Its value is UI_VALUE_SPRING, or
 // UI_VALUE_NONE for no transition. Transitions exist for background, border color, corner
-// radius, opacity and text color.
+// radius, opacity, text color and the layout rect (UI_STYLE_LAYOUT).
 #define UI_STYLE_TRANSITION(prop) ((uint16_t)(0x8000u | (uint16_t)(prop)))
 
 typedef enum ui_value_kind {

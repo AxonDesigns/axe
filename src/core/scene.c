@@ -11,9 +11,9 @@
 #define MODULE "scene"
 
 // Settle thresholds per spring, in the property's units (px, linear color, opacity).
-static const double spring_epsilon[UI_SPRING_COUNT] = {0.01, 1e-4, 1e-4, 0.01, 1e-4, 1e-4};
+static const double spring_epsilon[UI_SPRING_COUNT] = {0.01, 1e-4, 1e-4, 0.01, 1e-4, 1e-4, 0.01};
 // Components per spring.
-static const uint32_t spring_components[UI_SPRING_COUNT] = {4, 4, 4, 1, 1, 4};
+static const uint32_t spring_components[UI_SPRING_COUNT] = {4, 4, 4, 1, 1, 4, 4};
 
 // What the build keeps per ancestor level.
 struct ui_build_level {
@@ -498,6 +498,40 @@ static void set_root(ui_scene *s, uint32_t slot, uint32_t root) {
     }
 }
 
+// Where a node's presentation rect puts its border box's origin on the surface (UI_NO_SLOT:
+// the surface's origin).
+static void presented_origin(const ui_scene *s, uint32_t slot, float out[2]) {
+    out[0] = out[1] = 0;
+    for (; slot != UI_NO_SLOT; slot = s->nodes[slot].parent) {
+        out[0] += s->nodes[slot].rect[0];
+        out[1] += s->nodes[slot].rect[1];
+    }
+}
+
+// A node moved under another parent stays where it is drawn: its presentation rect, and a
+// running layout animation, are re-expressed relative to the new parent, and the next
+// layout places it (animating from there with a layout transition). Moved to another
+// surface, it appears at its new layout rect.
+static void rebase(ui_scene *s, ui_node *n, const float from[2], uint32_t old_root) {
+    if (n->root != old_root) {
+        n->placed = false;
+        if (n->anim) n->anim->springs[UI_SPRING_LAYOUT].active = false;
+        return;
+    }
+    float to[2];
+    presented_origin(s, n->parent, to);
+    ui_spring *sp = n->anim ? &n->anim->springs[UI_SPRING_LAYOUT] : NULL;
+    for (int i = 0; i < 2; i++) {
+        float d = from[i] - to[i];
+        n->rect[i] += d;
+        if (sp && sp->active) {
+            sp->position[i] += d;
+            sp->target[i] += d;
+        }
+    }
+    n->rebased = true;
+}
+
 // move_node: under `parent` (a node or a surface), before sibling `before` (null: last).
 static bool apply_move(ui_scene *s, ui_node *n, const uint8_t *p) {
     uint32_t slot = (uint32_t)(n - s->nodes);
@@ -522,6 +556,9 @@ static bool apply_move(ui_scene *s, ui_node *n, const uint8_t *p) {
     }
     parent_layout_dirty(s, slot);
     s->roots[n->root].dirty = true;
+    float from[2];
+    presented_origin(s, n->parent, from);
+    uint32_t old_root = n->root;
     unlink(s, slot);
     uint32_t *first = pn ? &pn->first_child : &root->first_child;
     uint32_t *last = pn ? &pn->last_child : &root->last_child;
@@ -533,6 +570,7 @@ static bool apply_move(ui_scene *s, ui_node *n, const uint8_t *p) {
     if (before_slot != UI_NO_SLOT) s->nodes[before_slot].prev_sibling = slot;
     else *last = slot;
     if (n->root != root_index) set_root(s, slot, root_index);
+    rebase(s, n, from, old_root);
     s->roots[root_index].dirty = true;
     layout_dirty(s, slot);
     return true;
@@ -730,6 +768,7 @@ ui_result ui_scene_apply_prepared(ui_scene *s, const uint8_t *data, size_t size,
 static float *presented(ui_node *n, int spring) {
     switch (spring) {
     case UI_SPRING_RECT: return n->frame;
+    case UI_SPRING_LAYOUT: return n->rect;
     case UI_SPRING_COLOR: return n->color;
     case UI_SPRING_BORDER_COLOR: return n->border_color;
     case UI_SPRING_RADIUS: return &n->radius;
@@ -747,6 +786,9 @@ static void write_back(ui_scene *s, ui_node *n, int which) {
         n->frame[2] = fmaxf(n->frame[2], 0.f);
         n->frame[3] = fmaxf(n->frame[3], 0.f);
         if (!apply_frame(s, n)) UI_ERROR(s->log, MODULE, "out of memory moving a frame");
+    } else if (which == UI_SPRING_LAYOUT) {
+        n->rect[2] = fmaxf(n->rect[2], 0.f);
+        n->rect[3] = fmaxf(n->rect[3], 0.f);
     } else if (which == UI_SPRING_RADIUS) {
         n->radius = fmaxf(n->radius, 0.f);
     } else {
@@ -807,6 +849,12 @@ static void resolve_node(ui_scene *s, ui_node *n, uint64_t now_ns) {
     changed |= update_paint(n, UI_SPRING_RADIUS, &c->corner_radius, c->transition[UI_ANIM_RADIUS], now_ns);
     changed |= update_paint(n, UI_SPRING_OPACITY, &c->opacity, c->transition[UI_ANIM_OPACITY], now_ns);
     changed |= update_paint(n, UI_SPRING_TEXT_COLOR, text_target, c->transition[UI_ANIM_TEXT_COLOR], now_ns);
+    // A layout animation whose transition went away ends at the layout rect.
+    if (!(c->transition[UI_ANIM_LAYOUT][0] > 0) && n->anim && n->anim->springs[UI_SPRING_LAYOUT].active) {
+        n->anim->springs[UI_SPRING_LAYOUT].active = false;
+        memcpy(n->rect, n->layout.rect, sizeof n->rect);
+        changed = true;
+    }
     changed |= n->clip != c->clip || n->border_width != c->border_width;
     n->clip = c->clip;
     n->border_width = c->border_width;
@@ -895,7 +943,7 @@ void ui_scene_fonts_changed(ui_scene *s) {
 }
 
 bool ui_scene_layout(ui_scene *s, ui_handle surface, float width, float height, float scale,
-                     ui_text_context *text) {
+                     ui_text_context *text, uint64_t now_ns) {
     ui_scene_root *root = find_root(s, surface);
     if (!root) return false;
     uint32_t index = (uint32_t)(root - s->roots);
@@ -915,8 +963,32 @@ bool ui_scene_layout(ui_scene *s, ui_handle surface, float width, float height, 
     root->layout_scale = scale;
     // No redraw is asked for here: layout runs as a surface draws, and whatever changed
     // what layout depends on already marked the root dirty.
-    ui_layout_root(s, index, width, height, scale, text, &s->layout_stats);
+    ui_layout_root(s, index, width, height, scale, text, &s->layout_stats, now_ns);
     return true;
+}
+
+void ui_scene_place(ui_scene *s, uint32_t slot, uint64_t now_ns) {
+    ui_node *n = &s->nodes[slot];
+    const float *target = n->layout.rect, *transition = n->computed.transition[UI_ANIM_LAYOUT];
+    bool shown = n->computed.layout.display != UI_DISPLAY_NONE;
+    ui_node_anim *a = n->anim;
+    bool running = a && a->springs[UI_SPRING_LAYOUT].active;
+    // New nodes, and nodes shown again, appear at their layout rect; the others animate
+    // from where they are drawn when they have a layout transition. A running animation
+    // retargets, keeping its velocity.
+    if (n->placed && shown && transition[0] > 0 && (running || memcmp(n->rect, target, sizeof n->rect)) &&
+        (a = anim_of(n))) {
+        ui_spring_start(&a->springs[UI_SPRING_LAYOUT], 4, n->rect, target, transition[0], transition[1],
+                        now_ns);
+        // The core reads this after the frame to keep frames coming; the next animate
+        // advances the spring.
+        s->roots[n->root].animating = true;
+    } else {
+        if (running) a->springs[UI_SPRING_LAYOUT].active = false;
+        memcpy(n->rect, target, sizeof n->rect);
+    }
+    n->placed = shown;
+    n->rebased = false;
 }
 
 // Appends the glyphs of a node's text. ox, oy: the node's origin in physical px.
@@ -994,9 +1066,11 @@ static void intersect(float out[4], const float c[4], float x0, float y0, float 
     out[3] = fminf(c[3], y1);
 }
 
-// A node moves while its rect springs; then it, and everything under it, draws where it is
-// instead of snapping to whole pixels.
-static bool moving(const ui_node *n) { return n->anim && n->anim->springs[UI_SPRING_RECT].active; }
+// A node moves while its frame or its presentation rect springs; then it, and everything
+// under it, draws where it is instead of snapping to whole pixels.
+static bool moving(const ui_node *n) {
+    return n->anim && (n->anim->springs[UI_SPRING_RECT].active || n->anim->springs[UI_SPRING_LAYOUT].active);
+}
 
 // A border at rest is whole physical pixels, at least one, as browsers draw them.
 static float border_px(float width, float scale, bool snap) {

@@ -17,19 +17,21 @@
 
 #define UI_NO_SLOT UINT32_MAX
 
-// Animated node properties. The paint springs come in the order of UI_ANIM_* (style.h),
+// Animated node properties. The transitioned ones come in the order of UI_ANIM_* (style.h),
 // one after UI_SPRING_RECT.
 enum {
-    UI_SPRING_RECT = 0,
+    UI_SPRING_RECT = 0,     // set_rect's frame (start_spring)
     UI_SPRING_COLOR,        // background
     UI_SPRING_BORDER_COLOR,
     UI_SPRING_RADIUS,
     UI_SPRING_OPACITY,
     UI_SPRING_TEXT_COLOR,
+    UI_SPRING_LAYOUT,       // the presentation rect, toward the layout rect
     UI_SPRING_COUNT,
 };
-static_assert(UI_SPRING_COLOR == 1 + UI_ANIM_BACKGROUND && UI_SPRING_TEXT_COLOR == 1 + UI_ANIM_TEXT_COLOR,
-              "paint springs follow the style transitions");
+static_assert(UI_SPRING_COLOR == 1 + UI_ANIM_BACKGROUND && UI_SPRING_TEXT_COLOR == 1 + UI_ANIM_TEXT_COLOR &&
+                  UI_SPRING_LAYOUT == 1 + UI_ANIM_LAYOUT,
+              "springs follow the style transitions");
 
 // A node's springs, allocated the first time one of its properties animates.
 typedef struct ui_node_anim {
@@ -44,12 +46,16 @@ typedef struct ui_node {
     uint32_t parent;       // node slot, or UI_NO_SLOT when attached to a surface root
     uint32_t root;         // index into ui_scene.roots
     uint32_t first_child, last_child, next_sibling, prev_sibling;
-    float rect[4];         // drawn: logical px relative to the parent (its layout rect)
+    // The presentation rect: where it is drawn, in logical px relative to the parent's
+    // presentation rect. Its layout rect (layout.rect) unless a layout transition moves it.
+    float rect[4];
     // set_rect's frame: the absolute position and size it overrides, which a rect spring
     // animates (docs/layout.md).
     float frame[4];
     bool framed;
     ui_layout_node layout;
+    bool placed;           // drawn at a layout rect before: a new one may animate
+    bool rebased;          // moved under another parent: place it at the next layout
     // What is drawn. Each follows its resolved value in `computed`, through a spring while
     // one runs.
     float color[4];        // background: linear, straight alpha
@@ -185,12 +191,16 @@ ui_node *ui_scene_node(ui_scene *s, ui_handle h);
 ui_handle ui_scene_handle_of(const ui_scene *s, uint32_t slot);
 
 // Lays out the surface's tree if anything under it changed or the surface's size or scale
-// did (layout/layout.h). Returns true if it ran.
+// did (layout/layout.h), at animation time `now_ns`: layout transitions start then. Returns
+// true if it ran.
 bool ui_scene_layout(ui_scene *s, ui_handle surface, float width, float height, float scale,
-                     ui_text_context *text);
+                     ui_text_context *text, uint64_t now_ns);
 // Implemented in layout/flex.c.
 void ui_layout_root(ui_scene *s, uint32_t root, float width, float height, float scale,
-                    ui_text_context *text, ui_layout_stats *stats);
+                    ui_text_context *text, ui_layout_stats *stats, uint64_t now_ns);
+// Called by layout for a node whose layout rect changed, or that needs placing: what is
+// drawn follows, through the node's layout transition when it has one.
+void ui_scene_place(ui_scene *s, uint32_t slot, uint64_t now_ns);
 
 // The root for a surface, or NULL. Callers read and clear `dirty`.
 ui_scene_root *ui_scene_root_of(ui_scene *s, ui_handle surface);

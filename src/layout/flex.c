@@ -34,6 +34,7 @@ typedef struct ctx {
     ui_text_context *text;
     float scale;
     ui_layout_stats *stats;
+    uint64_t now_ns; // layout transitions start at this animation time
 } ctx;
 
 // The surface pseudo-container: a column with initial values otherwise.
@@ -95,6 +96,16 @@ static void padding_border(const box *b, float cb_width, float out[4]) {
 
 static float sum_axis(const float sides[4], int axis) {
     return axis == 0 ? sides[1] + sides[3] : sides[0] + sides[2];
+}
+
+// A node's layout rect, relative to its parent's border box. The scene places it when it
+// changed (or the node needs placing): what is drawn follows, or animates toward it.
+static void set_layout_rect(ctx *c, uint32_t slot, float x, float y, float w, float h) {
+    ui_node *n = &c->s->nodes[slot];
+    float r[4] = {x, y, w, h};
+    if (n->placed && !n->rebased && !memcmp(r, n->layout.rect, sizeof r)) return;
+    memcpy(n->layout.rect, r, sizeof r);
+    ui_scene_place(c->s, slot, c->now_ns);
 }
 
 // ---- Text --------------------------------------------------------------------------------
@@ -159,6 +170,13 @@ static bool uses_percent(const ui_layout_style *st) {
     return false;
 }
 
+// Empties a node's cache and clears its dirty flag: what changed is accounted for.
+static void forget(ui_layout_node *l) {
+    memset(l->measured, 0, sizeof l->measured);
+    l->final.used = false;
+    l->dirty = false;
+}
+
 // A node's size for these inputs, from its cache when it has them. `perform` also lays out
 // its children (and is cached separately: a measurement doesn't position anything).
 static void compute(ctx *c, uint32_t slot, const float known[2], const float parent_size[2],
@@ -189,10 +207,7 @@ static void compute(ctx *c, uint32_t slot, const float known[2], const float par
             return;
         }
     } else {
-        // Its inputs changed: nothing cached for it holds any more.
-        memset(l->measured, 0, sizeof l->measured);
-        l->final.used = false;
-        l->dirty = false;
+        forget(l); // its inputs changed: nothing cached for it holds any more
     }
     l->percent = uses_percent(&c->s->nodes[slot].computed.layout);
     parent = l->percent ? parent_size : none;
@@ -412,7 +427,12 @@ static void compute_box(ctx *c, const box *b, const float known[2], const float 
     }
     for (uint32_t s = b->first_child; s != UI_NO_SLOT && count < children; s = c->s->nodes[s].next_sibling) {
         if (hidden(c, s)) {
-            if (perform) memset(c->s->nodes[s].layout.rect, 0, sizeof c->s->nodes[s].layout.rect);
+            if (perform) {
+                set_layout_rect(c, s, 0, 0, 0, 0);
+                // Never computed while hidden, so clear it here: dirty flags propagate only
+                // up to the first dirty node, and showing it again must reach this node.
+                forget(&c->s->nodes[s].layout);
+            }
             continue;
         }
         if (absolute(c, s)) continue;
@@ -815,14 +835,9 @@ static void compute_box(ctx *c, const box *b, const float known[2], const float 
             compute_item(c, &it->b, k, parent_inner, a, PERFORM, sz, &bl);
             it->baseline = bl;
         }
-        if (perform) {
-            float *r = c->s->nodes[it->b.slot].layout.rect;
-            r[0] = it->pos[0];
-            r[1] = it->pos[1];
-            r[2] = m == 0 ? it->target : it->cross;
-            r[3] = m == 0 ? it->cross : it->target;
-            memcpy(c->s->nodes[it->b.slot].rect, r, 4 * sizeof *r); // drawn where laid out
-        }
+        if (perform)
+            set_layout_rect(c, it->b.slot, it->pos[0], it->pos[1], m == 0 ? it->target : it->cross,
+                            m == 0 ? it->cross : it->target);
         // The container's first baseline: the first baseline-aligned item of the first
         // line, else the first item's, synthesized from its bottom border edge when it has
         // none (§8.5).
@@ -923,19 +938,15 @@ static void position_absolute(ctx *c, const box *b, const ui_layout_style *cst, 
     float done[2];
     compute(c, slot, (float[]){sz[0], sz[1]}, parent, (float[]){sz[0], sz[1]}, perform ? PERFORM : MEASURE,
             done, &bl);
-    n->layout.rect[0] = pos[0];
-    n->layout.rect[1] = pos[1];
-    n->layout.rect[2] = done[0];
-    n->layout.rect[3] = done[1];
-    memcpy(n->rect, n->layout.rect, sizeof n->rect); // drawn where laid out
+    set_layout_rect(c, slot, pos[0], pos[1], done[0], done[1]);
 }
 
 // ---- Entry point --------------------------------------------------------------------------
 
 // Lays out a surface's tree: the root is a column container the surface's size.
 void ui_layout_root(ui_scene *s, uint32_t root, float width, float height, float scale,
-                    ui_text_context *text, ui_layout_stats *stats) {
-    ctx c = {s, text, scale, stats};
+                    ui_text_context *text, ui_layout_stats *stats, uint64_t now_ns) {
+    ctx c = {s, text, scale, stats, now_ns};
     stats->passes++;
     layout_styles();
     box rb = {UI_NO_SLOT, &root_style, 0, s->roots[root].first_child, NULL};

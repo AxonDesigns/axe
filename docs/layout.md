@@ -45,6 +45,35 @@ exactly what `set_rect` always did, so code written before layout keeps working.
 - To return a node to the flow, unset those overrides (`set_props` with `unset` for
   `position`, `left`, `top`, `width` and `height`).
 
+## Layout animations
+
+- **A node has two rects.** Its *layout rect* is what layout produced, relative to its
+  parent's border box. Its *presentation rect* is where it is drawn, relative to its
+  parent's presentation rect. They are the same unless a layout animation is running.
+- **A node opts in with `transition(layout)`**, in a style or an override:
+  `{UI_STYLE_TRANSITION(UI_STYLE_LAYOUT), ui_transition(stiffness, damping)}`. Whenever its
+  layout rect changes, for whatever reason, its presentation rect springs from where it is
+  drawn to the new layout rect. The reason can be its own style, a sibling, its parent's
+  size, a reorder or the surface's size. Position and size are the four components of one
+  spring.
+  - A running animation retargets and keeps its velocity, so an interrupted move never
+    jumps.
+  - New nodes, and nodes shown again after `display: none`, appear at their layout rect.
+  - Removing the transition ends a running animation at the layout rect.
+- **Children are placed in their parent's presentation rect** at their own rects, so a
+  subtree moves with its root. A node whose size animates draws its background and border
+  at the animated size; its text and children keep their final layout. Nothing is scaled, as
+  with FLIP without the scale.
+- **`move_node` keeps a node where it is drawn.** Its presentation rect, and a running
+  spring, are re-expressed relative to the new parent, and the next layout animates it into
+  its new place. Moved again mid-flight, it carries on with its velocity. A node moved to
+  another surface appears at its new layout rect.
+- **A moving node and its subtree draw unsnapped**, and snap again on the frame the spring
+  settles (`docs/styles.md`).
+- **Layout itself never waits for an animation.** The layout rect is final at once: the
+  next layout, and the measurement op, see it. A spring starts at the animation time of the
+  frame whose layout changed the rect, and later frames advance it.
+
 ## The algorithm
 
 `src/layout/flex.c` follows CSS Flexible Box Layout Level 1, §9:

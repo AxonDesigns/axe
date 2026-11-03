@@ -20,7 +20,8 @@ uint32_t ui_style_kind_words(uint8_t kind) {
 
 static bool transitionable(uint16_t p) {
     return p == UI_STYLE_BACKGROUND_COLOR || p == UI_STYLE_BORDER_COLOR ||
-           p == UI_STYLE_CORNER_RADIUS || p == UI_STYLE_OPACITY || p == UI_STYLE_TEXT_COLOR;
+           p == UI_STYLE_CORNER_RADIUS || p == UI_STYLE_OPACITY || p == UI_STYLE_TEXT_COLOR ||
+           p == UI_STYLE_LAYOUT;
 }
 
 bool ui_style_prop_known(uint16_t prop) {
@@ -101,6 +102,7 @@ bool ui_style_value_valid(uint16_t prop, const ui_value *v, bool override) {
     case UI_STYLE_LEFT: return length(v, true, true, false);
     case UI_STYLE_ASPECT_RATIO:
         return v->kind == UI_VALUE_AUTO || (v->kind == UI_VALUE_NUMBER && isfinite(n) && n > 0);
+    case UI_STYLE_LAYOUT: return false; // only its transition (unknown above)
     }
     return false;
 }

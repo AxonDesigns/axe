@@ -148,7 +148,7 @@ int main(void) {
 
     // 1. Full layout.
     uint64_t t0 = ui_monotonic_ns();
-    ui_scene_layout(&s, surface, 1600, 900, 1, &text);
+    ui_scene_layout(&s, surface, 1600, 900, 1, &text, 0);
     uint64_t cold = ui_monotonic_ns() - t0;
     uint64_t computed = s.layout_stats.computed;
     enum { RUNS = 15 };
@@ -156,7 +156,7 @@ int main(void) {
     for (int r = 0; r < RUNS; r++) {
         mark_all_dirty(&s);
         t0 = ui_monotonic_ns();
-        ui_scene_layout(&s, surface, 1600, 900, 1, &text);
+        ui_scene_layout(&s, surface, 1600, 900, 1, &text, 0);
         warm[r] = ui_monotonic_ns() - t0;
     }
     printf("full layout   %u nodes: %.2f ms cold (%llu computations); with text measured %.2f ms median, "
@@ -177,7 +177,7 @@ int main(void) {
         uint64_t before = s.layout_stats.computed, hits = s.layout_stats.cache_hits;
         t0 = ui_monotonic_ns();
         ui_scene_resolve(&s, 0);
-        ui_scene_layout(&s, surface, 1600, 900, 1, &text);
+        ui_scene_layout(&s, surface, 1600, 900, 1, &text, 0);
         inc[r] = ui_monotonic_ns() - t0;
         inc_computed += s.layout_stats.computed - before;
         inc_hits += s.layout_stats.cache_hits - hits;

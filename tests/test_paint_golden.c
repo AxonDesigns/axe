@@ -235,7 +235,7 @@ static void test_snapping(void) {
     ui_scene_resolve(&s, 0);
     ui_display_list dl = {.scale_120 = 150, .width = 400, .height = 200};
     ui_display_list_reset(&dl);
-    ui_scene_layout(&s, surface, 320, 160, 1.25f, NULL);
+    ui_scene_layout(&s, surface, 320, 160, 1.25f, NULL, 0);
     CHECK(ui_scene_build(&s, surface, &dl, NULL) == UI_OK);
     // At rest: origin and size each round (12.875 -> 13, 25.5 -> 26; child 17 -> 17).
     CHECK_EQ_INT(dl.rect_count, 2);
@@ -252,7 +252,7 @@ static void test_snapping(void) {
     for (uint64_t t = 16000000; t < 400000000; t += 16000000) {
         ui_scene_animate(&s, t);
         ui_display_list_reset(&dl);
-        ui_scene_layout(&s, surface, 320, 160, 1.25f, NULL);
+        ui_scene_layout(&s, surface, 320, 160, 1.25f, NULL, t);
         ui_scene_build(&s, surface, &dl, NULL);
         // The child keeps its exact offset from the parent while both move.
         CHECK_NEAR(dl.rects[1].x - dl.rects[0].x, 3.3 * 1.25, 1e-3);
@@ -261,7 +261,7 @@ static void test_snapping(void) {
     CHECK(fractional);
     ui_scene_animate(&s, 20000000000ull); // long settled
     ui_display_list_reset(&dl);
-    ui_scene_layout(&s, surface, 320, 160, 1.25f, NULL);
+    ui_scene_layout(&s, surface, 320, 160, 1.25f, NULL, 20000000000ull);
     ui_scene_build(&s, surface, &dl, NULL);
     CHECK_NEAR(dl.rects[0].x, 63, 0); // 50.3 * 1.25 = 62.875
     CHECK_NEAR(dl.rects[1].x, 67, 0); // 53.6 * 1.25 = 67
@@ -299,7 +299,7 @@ static void test_layer_bounds(void) {
     ui_scene_resolve(&s, 0);
     ui_display_list dl = {.scale_120 = 120, .width = 100, .height = 80};
     ui_display_list_reset(&dl);
-    ui_scene_layout(&s, surface, 100, 80, 1, NULL);
+    ui_scene_layout(&s, surface, 100, 80, 1, NULL, 0);
     CHECK(ui_scene_build(&s, surface, &dl, NULL) == UI_OK);
     CHECK_EQ_INT(dl.layer_count, 2);
     if (dl.layer_count == 2) {

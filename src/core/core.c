@@ -596,7 +596,7 @@ static void commit(ui_core *c, ui_core_surface *s, uint64_t now) {
     dl->text_contrast = c->text_contrast;
     dl->text_gamma = c->text_gamma;
     ui_scene_layout(&c->scene, s->handle, (float)s->config.logical_width,
-                    (float)s->config.logical_height, (float)s->config.scale_120 / 120.f, &c->text);
+                    (float)s->config.logical_height, (float)s->config.scale_120 / 120.f, &c->text, now);
     ui_scene_text text = {&c->text, c->atlas, &c->raster};
     if (ui_scene_build(&c->scene, s->handle, dl, &text) != UI_OK)
         UI_ERROR(c->log, MODULE, "display list incomplete (out of memory)");

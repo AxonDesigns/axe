@@ -71,7 +71,7 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
                                   .scale_120 = scale_120};
             ui_display_list_reset(&dl);
             ui_scene_layout(&s, surfaces[i], dl.logical_width, dl.logical_height,
-                            (float)scale_120 / 120.f, NULL);
+                            (float)scale_120 / 120.f, NULL, (uint64_t)(pass + 1) * 16000000u);
             ui_scene_build(&s, surfaces[i], &dl, NULL);
             ui_display_list_free(&dl);
         }

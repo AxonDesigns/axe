@@ -194,3 +194,12 @@ target_compile_definitions(test_layout PRIVATE _DEFAULT_SOURCE UI_TEST_FONTS="${
 target_link_libraries(test_layout PRIVATE ui m)
 ui_target_warnings(test_layout)
 add_test(NAME layout COMMAND test_layout)
+
+# Layout animations: the presentation rect, retargeting, reparenting, both schedulers.
+add_executable(test_layout_anim test_layout_anim.c)
+target_include_directories(test_layout_anim PRIVATE ${PROJECT_SOURCE_DIR}/src)
+target_compile_definitions(test_layout_anim PRIVATE _DEFAULT_SOURCE)
+target_link_libraries(test_layout_anim PRIVATE ui m)
+ui_target_warnings(test_layout_anim)
+add_test(NAME layout_anim COMMAND test_layout_anim)
+set_tests_properties(layout_anim PROPERTIES ENVIRONMENT "UI_GPU=software" TIMEOUT 120)

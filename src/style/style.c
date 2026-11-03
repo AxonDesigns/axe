@@ -365,6 +365,7 @@ static int anim_of(uint16_t prop) {
     case UI_STYLE_CORNER_RADIUS: return UI_ANIM_RADIUS;
     case UI_STYLE_OPACITY: return UI_ANIM_OPACITY;
     case UI_STYLE_TEXT_COLOR: return UI_ANIM_TEXT_COLOR;
+    case UI_STYLE_LAYOUT: return UI_ANIM_LAYOUT;
     default: return -1;
     }
 }

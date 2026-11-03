@@ -51,7 +51,7 @@ static void frame(fixture *f) {
     }
     ui_scene_resolve(&f->s, f->now);
     ui_scene_animate(&f->s, f->now);
-    for (int i = 0; i < 2; i++) ui_scene_layout(&f->s, f->surfaces[i], f->width, f->height, 1, &text);
+    for (int i = 0; i < 2; i++) ui_scene_layout(&f->s, f->surfaces[i], f->width, f->height, 1, &text, f->now);
 }
 
 static ui_handle node(uint32_t slot) { return (ui_handle){slot, 1}; }
@@ -144,6 +144,12 @@ static void test_display_none(void) {
     CHECK(ui_scene_build(&f.s, f.surfaces[0], &dl, NULL) == UI_OK);
     CHECK_EQ_INT(dl.rect_count, 0);
     ui_display_list_free(&dl);
+    // Shown again, it takes its share back. Regression: a hidden node is never computed, so
+    // it stayed dirty, and showing it didn't reach its parent (propagation stops at the
+    // first dirty node), whose cached layout then skipped it.
+    props(&f, 3, &(ui_style_decl){UI_STYLE_DISPLAY, ui_unset()}, 1);
+    frame(&f);
+    CHECK(rect_is(&f, 3, 100, 0, 100, 100) && rect_is(&f, 4, 200, 0, 100, 100));
     teardown(&f);
 }
 

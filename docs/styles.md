@@ -64,8 +64,9 @@ token, a state, an override, a redefined style, or new text with another color.
 - **A node's first resolution never animates**: new nodes appear at their values.
 - **Transitionable properties:** background color, border color, corner radius, opacity
   and text color. Colors spring in linear light.
-- **Layout properties don't transition.** Their changes animate through layout animations
-  (milestone 2, later step).
+- **Layout properties don't transition one by one.** `transition(layout)` (property 64)
+  animates the node from where it is drawn to wherever layout puts it, whatever moved it
+  ([layout animations](layout.md#layout-animations)).
 - **`none`** turns a transition off (from a later style or an override).
 
 ## Properties
@@ -107,6 +108,7 @@ Layout properties ([`docs/layout.md`](layout.md)); keywords are the `ui_flex_*`,
 | 55–58 | padding (top, right, bottom, left) | px or percent, ≥ 0 | 0 |
 | 59–62 | insets (top, right, bottom, left) | px or percent (may be negative), or auto | auto |
 | 63 | `aspect_ratio` | number > 0 (width / height), or auto | auto |
+| 64 | `layout` | the layout rect: not declared, only transitioned (`0x8000 \| 64`) | |
 
 Percentages of padding and margins resolve against the containing block's width, as in
 CSS. `border_width` (3) also takes part in layout.
@@ -128,8 +130,8 @@ setting them never reshapes text. Family, size, weight, slant and language stay 
   - Opacity 0 skips the node and its subtree entirely.
 - **Snapping:** a box at rest snaps to whole physical pixels, with its origin and its size
   each rounded, so a box never changes size depending on where it sits. A box that is
-  moving (its rect springs), and everything inside it, is drawn at its exact position, and
-  snaps again on the frame the spring settles. Text baselines always snap, so moving text
+  moving (its frame or its presentation rect springs), and everything inside it, is drawn
+  at its exact position, and snaps again on the frame the spring settles. Text baselines always snap, so moving text
   steps vertically by whole pixels.
 
 ## Ops

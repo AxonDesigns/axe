@@ -47,7 +47,7 @@ static double run(const layout_fixture *f, uint32_t *worst_node, bool verbose) {
     CHECK_EQ_INT(s.stats.dropped, 0);
     free(bytes);
     ui_scene_resolve(&s, 0);
-    ui_scene_layout(&s, surface, (float)f->width, (float)f->height, 1, &text);
+    ui_scene_layout(&s, surface, (float)f->width, (float)f->height, 1, &text, 0);
     double worst = 0;
     for (uint32_t i = 0; i < f->node_count; i++) {
         const float *got = s.nodes[i + 1].layout.rect, *want = f->nodes[i].expected;

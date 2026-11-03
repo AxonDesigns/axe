@@ -86,6 +86,32 @@ milestone first.
   takes 60 px, because a border box can't be smaller than its border, and the styled box's
   text sits inside its border. Both are CSS-correct.
 
+### Layout animations
+- **`transition(layout)` on a pseudo-property** (64, `UI_STYLE_LAYOUT`) that can't be
+  declared, only transitioned. It reuses the transition entry, so no new op or value kind,
+  and it works from styles, state blocks and overrides like every other transition.
+- **Layout writes only layout rects.** The scene places a node whose layout rect changed,
+  or that was never placed (`ui_scene_place`): its presentation rect (`ui_node.rect`, what
+  the build draws) jumps there, or a 4-component spring (x, y, width, height) starts or
+  retargets toward it, keeping its velocity. `ui_scene_layout` takes the frame's animation
+  time for that.
+- **Children follow their parent's presentation** at their own rects, and nothing scales:
+  a node's background and border animate their size, its text and children don't (FLIP
+  without scale, as planned).
+- **Reparenting keeps the node where it is drawn** (as planned): `move_node`
+  re-expresses the presentation rect and a running spring relative to the new parent. A
+  move to another surface, where the old position means nothing, appears in place.
+- **New nodes, and nodes shown again after `display: none`, appear in place**; removing
+  the transition ends a running animation at the layout rect.
+- **Bug found by the tests:** a hidden node is never computed, so it stayed dirty, and
+  showing it again didn't reach its parent (dirty propagation stops at the first dirty
+  node); the parent's cached layout then skipped it. Layout now clears the cache and the
+  flag of a hidden node it passes over. `test_layout`'s `test_display_none` checks it.
+- **Tests:** `test_layout_anim` checks the closed-form position while moving and after a
+  retarget, children, snapping, reparenting mid-flight, and that the single and threaded
+  schedulers draw byte-identical frames mid-animation. Fuzz seed `seed09` starts and
+  retargets layout springs on the harness's second pass.
+
 ### Layout properties in styles, bench_layout
 - **Layout properties go through the style machinery unchanged:** tokens, state blocks,
   overrides and redefinitions re-resolve the node, and a changed layout value marks it
