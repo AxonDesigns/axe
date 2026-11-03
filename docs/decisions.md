@@ -3,6 +3,53 @@
 Choices the architecture document leaves open, recorded as they are made. Newest
 milestone first.
 
+## Milestone 2.2: the benchmark guard
+
+### Baselines from CI
+- **The artifact is a baselines file.** `callgrind.py --out` writes `bench/baselines.json`'s
+  format, stamped with the CI run that measured it (run ID, attempt, workflow, event, ref,
+  commit, URL). Outside CI the stamp is empty, and `--update` refuses such counts.
+  Baselines can only be copied from CI. Locally the same code measured 1–6% off CI, enough
+  to fail three cases against CI's baselines.
+- **Baselines:** from CI run 41687697393 (`ci`, a push to master at 2927f9e, the guard in its
+  final form), committed alone (a1be2c5). Every count equals the M2.1 baselines (run
+  41675753054), as expected: M2.2 changed no framework code. The file now records the run
+  that measured it.
+
+### The guard
+- **Behavior:** a case more than 2% above its baseline fails the job, as does a baseline
+  case with no count. A case more than 2% below passes and is reported, with a note to
+  update the baseline. A case without a baseline passes as "new".
+- **The log:** the job lists every case as baseline, measured and change, then a verdict
+  naming the cases and what to do. The same table goes in the run's summary.
+- **Running the guard alone:** `ci` takes a `jobs` input (`all` or `bench`) when started
+  by hand, so checks like the ones below run only the guard.
+
+### Proving it
+Both checks ran on a throwaway branch, `tmp-guard-check` (deleted afterwards), with
+`jobs=bench`, against the baselines from CI run 41675753054:
+
+- **Regression (run 41678755948, failed as intended).** A volatile 40-iteration loop in
+  `resolve_node` gave `bench_layout/token` +7.46% and `bench_layout/inherited` +8.89%. The
+  job failed with "FAILED: 2 case(s) more than 2% above their baselines: ...". Every other
+  case stayed within 0.01%.
+- **Improvement (run 41679348724, passed).** Skipping the background and text paint
+  updates in partial resolutions (wrong on screen, less work) gave token −21.30% and
+  inherited −24.92%. The job passed and reported "Improved by more than 2%: ... update the
+  baselines from this run's bench-callgrind artifact".
+- **A misfire:** run 41679271921 re-ran the regression commit by mistake and was
+  cancelled.
+
+### actionlint
+- **A job in `ci.yml`** downloads actionlint's release binary (v1.7.12), pinned by version
+  and sha256 and checked with `sha256sum --check`; no Docker.
+- **Its first run (41678692413) found two issues,** both shellcheck SC2012 in `fuzz.yml`
+  (the corpus counted with `ls | wc -l`), now counted with `find corpus -type f`. Nothing
+  in `ci.yml` or the setup action.
+- **Not from actionlint:** the runner warns that `actions/checkout@v4` (and the other v4
+  actions) target the deprecated Node.js 20. They still run, forced onto Node 24; moving
+  to newer major versions is left for a separate change.
+
 ## Milestone 2.1: inheritance, direction, borders and polish
 
 ### Test infrastructure
