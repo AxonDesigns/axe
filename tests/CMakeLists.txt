@@ -1,3 +1,10 @@
+# Sanitizer builds keep shared objects loaded until exit, so leak reports name the GPU
+# driver libraries that tools/lsan.supp suppresses (tests/keep_loaded.c).
+if("address" IN_LIST UI_SANITIZE)
+    add_library(ui_keep_loaded OBJECT keep_loaded.c)
+    link_libraries(ui_keep_loaded)
+endif()
+
 # Unit tests reach into internal headers on purpose.
 add_executable(test_runtime test_runtime.c)
 target_include_directories(test_runtime PRIVATE ${PROJECT_SOURCE_DIR}/src)

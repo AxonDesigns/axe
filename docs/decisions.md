@@ -3,6 +3,18 @@
 Choices the architecture document leaves open, recorded as they are made. Newest
 milestone first.
 
+## Milestone 2.1: inheritance, direction, borders and polish
+
+### Test infrastructure
+- **ASan tests keep shared objects loaded** (`tests/keep_loaded.c`, linked only when
+  `UI_SANITIZE` has `address`). GPU drivers leak a few one-time allocations, which
+  `tools/lsan.supp` suppresses by library name. Since 2026-11-03 the leaks on the
+  development machine came from libraries the Vulkan loader had already unloaded, which
+  LeakSanitizer reports as `<unknown module>`: unmatched, so 9 GPU tests failed under
+  ASan, on M2's code as much as on new code. A no-op `dlclose` in the executable keeps every
+  library mapped until exit, and the suppressions match again. The cause on this machine
+  wasn't pinned down (no driver or loader update; a reboot in between).
+
 ## Milestone 2: layout and styles
 
 ### Example and goldens
