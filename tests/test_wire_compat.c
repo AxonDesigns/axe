@@ -351,6 +351,31 @@ static void test_too_short(void) {
     free(text);
 }
 
+static void test_unknown_ops(void) {
+    // Opcodes from a newer writer are dropped whatever their size, even shorter than a
+    // handle and at the very end of the buffer (ASan checks nothing past them is read), and
+    // the ops around them still apply.
+    ui_wire_buf b;
+    ui_wire_buf_init(&b, UI_WIRE_MAGIC_CMD);
+    emit(&b, 200, 0);
+    uint8_t *p = emit(&b, UI_OP_CREATE_NODE, UI_WIRE_SIZE_CREATE_NODE);
+    ui_wire_put_handle(ui_wire_put_handle(p, node), surface);
+    memset(emit(&b, 201, 4), FILL, 4);
+    size_t n;
+    uint8_t *bytes = ui_wire_buf_finish(&b, &n);
+    uint8_t *exact = malloc(n); // no slack after the last op
+    memcpy(exact, bytes, n);
+    ui_scene s;
+    captured c = {0};
+    scene_init(&s, &c);
+    CHECK(ui_scene_apply(&s, exact, n, 0) == UI_OK);
+    CHECK_EQ_INT(s.stats.applied, 1);
+    CHECK_EQ_INT(s.stats.dropped, 2);
+    ui_scene_destroy(&s);
+    free(exact);
+    free(bytes);
+}
+
 static void test_events(void) {
     // A newer core appended fields to frame_committed and timer_fired: they are skipped, and
     // the events after them still read correctly.
@@ -395,6 +420,7 @@ int main(void) {
     RUN(test_older_writer);
     RUN(test_newer_writer);
     RUN(test_too_short);
+    RUN(test_unknown_ops);
     RUN(test_events);
     return test_failures != 0;
 }

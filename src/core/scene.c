@@ -251,6 +251,20 @@ static bool apply_op(ui_scene *s, const ui_wire_op *op, uint64_t now_ns) {
         if (s->font_fn) s->font_fn(s->font_user, ui_wire_get_u32(p), path, len);
         return true;
     }
+    // An unknown op comes from a newer writer and may be any size, even shorter than a
+    // handle: drop it before reading anything.
+    switch (op->opcode) {
+    case UI_OP_DESTROY_NODE:
+    case UI_OP_SET_RECT:
+    case UI_OP_SET_CORNER_RADIUS:
+    case UI_OP_SET_COLOR:
+    case UI_OP_SET_CLIP:
+    case UI_OP_START_SPRING: break;
+    default:
+        s->stats.dropped++;
+        UI_DEBUG_REPORT(s->log, MODULE, "dropped unknown op %u", op->opcode);
+        return false;
+    }
     // Every other known op addresses one node; a change marks that node's surface dirty.
     ui_handle h = ui_wire_get_handle(p);
     ui_node *n = node_of(s, h);
