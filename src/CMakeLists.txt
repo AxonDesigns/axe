@@ -23,6 +23,7 @@ add_library(ui STATIC
     core/display_list.c
     layout/flex.c
     core/prepare.c
+    core/preview.c
     core/scene.c
     core/text_op.c
     core/spring.c

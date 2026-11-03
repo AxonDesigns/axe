@@ -52,7 +52,7 @@ static void apply(ui_scene *s, ui_cmd_writer *w) {
 
 static void set_text(ui_cmd_writer *w, ui_handle h, const char *s, float size) {
     static const char *const fam[] = {"Noto Sans"};
-    ui_text_desc t = {.text = s, .length = (uint32_t)strlen(s),
+    ui_text_desc t = {.set = UI_TEXT_SET_ALL, .text = s, .length = (uint32_t)strlen(s),
                       .style = {.family = 0, .weight = 400, .size = size, .color = {0, 0, 0, 1}},
                       .families = fam, .family_count = 1, .line_height = 1.25f};
     if (ui_cmd_set_text(w, h, &t) != UI_OK) abort();

@@ -32,7 +32,7 @@ static ui_result on_events(void *user, const void *events, size_t size, ui_cmd_w
         s->done = true;
         float fg = s->dark ? 0.92f : 0.1f, bg = s->dark ? 0.1f : 1.f;
         static const char *const families[] = {"Noto Sans"};
-        ui_text_desc t = {.text = SAMPLE, .length = sizeof SAMPLE - 1,
+        ui_text_desc t = {.set = UI_TEXT_SET_ALL, .text = SAMPLE, .length = sizeof SAMPLE - 1,
                           .style = {.family = 0, .weight = 400, .size = 13,
                                     .color = {fg, fg, fg, 1}},
                           .families = families, .family_count = 1};

@@ -40,7 +40,7 @@ static bool render(bool clip, shot *out) {
     ui_handle_alloc(h, &box);
     ui_handle_alloc(h, &child);
     static const char *const families[] = {"Noto Sans"};
-    ui_text_desc t = {.text = TEXT, .length = sizeof TEXT - 1,
+    ui_text_desc t = {.set = UI_TEXT_SET_ALL, .text = TEXT, .length = sizeof TEXT - 1,
                       .style = {.family = 0, .weight = 400, .size = 16, .color = {0, 0, 0, 1}},
                       .families = families, .family_count = 1};
     ui_cmd_create_node(w, bg, ui_app_main_surface(app));

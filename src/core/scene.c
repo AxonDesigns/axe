@@ -39,6 +39,9 @@ static void free_node(ui_scene *s, ui_node *n) {
     for (uint32_t i = 0; i < n->override_count; i++) ui_styles_release_value(&s->styles, &n->overrides[i].value);
     ui_styles_release(&s->styles, n->text_family);
     ui_styles_release(&s->styles, n->text_language);
+    ui_text_source_release(n->text_base);
+    n->text_base = NULL;
+    n->text_keyed = false;
     free(n->anim);
     free(n->styles);
     free(n->overrides);
@@ -61,6 +64,12 @@ void ui_scene_destroy(ui_scene *s) {
     free(s->style_dirty);
     free(s->scratch);
     free(s->levels);
+    for (uint32_t i = 0; i < s->offer_count; i++) {
+        ui_text_source_release(s->offers[i].base);
+        ui_text_source_release(s->offers[i].source);
+        ui_shaped_paragraph_free(&s->offers[i].shaped);
+    }
+    free(s->offers);
     free(s->requests);
     memset(s, 0, sizeof *s);
 }
@@ -71,6 +80,13 @@ static ui_scene_root *find_root(ui_scene *s, ui_handle surface) {
             return &s->roots[i];
     }
     return NULL;
+}
+
+uint32_t ui_scene_root_index(const ui_scene *s, ui_handle surface) {
+    for (uint32_t i = 0; i < UI_MAX_SURFACES; i++) {
+        if (!ui_handle_is_null(s->roots[i].surface) && ui_handle_eq(s->roots[i].surface, surface)) return i;
+    }
+    return UI_MAX_SURFACES;
 }
 
 ui_result ui_scene_add_root(ui_scene *s, ui_handle surface) {
@@ -743,6 +759,9 @@ static bool apply_set_text(ui_scene *s, const ui_wire_op *op, ui_wire_reader *r,
         return drop(s, why, h);
     }
     ui_paragraph_set_source(n->text, t->source);
+    ui_text_source_release(n->text_base);
+    n->text_base = ui_text_source_retain(t->source);
+    n->text_keyed = false; // resolution checks what it shapes with
     // Its family and language stand in for the inherited ones (style.h): kept interned.
     const char *family, *language;
     uint32_t family_len, language_len;
@@ -754,11 +773,9 @@ static bool apply_set_text(ui_scene *s, const ui_wire_op *op, ui_wire_reader *r,
     n->text_language = language && language_len ? ui_styles_intern(&s->styles, language, language_len) : NULL;
     ui_styles_release(&s->styles, old_family);
     ui_styles_release(&s->styles, old_language);
-    for (uint32_t i = 0; prep && i < prep->scale_count; i++) {
-        if (prep->scales[i] != s->roots[n->root].scale) continue;
-        ui_paragraph_adopt_shaped(n->text, &prep->shaped[i]);
-        break;
-    }
+    // What preparation shaped is adopted once the node's values are known (key_text).
+    for (uint32_t i = 0; prep && prep->shaped_source && i < prep->scale_count; i++)
+        ui_scene_offer_shaped(s, t->node, t->source, prep->shaped_source, prep->scales[i], &prep->shaped[i]);
     s->stats.text_invalid += t->replaced;
     if (t->replaced)
         UI_DEBUG_REPORT(s->log, MODULE, "set_text: replaced %u ill-formed UTF-8 sequence(s)", t->replaced);
@@ -874,17 +891,186 @@ static bool update_paint(ui_node *n, int i, const float *target, const float tra
 // set_text's values: they replace the inherited ones (and max_lines' initial value), so
 // the node's styles still override them (docs/styles.md, "Inheritance").
 static void text_start(const ui_node *n, ui_computed *c) {
-    const ui_text_source *src = n->text ? n->text->source : NULL;
+    const ui_text_source *src = n->text_base;
     if (!src) return;
-    memcpy(c->text.color, src->base.color, sizeof c->text.color);
-    c->text.family = n->text_family;
-    c->text.language = n->text_language;
-    c->text.size = src->base.size;
-    c->text.weight = src->base.weight;
-    c->text.slant = src->base.style;
-    c->text.line_height = src->line_height;
-    c->text.align = (uint8_t)src->align;
+    uint32_t set = ~(uint32_t)src->from_node; // what set_text sets itself
+    if (set & UI_TEXT_SET_COLOR) memcpy(c->text.color, src->base.color, sizeof c->text.color);
+    if (set & UI_TEXT_SET_FAMILY) c->text.family = n->text_family;
+    if (set & UI_TEXT_SET_LANGUAGE) c->text.language = n->text_language;
+    if (set & UI_TEXT_SET_SIZE) c->text.size = src->base.size;
+    if (set & UI_TEXT_SET_WEIGHT) c->text.weight = src->base.weight;
+    if (set & UI_TEXT_SET_SLANT) c->text.slant = src->base.style;
+    if (set & UI_TEXT_SET_LINE_HEIGHT) c->text.line_height = src->line_height;
+    if (set & UI_TEXT_SET_ALIGN) c->text.align = (uint8_t)src->align;
     c->max_lines = src->max_lines;
+}
+
+// ---- Text values and shaping keys ----------------------------------------------------------
+
+static const uint32_t TEXT_FIELDS[] = {UI_TEXT_SET_FAMILY, UI_TEXT_SET_SIZE, UI_TEXT_SET_WEIGHT,
+                                       UI_TEXT_SET_SLANT, UI_TEXT_SET_LANGUAGE, UI_TEXT_SET_COLOR,
+                                       UI_TEXT_SET_LINE_HEIGHT, UI_TEXT_SET_ALIGN, UI_TEXT_SET_DIRECTION};
+
+// Copies one field of text values.
+static void copy_field(ui_text_values *dst, const ui_text_values *src, uint32_t field) {
+    switch (field) {
+    case UI_TEXT_SET_FAMILY: dst->family = src->family; break;
+    case UI_TEXT_SET_SIZE: dst->size = src->size; break;
+    case UI_TEXT_SET_WEIGHT: dst->weight = src->weight; break;
+    case UI_TEXT_SET_SLANT: dst->slant = src->slant; break;
+    case UI_TEXT_SET_LANGUAGE: dst->language = src->language; break;
+    case UI_TEXT_SET_COLOR: memcpy(dst->color, src->color, sizeof dst->color); break;
+    case UI_TEXT_SET_LINE_HEIGHT: dst->line_height = src->line_height; break;
+    case UI_TEXT_SET_ALIGN: dst->align = src->align; break;
+    default: dst->direction = src->direction; break;
+    }
+}
+
+bool ui_text_values_eq(const ui_text_values *a, const ui_text_values *b) {
+    return !memcmp(a->color, b->color, sizeof a->color) && ui_istr_eq(a->family, b->family) &&
+           ui_istr_eq(a->language, b->language) && a->size == b->size && a->line_height == b->line_height &&
+           a->weight == b->weight && a->slant == b->slant && a->align == b->align && a->direction == b->direction;
+}
+
+// The fields `base` sets itself and the styles leave alone.
+static uint32_t explicit_fields(const ui_text_ctx *c, const ui_text_source *base) {
+    return base ? ~(uint32_t)base->from_node & ~c->declared & UI_TEXT_SET_ALL : 0;
+}
+
+ui_text_resolved ui_text_ctx_key(const ui_text_ctx *c, const ui_text_source *base) {
+    const ui_text_values *v = &c->values;
+    uint32_t own = explicit_fields(c, base);
+    ui_text_resolved r = {
+        .family = v->family, .family_len = ui_istr_len(v->family),
+        .language = v->language, .language_len = ui_istr_len(v->language),
+        .size = own & UI_TEXT_SET_SIZE ? base->base.size : v->size,
+        .weight = own & UI_TEXT_SET_WEIGHT ? base->base.weight : v->weight,
+        .slant = own & UI_TEXT_SET_SLANT ? base->base.style : v->slant,
+        .dir = v->direction == UI_DIRECTION_RTL ? UI_BIDI_RTL : UI_BIDI_LTR,
+    };
+    // A set_text's direction (auto too) belongs to its paragraph, not to the node, so the
+    // node's styles don't override it.
+    if (base && !(base->from_node & UI_TEXT_SET_DIRECTION)) r.dir = base->dir;
+    if (own & (UI_TEXT_SET_FAMILY | UI_TEXT_SET_LANGUAGE)) {
+        ui_text_input in = ui_text_source_input(base);
+        const char *str;
+        uint32_t len;
+        if (own & UI_TEXT_SET_FAMILY) {
+            ui_text_input_family(&in, &in.base, &str, &len);
+            r.family = len ? str : NULL;
+            r.family_len = len;
+        }
+        if (own & UI_TEXT_SET_LANGUAGE) {
+            ui_text_input_language(&in, &in.base, &str, &len);
+            r.language = str && len ? str : NULL;
+            r.language_len = r.language ? len : 0;
+        }
+    }
+    return r;
+}
+
+bool ui_text_ctx_values(const ui_text_ctx *c, const ui_text_source *base, ui_styles *strings,
+                        ui_text_values *out) {
+    *out = c->values;
+    uint32_t own = explicit_fields(c, base) & ~(uint32_t)UI_TEXT_SET_DIRECTION;
+    if (!own) return true;
+    ui_text_resolved r = ui_text_ctx_key(c, base);
+    if (own & UI_TEXT_SET_COLOR) memcpy(out->color, base->base.color, sizeof out->color);
+    if (own & UI_TEXT_SET_SIZE) out->size = r.size;
+    if (own & UI_TEXT_SET_WEIGHT) out->weight = r.weight;
+    if (own & UI_TEXT_SET_SLANT) out->slant = r.slant;
+    if (own & UI_TEXT_SET_LINE_HEIGHT) out->line_height = base->line_height;
+    if (own & UI_TEXT_SET_ALIGN) out->align = (uint8_t)base->align;
+    bool ok = true;
+    // Interned in the caller's table, which keeps them until it collects (the reference is
+    // dropped at once: the caller holds no reference to values).
+    if (own & UI_TEXT_SET_FAMILY) {
+        out->family = r.family ? ui_styles_intern(strings, r.family, r.family_len) : NULL;
+        ok &= !r.family || out->family;
+        ui_styles_release(strings, out->family);
+    }
+    if (own & UI_TEXT_SET_LANGUAGE) {
+        out->language = r.language ? ui_styles_intern(strings, r.language, r.language_len) : NULL;
+        ok &= !r.language || out->language;
+        ui_styles_release(strings, out->language);
+    }
+    return ok;
+}
+
+ui_text_ctx ui_scene_text_ctx(const ui_scene *s, uint32_t slot) {
+    const ui_node *n = &s->nodes[slot];
+    const ui_computed *parent = n->parent != UI_NO_SLOT ? &s->nodes[n->parent].computed : &s->roots[n->root].computed;
+    ui_text_ctx c = {parent->text, n->text_declared};
+    for (size_t i = 0; i < UI_ARRAY_LEN(TEXT_FIELDS); i++) {
+        if (c.declared & TEXT_FIELDS[i]) copy_field(&c.values, &n->computed.text, TEXT_FIELDS[i]);
+    }
+    return c;
+}
+
+void ui_scene_offer_shaped(ui_scene *s, ui_handle node, ui_text_source *base, ui_text_source *source,
+                           float scale, ui_shaped_paragraph *shaped) {
+    ui_node *n = node_of(s, node);
+    if (!n || scale != s->roots[n->root].scale ||
+        ui_grow((void **)&s->offers, &s->offer_capacity, s->offer_count + 1, sizeof *s->offers) != UI_OK) {
+        ui_shaped_paragraph_free(shaped); // shaped on the core instead, if needed at all
+        return;
+    }
+    ui_scene_offer *o = &s->offers[s->offer_count++];
+    *o = (ui_scene_offer){node, ui_text_source_retain(base), ui_text_source_retain(source), scale, *shaped};
+    memset(shaped, 0, sizeof *shaped);
+    n->offer = s->offer_count;
+    mark_style_dirty(s, (uint32_t)(n - s->nodes), false);
+}
+
+static void drop_offers(ui_scene *s) {
+    for (uint32_t i = 0; i < s->offer_count; i++) {
+        ui_node *n = node_of(s, s->offers[i].node);
+        if (n) n->offer = 0;
+        ui_text_source_release(s->offers[i].base);
+        ui_text_source_release(s->offers[i].source);
+        ui_shaped_paragraph_free(&s->offers[i].shaped);
+    }
+    s->offer_count = 0;
+}
+
+// The paragraph shows a source that comes from the node's set_text (it, or one derived from it).
+static bool from_base(const ui_node *n) {
+    const ui_text_source *src = n->text->source;
+    return src == n->text_base || (src && src->shared == n->text_base);
+}
+
+// Points the paragraph at what it must shape now: prepared shaping when some was offered for
+// it, else set_text's source when that already shapes with the node's values, else a source
+// derived from it (shaped on the core when laid out). Returns true if the paragraph's
+// source changed.
+static bool key_text(ui_scene *s, ui_node *n) {
+    if (!n->text || !n->text_base) return false;
+    uint32_t slot = (uint32_t)(n - s->nodes);
+    ui_text_ctx ctx = ui_scene_text_ctx(s, slot);
+    ui_text_resolved key = ui_text_ctx_key(&ctx, n->text_base);
+    n->text_keyed = true;
+    if (n->offer) {
+        ui_scene_offer *o = &s->offers[n->offer - 1];
+        n->offer = 0;
+        if (o->base == n->text_base && o->scale == s->roots[n->root].scale &&
+            ui_text_source_shapes_as(o->source, &key)) {
+            bool changed = n->text->source != o->source;
+            if (changed) ui_paragraph_set_source(n->text, o->source);
+            ui_paragraph_adopt_shaped(n->text, &o->shaped);
+            return changed;
+        }
+    }
+    if (from_base(n) && ui_text_source_shapes_as(n->text->source, &key)) return false;
+    ui_text_source *src = n->text_base;
+    bool derive = !ui_text_source_shapes_as(src, &key);
+    if (derive && ui_text_source_derive(n->text_base, &key, &src) != UI_OK) {
+        UI_ERROR(s->log, MODULE, "out of memory styling a paragraph");
+        return false; // set_text's own values meanwhile
+    }
+    bool changed = n->text->source != src;
+    if (changed) ui_paragraph_set_source(n->text, src);
+    if (derive) ui_text_source_release(src);
+    return changed;
 }
 
 static const ui_computed *parent_values(const ui_scene *s, const ui_node *n) {
@@ -896,7 +1082,8 @@ static const ui_computed *parent_values(const ui_scene *s, const ui_node *n) {
 // changed, 1 if only others did, 0 if nothing did.
 static int resolve_node(ui_scene *s, ui_node *n, uint64_t now_ns) {
     if (n->cascade_dirty) {
-        if (!ui_style_cascade(&s->styles, n->styles, n->style_count, n->state, n->overrides,
+        ui_style_view view = ui_style_view_of(&s->styles);
+        if (!ui_style_cascade(&view, n->styles, n->style_count, n->state, n->overrides,
                               n->override_count, &n->cascade, &n->cascade_count, &n->cascade_capacity)) {
             UI_ERROR(s->log, MODULE, "out of memory resolving styles");
             n->cascade_count = 0; // initial and inherited values only
@@ -908,8 +1095,11 @@ static int resolve_node(ui_scene *s, ui_node *n, uint64_t now_ns) {
     ui_computed old = n->computed, *c = &n->computed;
     ui_computed_start(c, parent);
     text_start(n, c);
-    n->inherits_other = ui_style_compute(&s->styles, n->cascade, n->cascade_count, parent, c) &
+    ui_style_view view = ui_style_view_of(&s->styles);
+    uint32_t declared;
+    n->inherits_other = ui_style_compute(&view, n->cascade, n->cascade_count, parent, c, &declared) &
                         UI_STYLE_INHERITS_OTHER;
+    n->text_declared = (uint16_t)declared;
     // What layout reads: the layout values and the border.
     if (memcmp(&old.layout, &c->layout, sizeof old.layout) || old.border_width != c->border_width)
         layout_dirty(s, (uint32_t)(n - s->nodes));
@@ -929,6 +1119,10 @@ static int resolve_node(ui_scene *s, ui_node *n, uint64_t now_ns) {
     changed |= n->clip != c->clip || n->border_width != c->border_width;
     n->clip = c->clip;
     n->border_width = c->border_width;
+    if (key_text(s, n)) {
+        changed = true;
+        layout_dirty(s, (uint32_t)(n - s->nodes)); // shaped differently, so measured differently
+    }
     if (n->text) {
         bool valid = n->text->layout_valid;
         ui_paragraph_set_params(n->text, c->max_lines, (ui_align)c->text.align, c->text.line_height);
@@ -1023,6 +1217,7 @@ void ui_scene_resolve(ui_scene *s, uint64_t now_ns) {
     }
     free(order);
     s->style_dirty_count = 0;
+    drop_offers(s); // prepared shaping nothing took (its node changed again, or went away)
     ui_styles_collect(&s->styles); // no computed value points at an unreferenced string now
 }
 
@@ -1166,7 +1361,8 @@ static ui_result build_text(ui_paragraph *p, const float base_color[4], float ox
             if (gx0 >= clip[2] || gy0 >= clip[3] || gx0 + ag->width <= clip[0] ||
                 gy0 + ag->height <= clip[1])
                 continue; // entirely outside the clip
-            const float *c = g->style ? p->spans[g->style - 1].style.color : base_color;
+            const ui_text_span *sp = g->style ? &p->spans[g->style - 1] : NULL;
+            const float *c = sp && !(sp->from_node & UI_TEXT_SET_COLOR) ? sp->style.color : base_color;
             float a = c[3];
             ui_dl_glyph dg = {
                 .x = px + ag->left, .y = py + ag->top,

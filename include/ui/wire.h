@@ -407,6 +407,24 @@ typedef enum ui_text_slant {
     UI_TEXT_OBLIQUE = 2,
 } ui_text_slant;
 
+// The fields of set_text a caller sets explicitly (ui_text_desc.set, ui_text_span_desc.set).
+// Every other field comes from the node: its computed (styled or inherited) value for the
+// paragraph's defaults, and the paragraph's defaults for a span (docs/styles.md,
+// "Inheritance"). Zero-initialized descriptors therefore follow the node's styles.
+typedef enum ui_text_field {
+    UI_TEXT_SET_FAMILY = 1u << 0,
+    UI_TEXT_SET_SIZE = 1u << 1,
+    UI_TEXT_SET_WEIGHT = 1u << 2,
+    UI_TEXT_SET_SLANT = 1u << 3,
+    UI_TEXT_SET_LANGUAGE = 1u << 4,
+    UI_TEXT_SET_COLOR = 1u << 5,
+    UI_TEXT_SET_LINE_HEIGHT = 1u << 6, // ui_text_desc only
+    UI_TEXT_SET_ALIGN = 1u << 7,       // ui_text_desc only
+    UI_TEXT_SET_DIRECTION = 1u << 8,   // ui_text_desc only: else the node's direction
+    UI_TEXT_SET_SPAN_ALL = 0x3Fu,      // every field a span has
+    UI_TEXT_SET_ALL = 0x1FFu,
+} ui_text_field;
+
 typedef struct ui_text_style_desc {
     uint16_t family; // index into ui_text_desc.families, or UI_TEXT_FAMILY_DEFAULT
     uint16_t weight; // 1..1000 (400 regular, 700 bold)
@@ -421,6 +439,7 @@ typedef struct ui_text_style_desc {
 typedef struct ui_text_span_desc {
     uint32_t start, end; // UTF-8 byte offsets into the text; sorted and non-overlapping
     ui_text_style_desc style;
+    uint32_t set;        // ui_text_field bits of `style` this span sets; the rest are the paragraph's
 } ui_text_span_desc;
 
 typedef struct ui_text_desc {
@@ -441,6 +460,9 @@ typedef struct ui_text_desc {
     // (lines with tall fallback fonts get taller). Otherwise every line is the same height
     // and the baseline is placed by the default style's font. At most 100.
     float line_height;
+    // The ui_text_field bits of `style`, `line_height`, `align` and `direction` set here;
+    // the others come from the node's styles or its parent (0: all of them).
+    uint32_t set;
 } ui_text_desc;
 
 // Sets a node's text. It wraps to the node's width and is drawn over its background, in

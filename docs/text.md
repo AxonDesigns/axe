@@ -102,10 +102,30 @@ worker threads (`src/runtime/jobs.h`), never on the core thread:
 3. **Drawing.** The atlas copies each new glyph from the glyph cache into a page instead of
    rasterizing it. A buffer's glyphs stay protected in the cache until every surface has
    drawn once after it applied.
-4. **Font loads.** A new font can change every paragraph's matches and fallbacks. When a
-   buffer with `load_font` reaches the head of the queue, its faces are registered and
-   every existing paragraph is shaped again on the workers. The buffer applies once that is
-   done, so the frame that applies it shows every paragraph in its new shaping.
+4. **Styled text.** A paragraph is shaped with its node's computed font values
+   (`docs/styles.md`, "Inheritance"), which depend on the scene and on the buffers before
+   it. When a buffer arrives, the core previews (`src/core/preview.h`) the scene with every
+   pending buffer up to it applied, and its text is shaped with the values that gives. A
+   paragraph whose values come out different from its `set_text`'s is shaped from a source
+   derived from it, which shares its text.
+5. **The head step.** When a buffer that sets text, changes text values or loads fonts
+   reaches the head of the queue, the core runs its head step:
+   - its fonts are registered;
+   - a preview of it against the scene checks its text's values, and prepares again what
+     was guessed wrong;
+   - existing paragraphs whose values it changes (every paragraph after a font load) are
+     shaped again on the workers, in its group.
+
+   The buffer applies once that is done, so the frame that applies it shows every
+   paragraph in its new shaping. Applied paragraphs adopt the prepared shaping when their
+   node resolves; anything missed is shaped on the core and counted in
+   `text_shaped_on_core`, which the tests keep at 0.
+
+A buffer that reaches the head inside a frame's apply phase gets its head step there. If it
+gives the workers anything to do, applying stops for that frame: under the single
+scheduler the work is already done, under the threaded one it may not be, and which frame
+applies a buffer must not depend on that. Guesses are made against exactly the state the
+head step sees, so what it finds to do is the same under both.
 
 Under the single scheduler the jobs run inline on the main thread, so nothing changes but
 the thread count. The counters `text_shaped_on_core` and `glyphs_rasterized_on_core` show

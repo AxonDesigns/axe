@@ -17,9 +17,9 @@ Every node resolves its values from, lowest precedence first:
    - inherited properties: the parent's computed value ([Inheritance](#inheritance));
    - every other property: its initial value (transparent background, no border, radius 0,
      opacity 1, no clip, the layout initials in [`docs/layout.md`](layout.md)).
-2. **`set_text`'s values**, for a node with text: its color, family, size, weight, slant,
-   language, line height and alignment replace the inherited ones, and its max lines the
-   initial one.
+2. **`set_text`'s values**, for a node with text: those of its color, family, size,
+   weight, slant, language, line height and alignment it sets itself (`ui_text_desc.set`)
+   replace the inherited ones, and its max lines the initial one.
 3. **The matching blocks of its styles**, ordered by:
    1. specificity: the number of states a block requires, so base blocks come first;
    2. the style's position in the node's list, so later styles win;
@@ -56,9 +56,16 @@ computed value, and a top-level node takes the surface's.
   inherited values change, so it stops wherever descendants declare their own. Nodes are
   computed parents first, in one pass per frame.
 - **Moving a node** (`move_node`) computes it again under its new parent.
-- **Not yet shaped with.** The font properties are computed and inherited, but text is
-  still shaped with `set_text`'s family, size, weight, slant and language. Shaping follows
-  the computed values once style changes go through preparation (the next M2.1 step).
+- **Text shapes with the computed values.** A paragraph's family, size, weight, slant and
+  language are its node's computed values, and its direction the node's unless `set_text`
+  sets one. A change to any of them, through a style, a token, a state, an override, a
+  move or the parent's values, shapes the paragraph again, on the worker threads before the
+  change applies ([`docs/text.md`](text.md), "Preparation").
+- **`set_text` leaves fields to the node.** `ui_text_desc.set` names the fields `set_text`
+  sets itself (`UI_TEXT_SET_*`); the others come from the node. Zero-initialized
+  descriptors therefore follow the styles: give a text node a style, or let it inherit from
+  its parent. A span's `set` does the same against the paragraph's values, so a span can
+  make a word bold and keep the paragraph's size.
 
 ### Tokens
 

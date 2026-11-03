@@ -230,26 +230,33 @@ ui_result ui_cmd_cancel_timer(ui_cmd_writer *w, uint32_t id) {
     return put_timer(w, id, UI_WIRE_TIMER_CANCEL);
 }
 
-static bool valid_style(const ui_text_style_desc *st, uint32_t family_count,
+// Only the fields in `set` are checked: the others come from the node and aren't sent.
+static bool valid_style(const ui_text_style_desc *st, uint32_t set, uint32_t family_count,
                         uint32_t language_count) {
-    return (st->family == UI_TEXT_FAMILY_DEFAULT || st->family < family_count) &&
-           st->language <= language_count &&
-           st->weight >= 1 && st->weight <= 1000 && st->slant <= UI_TEXT_OBLIQUE &&
-           isfinite(st->size) && st->size > 0 && st->size <= 4096 && all_finite(st->color, 4);
+    return (!(set & UI_TEXT_SET_FAMILY) || st->family == UI_TEXT_FAMILY_DEFAULT || st->family < family_count) &&
+           (!(set & UI_TEXT_SET_LANGUAGE) || st->language <= language_count) &&
+           (!(set & UI_TEXT_SET_WEIGHT) || (st->weight >= 1 && st->weight <= 1000)) &&
+           (!(set & UI_TEXT_SET_SLANT) || st->slant <= UI_TEXT_OBLIQUE) &&
+           (!(set & UI_TEXT_SET_SIZE) || (isfinite(st->size) && st->size > 0 && st->size <= 4096)) &&
+           (!(set & UI_TEXT_SET_COLOR) || all_finite(st->color, 4));
 }
 
 // Languages follow the families in the op's string table; the wire stores string index + 1.
+// A field that comes from the node is written as a valid placeholder (what an older reader,
+// which doesn't know `from_node`, then shows) and flagged in `from_node` (span byte 13).
 static uint8_t *put_style(uint8_t *p, uint32_t start, uint32_t end, const ui_text_style_desc *st,
-                          uint32_t family_count) {
+                          uint32_t set, uint32_t family_count) {
     p = ui_wire_put_u32(p, start);
     p = ui_wire_put_u32(p, end);
-    p = ui_wire_put_u16(p, st->family);
-    p = ui_wire_put_u16(p, st->weight);
-    *p++ = st->slant;
-    *p++ = 0;
-    p = ui_wire_put_u16(p, st->language ? (uint16_t)(family_count + st->language) : 0);
-    p = ui_wire_put_f32(p, st->size);
-    for (int i = 0; i < 4; i++) p = ui_wire_put_f32(p, st->color[i]);
+    p = ui_wire_put_u16(p, set & UI_TEXT_SET_FAMILY ? st->family : UI_TEXT_FAMILY_DEFAULT);
+    p = ui_wire_put_u16(p, set & UI_TEXT_SET_WEIGHT ? st->weight : 400);
+    *p++ = set & UI_TEXT_SET_SLANT ? st->slant : 0;
+    *p++ = (uint8_t)(~set & UI_TEXT_SET_SPAN_ALL);
+    p = ui_wire_put_u16(p, set & UI_TEXT_SET_LANGUAGE && st->language ? (uint16_t)(family_count + st->language) : 0);
+    p = ui_wire_put_f32(p, set & UI_TEXT_SET_SIZE ? st->size : 16);
+    static const float black[4] = {0, 0, 0, 1};
+    const float *c = set & UI_TEXT_SET_COLOR ? st->color : black;
+    for (int i = 0; i < 4; i++) p = ui_wire_put_f32(p, c[i]);
     return p;
 }
 
@@ -266,13 +273,15 @@ ui_result ui_cmd_set_text(ui_cmd_writer *w, ui_handle node, const ui_text_desc *
         (d->family_count && !d->families) || (d->language_count && !d->languages) ||
         d->direction > UI_TEXT_DIR_RTL || d->align > UI_TEXT_ALIGN_JUSTIFY ||
         !isfinite(d->line_height) || d->line_height < 0 || d->line_height > 100 ||
-        !valid_style(&d->style, d->family_count, d->language_count))
+        (d->set & ~(uint32_t)UI_TEXT_SET_ALL) ||
+        !valid_style(&d->style, d->set, d->family_count, d->language_count))
         return UI_ERR_INVALID_ARGUMENT;
     uint32_t prev_end = 0;
     for (uint32_t i = 0; i < d->span_count; i++) {
         const ui_text_span_desc *sp = &d->spans[i];
         if (sp->start >= sp->end || sp->end > d->length || sp->start < prev_end ||
-            !valid_style(&sp->style, d->family_count, d->language_count))
+            (sp->set & ~(uint32_t)UI_TEXT_SET_SPAN_ALL) ||
+            !valid_style(&sp->style, sp->set, d->family_count, d->language_count))
             return UI_ERR_INVALID_ARGUMENT;
         prev_end = sp->end;
     }
@@ -315,17 +324,19 @@ ui_result ui_cmd_set_text(ui_cmd_writer *w, ui_handle node, const ui_text_desc *
     p = ui_wire_put_u16(p, (uint16_t)ui_wire_pad4(fam_bytes));
     p = ui_wire_put_u16(p, (uint16_t)ell);
     p = ui_wire_put_u16(p, d->max_lines);
-    *p++ = (uint8_t)d->direction;
+    *p++ = d->set & UI_TEXT_SET_DIRECTION ? (uint8_t)d->direction : 0;
     *p++ = d->ellipsis ? UI_WIRE_TEXT_CUSTOM_ELLIPSIS : 0;
     // The default style's start and end are unused; the first two bytes carry span_bytes.
-    p = put_style(p, UI_WIRE_SIZE_TEXT_SPAN, 0, &d->style, d->family_count);
-    p = ui_wire_put_f32(p, d->line_height);
-    *p++ = (uint8_t)d->align;
+    // Its byte 13 holds the span bits of from_node; the rest of the mask is at 70.
+    p = put_style(p, UI_WIRE_SIZE_TEXT_SPAN, 0, &d->style, d->set, d->family_count);
+    p = ui_wire_put_f32(p, d->set & UI_TEXT_SET_LINE_HEIGHT ? d->line_height : 0);
+    *p++ = d->set & UI_TEXT_SET_ALIGN ? (uint8_t)d->align : 0;
     *p++ = 0;
-    *p++ = 0;
-    *p++ = 0;
+    ui_wire_put_u16(p, (uint16_t)(~d->set & UI_TEXT_SET_ALL)); // from_node
+    p += 2;
     for (uint32_t i = 0; i < d->span_count; i++)
-        p = put_style(p, d->spans[i].start, d->spans[i].end, &d->spans[i].style, d->family_count);
+        p = put_style(p, d->spans[i].start, d->spans[i].end, &d->spans[i].style, d->spans[i].set,
+                      d->family_count);
     uint8_t *names = p;
     for (uint32_t i = 0; i < strings; i++) {
         const char *str = i < d->family_count ? d->families[i] : d->languages[i - d->family_count];

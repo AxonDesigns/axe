@@ -70,7 +70,7 @@ static ui_result create(demo *d, ui_cmd_writer *cmds) {
     if (r == UI_OK) r = ui_handle_alloc(d->handles, &d->text);
     if (r != UI_OK) return r;
     static const char *const families[] = {"Noto Sans, sans-serif"};
-    ui_text_desc text = {
+    ui_text_desc text = {.set = UI_TEXT_SET_ALL,
         .text = PARAGRAPH,
         .length = sizeof PARAGRAPH - 1,
         .style = {.family = 0, .weight = 400, .size = 17, .color = {0.11f, 0.12f, 0.15f, 1}},

@@ -16,7 +16,8 @@ static bool finite4(const float *v) {
     return isfinite(v[0]) && isfinite(v[1]) && isfinite(v[2]) && isfinite(v[3]);
 }
 
-static bool read_style(const uint8_t *p, uint32_t family_count, ui_text_style *out,
+// Fields in `from_node` come from the node and aren't checked; they read as placeholders.
+static bool read_style(const uint8_t *p, uint32_t family_count, uint32_t from_node, ui_text_style *out,
                        uint32_t *start, uint32_t *end) {
     *start = ui_wire_get_u32(p);
     *end = ui_wire_get_u32(p + 4);
@@ -25,6 +26,12 @@ static bool read_style(const uint8_t *p, uint32_t family_count, ui_text_style *o
     uint16_t language = ui_wire_get_u16(p + 14); // string index + 1; 0 = none
     float size = ui_wire_get_f32(p + 16), c[4];
     for (int i = 0; i < 4; i++) c[i] = ui_wire_get_f32(p + 20 + 4 * i);
+    if (from_node & UI_TEXT_SET_FAMILY) family = UI_TEXT_FAMILY_DEFAULT;
+    if (from_node & UI_TEXT_SET_WEIGHT) weight = 400;
+    if (from_node & UI_TEXT_SET_SLANT) slant = 0;
+    if (from_node & UI_TEXT_SET_LANGUAGE) language = 0;
+    if (from_node & UI_TEXT_SET_SIZE) size = 16;
+    if (from_node & UI_TEXT_SET_COLOR) c[0] = c[1] = c[2] = 0, c[3] = 1;
     if ((family != UI_TEXT_FAMILY_DEFAULT && family >= family_count) || weight < 1 ||
         weight > 1000 || slant > UI_TEXT_OBLIQUE || !isfinite(size) || size <= 0 ||
         size > 4096 || !finite4(c) || language > family_count)
@@ -88,6 +95,11 @@ void ui_text_op_decode(const ui_wire_op *op, ui_wire_reader *r, ui_text_op *out)
     uint8_t dir = p[26], flags = p[27];
     float line_height = ui_wire_get_f32(p + 64);
     uint8_t align = p[68];
+    // What comes from the node (appended at 70; older writers sent 0: everything is set).
+    uint16_t from_node = ui_wire_get_u16(p + 70) & UI_TEXT_SET_ALL;
+    if (from_node & UI_TEXT_SET_LINE_HEIGHT) line_height = 0;
+    if (from_node & UI_TEXT_SET_ALIGN) align = 0;
+    if (from_node & UI_TEXT_SET_DIRECTION) dir = 0;
     const uint8_t *spans_p = op->payload + header;
     const uint8_t *fam_p = spans_p + span_count * stride;
     const uint8_t *ell_p = fam_p + fam_bytes;
@@ -127,7 +139,7 @@ void ui_text_op_decode(const ui_wire_op *op, ui_wire_reader *r, ui_text_op *out)
 
     ui_text_style base;
     uint32_t a, b;
-    if (!why && !read_style(p + 28, family_count, &base, &a, &b)) why = "set_text (style)";
+    if (!why && !read_style(p + 28, family_count, from_node, &base, &a, &b)) why = "set_text (style)";
     if (!why) {
         t.spans = malloc((span_count ? span_count : 1) * sizeof *t.spans);
         t.name_offsets = malloc((family_count + 1) * sizeof *t.name_offsets);
@@ -139,7 +151,9 @@ void ui_text_op_decode(const ui_wire_op *op, ui_wire_reader *r, ui_text_op *out)
     }
     uint32_t prev_end = 0;
     for (uint32_t i = 0; !why && i < span_count; i++) {
-        if (!read_style(spans_p + i * stride, family_count, &t.spans[i].style,
+        uint8_t span_from = spans_p[i * stride + 13] & UI_TEXT_SET_SPAN_ALL;
+        t.spans[i].from_node = span_from;
+        if (!read_style(spans_p + i * stride, family_count, span_from, &t.spans[i].style,
                         &t.spans[i].start, &t.spans[i].end) ||
             t.spans[i].start >= t.spans[i].end || t.spans[i].end > total ||
             t.spans[i].start < prev_end)
@@ -202,6 +216,7 @@ void ui_text_op_decode(const ui_wire_op *op, ui_wire_reader *r, ui_text_op *out)
             .ellipsis_len = custom ? ell_len : 3,
             .align = (ui_align)align, // the wire and layout enums share values
             .line_height = line_height,
+            .from_node = from_node,
         };
         if (ui_text_source_create(&desc, &out->source) != UI_OK) {
             why = "set_text (out of memory)";

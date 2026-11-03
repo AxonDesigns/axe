@@ -15,6 +15,59 @@ milestone first.
   library mapped until exit, and the suppressions match again. The cause on this machine
   wasn't pinned down (no driver or loader update; a reboot in between).
 
+### Shaping properties in styles, through preparation
+- **`set_text` leaves fields to the node** (decided in review: the C API inherits by
+  default). `ui_text_desc.set` / `ui_text_span_desc.set` name the explicit fields; the rest
+  go on the wire as `from_node` bits, a u16 at header offset 70 and a u8 at span offset 13,
+  both formerly reserved, so 0 (every field set) is what older writers meant. Fields left to
+  the node are written as valid placeholders, which an older reader shows instead of
+  dropping the op. Every existing caller (tests, examples, benches, tools) now passes
+  `UI_TEXT_SET_ALL`; no golden changed.
+- **A paragraph's key** is its node's text context (what its styles decide, and its
+  parent's values for the rest; `ui_text_ctx`) combined with its `set_text`
+  (`ui_text_ctx_key`). One function computes it for the scene, for previews and for
+  workers, so they can't disagree. When the key differs from the `set_text`'s own values,
+  the paragraph shows a **derived source**: the same text (shared by reference), with the
+  key in its base style and in every span field left to the node.
+- **Prepared shaping is matched, not assumed.** Whatever preparation shaped is offered to
+  the node when its buffer applies, and adopted when the node resolves if its source
+  shapes as the node's key then (`ui_text_source_shapes_as`). A miss shapes on the core and
+  counts in `text_shaped_on_core`.
+- **Previews** (`src/core/preview.h`) read the scene through an overlay of the ops that can
+  change text values (creating, destroying and moving nodes; style lists, overrides,
+  states, `set_text`; definitions and tokens, in a private `ui_styles`). They compute only
+  the nodes asked about and their ancestors, iteratively; untouched nodes under unchanged
+  parents answer from the scene. A buffer that only sets text, or changes styles in ways
+  that can't touch text values, doesn't scan the scene's other paragraphs.
+- **Guesses are made against the head-time state.** When a buffer arrives, its text is
+  shaped with the values a preview of the scene plus every pending buffer up to it gives,
+  which is exactly what its head step will see. So the head step almost never prepares text
+  again, and what it does is the same under both schedulers.
+- **Head steps may now run inside the apply phase** (changed from M2, where they ran only at
+  the end of a core step): a buffer that reaches the head while the frame applies gets its
+  head step there, and applying stops if that gave the workers work. Without this, a
+  `set_text` buffer queued behind another would always wait a frame. Font loads follow the
+  same rule; `test_font_loading` and `test_prepare` still pass unchanged.
+- **The fuzzer checks previews against reality:** `fuzz_commands` previews every input
+  buffer, applies it, and traps if any node's text context differs from the preview's.
+  `fuzz_set_text` now resolves after applying, so derived sources are fuzzed too. Within
+  minutes it found two ways a preview disagreed with applying, both fixed with a seed:
+  - a parent's `set_text` that applying drops (an invalid span, say) was read from its
+    header alone, so its children were predicted to inherit from it. Previews now decode a
+    `set_text` exactly as applying does (lazily: only a text node with children needs it),
+    falling back to an earlier one in the buffer or the scene's when it is dropped
+    (`regress-preview-dropped-set-text`);
+  - `create_node` was predicted to succeed with a handle whose generation the slot had
+    already used, which the handle table refuses, and to fail on a slot freed by destroying
+    an ancestor (`regress-preview-stale-create`);
+  - `set_styles` with a 0 id, which applying drops, was taken (`regress-preview-invalid-styles`).
+    Reviewing every op against its apply function then also found `move_node`'s `before`
+    check missing and stale surfaces for nodes under one moved to another surface.
+- **Tests:** `test_prepare`'s `test_styled_text` (both schedulers: styled text shaped on
+  workers, a token change reshaping three paragraphs there, no core shaping, identical
+  frames; mutations that drop the guess or the reshape fail it), `test_layout`'s
+  `test_styled_text`, `test_text_wire`'s `test_from_node`. New stat `text_reshaped`.
+
 ### Inheritance
 - **Inherited properties, as in CSS:** text color, font family, size, weight, slant,
   language, line height, text alignment and direction. `max_lines` doesn't inherit. New
@@ -45,6 +98,9 @@ milestone first.
   values changed (or a child takes `inherit` on another property and anything changed), so
   a change stops at descendants that declare their own values. `test_style` counts the
   computations (`ui_scene_stats.styles_computed`).
+- **Interim cost:** `bench_layout`'s token change over 10,005 nodes went from 3.0–3.8 ms to
+  about 4.8 ms (best of 15): every user of a changed token gathers its cascade again, and
+  the dirty queue is sorted by depth. The style-performance step replaces this path.
 
 ## Milestone 2: layout and styles
 

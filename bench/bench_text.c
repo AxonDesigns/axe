@@ -138,7 +138,7 @@ static ui_result on_events(void *user, const void *events, size_t size, ui_cmd_w
             ui_handle_alloc(l->alloc, &l->bg);
             ui_handle_alloc(l->alloc, &l->text);
             static const char *const fam[] = {"Noto Sans"};
-            ui_text_desc t = {.text = l->content, .length = (uint32_t)strlen(l->content),
+            ui_text_desc t = {.set = UI_TEXT_SET_ALL, .text = l->content, .length = (uint32_t)strlen(l->content),
                               .style = {.family = 0, .weight = 400, .size = 14,
                                         .color = {0.1f, 0.1f, 0.1f, 1}},
                               .families = fam, .family_count = 1};
@@ -279,7 +279,7 @@ static bool new_text_run(ui_scheduler_kind scheduler, uint64_t *core, uint64_t *
     ui_cmd_writer_create(&w);
     ui_handle_alloc(alloc, &node);
     static const char *const fam[] = {"Noto Sans, sans-serif"};
-    ui_text_desc text = {.text = PARAGRAPH, .length = sizeof PARAGRAPH - 1,
+    ui_text_desc text = {.set = UI_TEXT_SET_ALL, .text = PARAGRAPH, .length = sizeof PARAGRAPH - 1,
                          .style = {.family = 0, .weight = 400, .size = 17,
                                    .color = {0.1f, 0.1f, 0.1f, 1}},
                          .families = fam, .family_count = 1};

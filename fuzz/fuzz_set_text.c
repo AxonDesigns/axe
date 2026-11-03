@@ -1,5 +1,6 @@
 // The set_text op end to end on the core thread's side: arbitrary bytes as the payload of a
-// set_text (and, past 4 KiB, of the append_text ops after it), applied to a scene, then the
+// set_text (and, past 4 KiB, of the append_text ops after it), applied to a scene and
+// resolved (fields it leaves to the node are derived from the node's values), then the
 // node's paragraph laid out with the bundled fonts at a scale and width taken from the
 // input, then hit-tested.
 #include <math.h>
@@ -72,6 +73,7 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
     size_t len;
     uint8_t *bytes = ui_wire_buf_finish(&b, &len);
     ui_scene_apply(&s, bytes, len, 0); // malformed framing is a valid outcome
+    ui_scene_resolve(&s, 0); // fields left to the node make a derived source (paragraph.h)
     free(bytes);
 
     ui_paragraph *para = s.handles.used > 1 && s.handles.alive[1] ? s.nodes[1].text : NULL;

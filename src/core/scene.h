@@ -42,6 +42,23 @@ typedef struct ui_node_anim {
     float requested_params[UI_SPRING_COUNT][2];
 } ui_node_anim;
 
+// A node's text values before its own set_text: what its styles decide (`declared`, the
+// UI_TEXT_SET_* bits), and its parent's values for the rest. Combined with the set_text,
+// it gives what the paragraph is shaped with (docs/styles.md, "Inheritance").
+typedef struct ui_text_ctx {
+    ui_text_values values; // strings interned (in the styles, or a preview's own table)
+    uint32_t declared;
+} ui_text_ctx;
+
+// What `base` is shaped with on a node with context `c`: set_text's values where it sets
+// them and the styles don't, else the context's (strings point into c or base).
+ui_text_resolved ui_text_ctx_key(const ui_text_ctx *c, const ui_text_source *base);
+// The text values such a node computes (what its children inherit). Strings of `base` are
+// interned in `strings`; false if out of memory.
+bool ui_text_ctx_values(const ui_text_ctx *c, const ui_text_source *base, ui_styles *strings,
+                        ui_text_values *out);
+bool ui_text_values_eq(const ui_text_values *a, const ui_text_values *b);
+
 typedef struct ui_node {
     uint32_t parent;       // node slot, or UI_NO_SLOT when attached to a surface root
     uint32_t root;         // index into ui_scene.roots
@@ -77,12 +94,18 @@ typedef struct ui_node {
     bool cascade_dirty;    // and gather its cascade again first (style.h)
     bool resolved;         // resolved before: changes may animate from now on
     bool inherits_other;   // a non-inherited property takes `inherit`: follows every parent change
+    uint16_t text_declared; // UI_TEXT_SET_* bits of the text values its cascade decides
     // The entries that apply to it, by increasing precedence (pointers into style
     // definitions and its overrides; gathered again whenever those change).
     const ui_style_entry **cascade;
     uint32_t cascade_count, cascade_capacity;
     // set_text's family list and language (interned), which stand in for the inherited ones.
     const char *text_family, *text_language;
+    // The node's set_text. Its paragraph shows it, or a source derived from it with the
+    // node's values (ui_text_ctx_key, paragraph.h).
+    ui_text_source *text_base;
+    bool text_keyed;       // the paragraph's source was checked against the node's values
+    uint32_t offer;        // index + 1 of shaping offered for its paragraph (ui_scene_offer); 0: none
     ui_computed computed;
 } ui_node;
 
@@ -97,6 +120,17 @@ typedef struct ui_scene_root {
     float layout_size[2];  // the surface size it was last laid out for
     float layout_scale;
 } ui_scene_root;
+
+// Shaping prepared for a paragraph (by preparation, core/prepare.h), adopted when a node's
+// set_text is `base` and it is to be shaped as `source` shapes (ui_text_source_shapes_as) at
+// `scale`. Offered when the buffer that prepared it applies; what isn't taken is dropped
+// at the end of that frame's resolution.
+typedef struct ui_scene_offer {
+    ui_handle node;
+    ui_text_source *base, *source; // references
+    float scale;
+    ui_shaped_paragraph shaped;
+} ui_scene_offer;
 
 // Receives set_timer ops, which belong to the core rather than to any node.
 typedef void (*ui_scene_timer_fn)(void *user, uint32_t id, uint64_t deadline_ns);
@@ -114,6 +148,9 @@ typedef struct ui_scene_text_prep {
     float scales[UI_MAX_SURFACES];
     ui_shaped_paragraph shaped[UI_MAX_SURFACES]; // per scale; moved out when adopted
     uint32_t scale_count;
+    // What `shaped` shaped: op.source, or a source derived from it with the node's values
+    // as preparation expected them (a reference; offered when applied).
+    ui_text_source *shaped_source;
 } ui_scene_text_prep;
 
 typedef struct ui_scene_prepared {
@@ -161,6 +198,8 @@ typedef struct ui_scene {
     void *timer_user;
     ui_scene_font_fn font_fn;
     void *font_user;
+    ui_scene_offer *offers;
+    uint32_t offer_count, offer_capacity;
     ui_scene_request *requests; // request_layout ops in the order applied; the core answers
     uint32_t request_count, request_capacity; // and removes them
 } ui_scene;
@@ -219,6 +258,16 @@ void ui_layout_root(ui_scene *s, uint32_t root, float width, float height, float
 // Called by layout for a node whose layout rect changed, or that needs placing: what is
 // drawn follows, through the node's layout transition when it has one.
 void ui_scene_place(ui_scene *s, uint32_t slot, uint64_t now_ns);
+
+// A node's text context now (see ui_text_ctx).
+ui_text_ctx ui_scene_text_ctx(const ui_scene *s, uint32_t slot);
+// Offers prepared shaping (takes over `shaped`'s arrays; references base and source) for
+// the node's paragraph, which resolves again in the next ui_scene_resolve. Dropped unless the
+// node is alive and `scale` is its surface's.
+void ui_scene_offer_shaped(ui_scene *s, ui_handle node, ui_text_source *base, ui_text_source *source,
+                           float scale, ui_shaped_paragraph *shaped);
+// The index of the surface's root in s->roots, or UI_MAX_SURFACES.
+uint32_t ui_scene_root_index(const ui_scene *s, ui_handle surface);
 
 // The rects a layout_measured event reports for a node: its layout rect and its
 // presentation rect, each relative to its parent and to the surface (x, y, width, height).

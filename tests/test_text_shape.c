@@ -243,7 +243,7 @@ static void test_shaping(void) {
     CHECK_NEAR(total_advance(&p), 2 * black, 2 * 11);
 
     // Spans: a color-only change does not split the run; a weight change does.
-    ui_text_span spans[1] = {{6, 11, in.base}};
+    ui_text_span spans[1] = {{6, 11, in.base, 0}};
     spans[0].style.color[0] = 1;
     in.spans = spans;
     in.span_count = 1;
@@ -362,7 +362,7 @@ static void test_language(void) {
     sr.language = 3;
     // "ş ş б б": the first of each pair has no language, the second has one.
     const char *text = "\xC5\x9F \xC5\x9F \xD0\xB1 \xD0\xB1";
-    ui_text_span both[] = {{3, 5, ro}, {9, 11, sr}};
+    ui_text_span both[] = {{3, 5, ro, 0}, {9, 11, sr, 0}};
     ui_text_input in = {
         .text = (const uint8_t *)text, .len = (uint32_t)strlen(text),
         .base = {.family = 0, .weight = 400, .size = 16, .color = {0, 0, 0, 1}},

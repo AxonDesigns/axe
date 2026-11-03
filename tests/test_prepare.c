@@ -6,6 +6,8 @@
 //   - both schedulers: ui_app_frame applies a buffer queued before it, with the text shaped
 //     and its glyphs rasterized by workers (none on the core), and the pictures match byte
 //     for byte;
+//   - text styled by its node's values is shaped on workers with them, and shaped again there
+//     when a token changes them;
 //   - an app whose platform fails to start returns the error (font discovery hasn't woken it).
 #include <stdatomic.h>
 #include <stdlib.h>
@@ -110,7 +112,7 @@ static bool send_text(client *c) {
         n += sizeof words - 1;
     }
     static const char *const families[] = {"Noto Sans"};
-    ui_text_desc d = {
+    ui_text_desc d = {.set = UI_TEXT_SET_ALL,
         .text = text, .length = (uint32_t)n,
         .style = {.family = 0, .weight = 400, .size = 13, .color = {1, 1, 1, 1}},
         .families = families, .family_count = 1,
@@ -245,6 +247,67 @@ static void test_schedulers_match(void) {
     ui_image_free(&threaded);
 }
 
+// Text that leaves its font to its node (docs/styles.md, "Inheritance"): a buffer that
+// creates styled nodes and their text has it shaped on workers with the styled values
+// before it applies; a token change later reshapes every paragraph using it on workers,
+// and they all change in the frame that applies the token. Nothing is shaped on the core.
+static bool render_styled(ui_scheduler_kind scheduler, ui_image shots[2], ui_app_stats *stats) {
+    client c;
+    bool ok = open_app(&c, scheduler);
+    c.hold_seq = UINT64_MAX;
+    ui_handle surface = ui_app_main_surface(c.app), parent, kids[3];
+    ui_handle_alloc(c.handles, &parent);
+    ui_cmd_set_token(c.w, 1, ui_px(14));
+    ui_style_decl body[] = {{UI_STYLE_FONT_FAMILY, ui_string("Noto Sans")}, {UI_STYLE_FONT_SIZE, ui_token_ref(1)},
+                            {UI_STYLE_TEXT_COLOR, ui_rgba(1, 1, 1, 1)}, {UI_STYLE_LINE_HEIGHT, ui_number(1.25f)},
+                            {UI_STYLE_FLEX_DIRECTION, ui_keyword(UI_FLEX_COLUMN)},
+                            {UI_STYLE_BACKGROUND_COLOR, ui_rgba(0.1f, 0.1f, 0.3f, 1)}, {UI_STYLE_FLEX_GROW, ui_number(1)}};
+    ui_cmd_define_style(c.w, 1, &(ui_style_block_desc){0, body, 7}, 1);
+    ui_cmd_create_node(c.w, parent, surface);
+    ui_cmd_set_styles(c.w, parent, (uint32_t[]){1}, 1);
+    static const char *const lines[] = {"Styled text", "follows its parent", "\xD7\xA9\xD7\x9C\xD7\x95\xD7\x9D"};
+    for (int i = 0; i < 3; i++) {
+        ui_handle_alloc(c.handles, &kids[i]);
+        ui_cmd_create_node(c.w, kids[i], parent);
+        ui_text_desc d = {.text = lines[i], .length = (uint32_t)strlen(lines[i])}; // nothing set
+        ok = ok && ui_cmd_set_text(c.w, kids[i], &d) == UI_OK;
+    }
+    ok = ok && send(&c) && ui_app_frame(c.app) == UI_OK && ui_app_frame(c.app) == UI_OK && capture(&c, &shots[0]);
+    ui_cmd_set_token(c.w, 1, ui_px(24));
+    ok = ok && send(&c) && ui_app_frame(c.app) == UI_OK && capture(&c, &shots[1]);
+    if (ok) ui_app_get_stats(c.app, stats);
+    close_app(&c);
+    return ok;
+}
+
+static void test_styled_text(void) {
+    ui_image single[2] = {0}, threaded[2] = {0};
+    ui_app_stats ss, ts;
+    CHECK(render_styled(UI_SCHEDULER_SINGLE, single, &ss));
+    CHECK(render_styled(UI_SCHEDULER_THREADED, threaded, &ts));
+    for (int k = 0; k < 2 && single[k].pixels && threaded[k].pixels; k++)
+        CHECK(!memcmp(single[k].pixels, threaded[k].pixels, (size_t)single[k].stride * single[k].height));
+    if (single[0].pixels && single[1].pixels) {
+        // Three lines of 14 x 1.25 px end above y = 60; at 24 px the third line reaches past it.
+        bool ink_low[2] = {false, false};
+        for (int k = 0; k < 2; k++)
+            for (uint32_t x = 0; x < WIDTH; x++) ink_low[k] |= pixel(&single[k], x, 70)[0] > 128;
+        CHECK(!ink_low[0] && ink_low[1]);
+    }
+    const ui_app_stats *all[] = {&ss, &ts};
+    for (int i = 0; i < 2; i++) {
+        CHECK_EQ_INT(all[i]->texts_prepared, 3);
+        CHECK_EQ_INT(all[i]->text_shaped_on_core, 0);
+        CHECK_EQ_INT(all[i]->glyphs_rasterized_on_core, 0);
+        CHECK_EQ_INT(all[i]->text_reshaped, 3); // the token change; the first buffer was guessed right
+        CHECK_EQ_INT(all[i]->commands_dropped, 0);
+    }
+    for (int k = 0; k < 2; k++) {
+        ui_image_free(&single[k]);
+        ui_image_free(&threaded[k]);
+    }
+}
+
 // An app whose platform can't start fails cleanly. Regression: font discovery started as a
 // job while the core was created, before the platform; when the platform then failed, the
 // job's completion woke the missing platform and crashed.
@@ -270,6 +333,7 @@ static void test_failed_start(void) {
 int main(void) {
     RUN(test_held_preparation);
     RUN(test_schedulers_match);
+    RUN(test_styled_text);
     RUN(test_failed_start);
     return test_failures != 0;
 }

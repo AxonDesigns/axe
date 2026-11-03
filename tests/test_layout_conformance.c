@@ -35,7 +35,7 @@ static double run(const layout_fixture *f, uint32_t *worst_node, bool verbose) {
         CHECK(ui_cmd_create_node(w, h, parent) == UI_OK);
         if (n->decl_count) CHECK(ui_cmd_set_props(w, h, n->decls, n->decl_count) == UI_OK);
         if (!n->text) continue;
-        ui_text_desc t = {.text = n->text, .length = (uint32_t)strlen(n->text),
+        ui_text_desc t = {.set = UI_TEXT_SET_ALL, .text = n->text, .length = (uint32_t)strlen(n->text),
                           .style = {.family = 0, .weight = 400, .size = n->font_size, .color = {0, 0, 0, 1}},
                           .families = family, .family_count = 1, .line_height = 1.25f};
         CHECK(ui_cmd_set_text(w, h, &t) == UI_OK);

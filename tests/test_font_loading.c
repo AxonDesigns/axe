@@ -30,7 +30,7 @@ static ui_result on_events(void *user, const void *events, size_t size, ui_cmd_w
         if (ev.type == UI_EVENT_SURFACE_RESIZED && ui_handle_is_null(l->node)) {
             ui_handle_alloc(l->alloc, &l->node);
             static const char *const fam[] = {"Noto Sans"};
-            ui_text_desc t = {.text = HEBREW, .length = sizeof HEBREW - 1,
+            ui_text_desc t = {.set = UI_TEXT_SET_ALL, .text = HEBREW, .length = sizeof HEBREW - 1,
                               .style = {.family = 0, .weight = 400, .size = 20,
                                         .color = {0, 0, 0, 1}},
                               .families = fam, .family_count = 1};

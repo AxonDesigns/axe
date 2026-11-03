@@ -192,7 +192,7 @@ static void test_move_node(void) {
 
 static void set_text(fixture *f, uint32_t slot, const char *s) {
     static const char *const fam[] = {"Noto Sans"};
-    ui_text_desc t = {.text = s, .length = (uint32_t)strlen(s),
+    ui_text_desc t = {.set = UI_TEXT_SET_ALL, .text = s, .length = (uint32_t)strlen(s),
                       .style = {.family = 0, .weight = 400, .size = 16, .color = {0, 0, 0, 1}},
                       .families = fam, .family_count = 1, .line_height = 1.25f};
     CHECK(ui_cmd_set_text(f->w, node(slot), &t) == UI_OK);
@@ -326,6 +326,53 @@ static void test_styles(void) {
     teardown(&f);
 }
 
+// Text that leaves its font to the node follows the node's styles and its parent's: the
+// family, size and direction come from them, and a change of any reshapes it. Spans can
+// leave single fields to the node too.
+static void test_styled_text(void) {
+    fixture f;
+    setup(&f, 400, 200);
+    ui_cmd_create_node(f.w, node(1), f.surfaces[0]);
+    props(&f, 1, (ui_style_decl[]){{UI_STYLE_ALIGN_ITEMS, ui_keyword(UI_FLEX_START)},
+                                   {UI_STYLE_FONT_FAMILY, ui_string("Noto Sans")},
+                                   {UI_STYLE_FONT_SIZE, ui_px(16)},
+                                   {UI_STYLE_LINE_HEIGHT, ui_number(1.25f)}},
+          4);
+    ui_cmd_create_node(f.w, node(2), node(1));
+    ui_text_span_desc span = {0, 1, {.weight = 700, .size = 40}, UI_TEXT_SET_WEIGHT}; // size from the node
+    ui_text_desc t = {.text = "Styled", .length = 6, .spans = &span, .span_count = 1}; // nothing set
+    CHECK(ui_cmd_set_text(f.w, node(2), &t) == UI_OK);
+    frame(&f);
+    const ui_text_source *src = f.s.nodes[2].text->source;
+    CHECK(src->base.size == 16 && src->spans[0].style.size == 16 && src->spans[0].style.weight == 700);
+    CHECK(src->dir == UI_BIDI_LTR);
+    float w16 = rect(&f, 2)[2];
+    CHECK(rect(&f, 2)[3] == 20); // 1.25 x 16
+    // The parent's size doubles: the text is shaped again and twice as big.
+    props(&f, 1, (ui_style_decl[]){{UI_STYLE_FONT_SIZE, ui_px(32)}, {UI_STYLE_DIRECTION, ui_keyword(UI_DIRECTION_RTL)}},
+          2);
+    frame(&f);
+    src = f.s.nodes[2].text->source;
+    CHECK(src->base.size == 32 && src->spans[0].style.size == 32 && src->dir == UI_BIDI_RTL);
+    CHECK(rect(&f, 2)[3] == 40);
+    CHECK_NEAR(rect(&f, 2)[2], 2 * w16, 1);
+    // A style on the node beats both, and set_text's own value loses to it too.
+    t.set = UI_TEXT_SET_SIZE;
+    t.style.size = 10;
+    CHECK(ui_cmd_set_text(f.w, node(2), &t) == UI_OK);
+    frame(&f);
+    CHECK(f.s.nodes[2].text->source->base.size == 10 && f.s.nodes[2].text->source->spans[0].style.size == 10);
+    props(&f, 2, &(ui_style_decl){UI_STYLE_FONT_SIZE, ui_px(12)}, 1);
+    frame(&f);
+    CHECK(f.s.nodes[2].text->source->base.size == 12);
+    // A paint change on the parent doesn't touch the text.
+    const ui_text_source *before = f.s.nodes[2].text->source;
+    props(&f, 1, &(ui_style_decl){UI_STYLE_BACKGROUND_COLOR, ui_rgba(1, 0, 0, 1)}, 1);
+    frame(&f);
+    CHECK(f.s.nodes[2].text->source == before);
+    teardown(&f);
+}
+
 int main(void) {
     ui_font_registry_create(&(ui_font_registry_desc){.log = &quiet}, &fonts);
     ui_font_registry_add_file(fonts, FONT("NotoSans-Regular-Static.ttf"), 0, NULL);
@@ -338,6 +385,7 @@ int main(void) {
     RUN(test_rect_spring);
     RUN(test_incremental);
     RUN(test_styles);
+    RUN(test_styled_text);
     ui_text_context_free(&text);
     ui_font_registry_destroy(fonts);
     return test_failures != 0;

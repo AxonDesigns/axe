@@ -60,11 +60,11 @@ static uint8_t *write_all(bool paragraph_fields, const char *text, size_t *size)
     static const char *const languages[] = {"ro"};
     ui_text_span_desc spans[2] = {
         {0, 5, {.family = 1, .weight = 700, .slant = UI_TEXT_ITALIC, .size = 20,
-                .color = {1, 0, 0, 1}, .language = 1}},
+                .color = {1, 0, 0, 1}, .language = 1}, UI_TEXT_SET_SPAN_ALL},
         {6, 11, {.family = UI_TEXT_FAMILY_DEFAULT, .weight = 300, .size = 12,
-                 .color = {0, 0, 1, 0.5f}}},
+                 .color = {0, 0, 1, 0.5f}}, UI_TEXT_SET_SPAN_ALL},
     };
-    ui_text_desc d = {
+    ui_text_desc d = {.set = UI_TEXT_SET_ALL,
         .text = text, .length = TEXT_LEN,
         .style = {.family = 0, .weight = 400, .size = 16, .color = {1, 1, 1, 1}},
         .spans = spans, .span_count = 2,

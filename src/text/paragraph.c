@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "ui/wire.h" // the UI_TEXT_SET_* bits of from_node
 #include "unicode/ucd.h"
 
 #define EPS (1.f / 64.f) // widths within a 26.6 unit count as fitting
@@ -48,7 +49,8 @@ static void *dup_bytes(const void *src, size_t n) {
 }
 
 static void free_source(ui_text_source *s) {
-    free(s->text);
+    if (s->shared) ui_text_source_release(s->shared); // it owns the text
+    else free(s->text);
     free(s->spans);
     free(s->families);
     free(s->family_offsets);
@@ -80,6 +82,95 @@ ui_result ui_text_source_create(const ui_paragraph_desc *d, ui_text_source **out
     s->ellipsis_len = d->ellipsis_len;
     s->align = d->align;
     s->line_height = d->line_height > 0 && isfinite(d->line_height) ? d->line_height : 0;
+    s->from_node = d->from_node;
+    *out = s;
+    return UI_OK;
+}
+
+// The family list of `style` in `s`, and its language: (NULL, 0) for the default / none.
+static void style_strings(const ui_text_source *s, const ui_text_style *style, const char **fam,
+                          uint32_t *fam_len, const char **lang, uint32_t *lang_len) {
+    ui_text_input in = ui_text_source_input(s);
+    ui_text_input_family(&in, style, fam, fam_len);
+    ui_text_input_language(&in, style, lang, lang_len);
+    if (!*fam_len) *fam = NULL;
+    if (!*lang || !*lang_len) *lang = NULL, *lang_len = 0;
+}
+
+static bool same_string(const char *a, uint32_t an, const char *b, uint32_t bn) {
+    return an == bn && (!an || !memcmp(a, b, an));
+}
+
+bool ui_text_source_shapes_as(const ui_text_source *s, const ui_text_resolved *r) {
+    // A derived source's spans are resolved with its base style's values; a set_text's
+    // aren't, so one that leaves a shaping field to the node needs deriving.
+    for (uint32_t i = 0; !s->shared && i < s->span_count; i++) {
+        if (s->spans[i].from_node & ~UI_TEXT_SET_COLOR) return false;
+    }
+    const char *fam, *lang;
+    uint32_t fam_len, lang_len;
+    style_strings(s, &s->base, &fam, &fam_len, &lang, &lang_len);
+    return same_string(fam, fam_len, r->family, r->family ? r->family_len : 0) &&
+           same_string(lang, lang_len, r->language, r->language ? r->language_len : 0) &&
+           s->base.size == r->size && s->base.weight == r->weight && s->base.style == r->slant &&
+           s->dir == r->dir;
+}
+
+ui_result ui_text_source_derive(ui_text_source *base, const ui_text_resolved *r, ui_text_source **out) {
+    ui_text_source *s = calloc(1, sizeof *s);
+    if (!s) return UI_ERR_OUT_OF_MEMORY;
+    *s = *base;
+    // The string table: the base's, then the resolved family and language.
+    uint32_t base_bytes = base->family_count ? base->family_offsets[base->family_count] : 0;
+    uint32_t fam_len = r->family ? r->family_len : 0, lang_len = r->language ? r->language_len : 0;
+    uint32_t count = base->family_count + (r->family ? 1 : 0) + (r->language ? 1 : 0);
+    s->families = malloc(base_bytes + fam_len + lang_len + 1);
+    s->family_offsets = malloc((count + 1) * sizeof *s->family_offsets);
+    s->spans = dup_bytes(base->spans, base->span_count * sizeof *s->spans);
+    s->ellipsis = dup_bytes(base->ellipsis, base->ellipsis_len);
+    s->text = NULL;
+    s->shared = NULL;
+    if (!s->families || !s->family_offsets || !s->spans || !s->ellipsis) {
+        free_source(s);
+        return UI_ERR_OUT_OF_MEMORY;
+    }
+    memcpy(s->families, base->families, base_bytes);
+    if (base->family_count) memcpy(s->family_offsets, base->family_offsets, (base->family_count + 1) * sizeof(uint32_t));
+    s->family_offsets[0] = 0;
+    uint32_t n = base->family_count, at = base_bytes;
+    uint16_t family = UI_TEXT_DEFAULT_FAMILY, language = 0;
+    if (r->family) {
+        memcpy(s->families + at, r->family, fam_len);
+        at += fam_len;
+        family = (uint16_t)n++;
+        s->family_offsets[n] = at;
+    }
+    if (r->language) {
+        memcpy(s->families + at, r->language, lang_len);
+        at += lang_len;
+        n++;
+        language = (uint16_t)n; // index + 1
+        s->family_offsets[n] = at;
+    }
+    s->family_count = n;
+    s->base.family = family;
+    s->base.language = language;
+    s->base.size = r->size;
+    s->base.weight = r->weight;
+    s->base.style = r->slant;
+    s->dir = r->dir;
+    for (uint32_t i = 0; i < s->span_count; i++) {
+        ui_text_style *st = &s->spans[i].style;
+        uint8_t from = s->spans[i].from_node;
+        if (from & UI_TEXT_SET_FAMILY) st->family = family;
+        if (from & UI_TEXT_SET_LANGUAGE) st->language = language;
+        if (from & UI_TEXT_SET_SIZE) st->size = r->size;
+        if (from & UI_TEXT_SET_WEIGHT) st->weight = r->weight;
+        if (from & UI_TEXT_SET_SLANT) st->style = r->slant;
+    }
+    s->text = base->text;
+    s->shared = ui_text_source_retain(base);
+    atomic_init(&s->refs, 1u);
     *out = s;
     return UI_OK;
 }

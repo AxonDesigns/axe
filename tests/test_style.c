@@ -312,8 +312,8 @@ static void test_text_values(void) {
     fixture f;
     setup(&f);
     static const char *const fam[] = {"Noto Sans"};
-    ui_text_span_desc span = {0, 2, {.family = 0, .weight = 700, .size = 14, .color = {1, 0, 0, 1}}};
-    ui_text_desc t = {.text = "Hi there", .length = 8,
+    ui_text_span_desc span = {0, 2, {.family = 0, .weight = 700, .size = 14, .color = {1, 0, 0, 1}}, UI_TEXT_SET_SPAN_ALL};
+    ui_text_desc t = {.set = UI_TEXT_SET_ALL, .text = "Hi there", .length = 8,
                       .style = {.family = 0, .weight = 400, .size = 14, .color = {0, 0, 1, 1}},
                       .spans = &span, .span_count = 1, .families = fam, .family_count = 1,
                       .align = UI_TEXT_ALIGN_START, .line_height = 1.2f, .max_lines = 3};
@@ -445,7 +445,7 @@ static void test_text_inheritance(void) {
     props(&f, 1, (ui_style_decl[]){{UI_STYLE_TEXT_COLOR, ui_rgba(0, 1, 0, 1)}, {UI_STYLE_LINE_HEIGHT, ui_number(2)}},
           2);
     static const char *const fam[] = {"Noto Sans"};
-    ui_text_desc t = {.text = "Hi", .length = 2, .families = fam, .family_count = 1,
+    ui_text_desc t = {.set = UI_TEXT_SET_ALL, .text = "Hi", .length = 2, .families = fam, .family_count = 1,
                       .style = {.family = 0, .weight = 300, .size = 11, .color = {0, 0, 1, 1}}};
     ui_cmd_set_text(f.w, h(3), &t);
     flush(&f);

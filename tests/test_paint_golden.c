@@ -41,7 +41,7 @@ static void props(builder *b, ui_handle n, const ui_style_decl *d, uint32_t coun
 }
 
 static void text(builder *b, ui_handle n, const char *s, float size) {
-    ui_text_desc d = {.text = s, .length = (uint32_t)strlen(s),
+    ui_text_desc d = {.set = UI_TEXT_SET_ALL, .text = s, .length = (uint32_t)strlen(s),
                       .style = {.family = 0, .weight = 600, .size = size, .color = {0.1f, 0.1f, 0.12f, 1}},
                       .families = families, .family_count = 1};
     CHECK(ui_cmd_set_text(b->w, n, &d) == UI_OK);

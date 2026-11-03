@@ -155,7 +155,8 @@ whenever the width or the surface scale changes.
 | 28 | style | the default style (36 bytes, below). Its `start` and `end` are unused: the first 2 bytes are `u16 span_bytes`, the size of each span record (36 in this version; 0 = 36), and the other 6 are 0 |
 | 64 | f32 | `line_height`: line box height as a multiple of the default size; 0 = from font metrics; ≤ 100 |
 | 68 | u8 | align: 0 start, 1 end, 2 left, 3 right, 4 center, 5 justify |
-| 69 | u8[3] | reserved (0) |
+| 69 | u8 | reserved (0) |
+| 70 | u16 | `from_node`: the fields that come from the node rather than this op (bits below); 0 = all set here |
 | `header_bytes` | style[] | `span_count` spans, each `span_bytes` long |
 | … | bytes | string region: `string_count` NUL-terminated UTF-8 strings, zero-padded |
 | … | bytes | ellipsis, padded to 4 |
@@ -170,11 +171,18 @@ A style or span is 36 bytes:
 | 8 | u16 | family: index of a family list in the string region, or `0xFFFF` for the default |
 | 10 | u16 | weight, 1–1000 (400 regular, 700 bold) |
 | 12 | u8 | slant: 0 normal, 1 italic, 2 oblique |
-| 13 | u8 | reserved (0) |
+| 13 | u8 | `from_node` of a span: its fields that come from the paragraph's (bits below); 0 = all set here. Unused in the default style (offset 70 has its bits) |
 | 14 | u16 | language: index of a BCP 47 tag in the string region **plus one**; 0 = default |
 | 16 | f32 | size, logical px, in (0, 4096] |
 | 20 | f32[4] | color: sRGB, straight alpha, clamped to [0, 1] |
 
+- **`from_node`** bits: 1 family, 2 size, 4 weight, 8 slant, 16 language, 32 color (a
+  span's are these), 64 line height, 128 alignment, 256 direction. A field with its bit set
+  takes the node's computed value ([`docs/styles.md`](styles.md), "Inheritance") for the
+  paragraph, and the paragraph's for a span; its bytes are a placeholder (an older reader
+  shows them) and aren't checked. Direction from the node is the node's `direction`; set
+  here, it is the paragraph's own (auto included). `ui_cmd_set_text` sends the fields not in
+  `ui_text_desc.set` (and `ui_text_span_desc.set`) as `from_node`.
 - **Alignment** is relative to the paragraph's direction for start and end. Justify
   stretches the spaces of every line except the last line of a paragraph (and lines
   without spaces, which stay start-aligned).

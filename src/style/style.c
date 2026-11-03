@@ -465,6 +465,55 @@ bool ui_styles_token_value(const ui_styles *s, const ui_value *v, ui_value *out)
     }
 }
 
+// ---- Views -------------------------------------------------------------------------------
+
+static bool listed(const uint32_t *ids, uint32_t n, uint32_t id) {
+    for (uint32_t i = 0; i < n; i++) {
+        if (ids[i] == id) return true;
+    }
+    return false;
+}
+
+const ui_style_def *ui_style_view_find(const ui_style_view *v, uint32_t id) {
+    if (v->over) {
+        const ui_style_def *d = ui_styles_find(v->over, id);
+        if (d) return d;
+        if (listed(v->gone_defs, v->gone_def_count, id)) return NULL;
+    }
+    return ui_styles_find(v->styles, id);
+}
+
+static const ui_value *view_token(const ui_style_view *v, uint32_t id) {
+    if (v->over) {
+        const ui_value *t = token_of(v->over, id);
+        if (t) return t;
+        if (listed(v->gone_tokens, v->gone_token_count, id)) return NULL;
+    }
+    return token_of(v->styles, id);
+}
+
+// Floyd's cycle detection, as in ui_styles_token_value.
+bool ui_style_view_token_value(const ui_style_view *v, const ui_value *value, ui_value *out) {
+    if (value->kind != UI_VALUE_TOKEN) {
+        *out = *value;
+        return true;
+    }
+    uint32_t slow = value->token, fast = value->token;
+    for (;;) {
+        for (int step = 0; step < 2; step++) {
+            const ui_value *t = view_token(v, fast);
+            if (!t) return false;
+            if (t->kind != UI_VALUE_TOKEN) {
+                *out = *t;
+                return true;
+            }
+            fast = t->token;
+        }
+        slow = view_token(v, slow)->token;
+        if (slow == fast) return false;
+    }
+}
+
 // ---- Resolution --------------------------------------------------------------------------
 
 void ui_layout_style_init(ui_layout_style *l) {
@@ -641,14 +690,31 @@ static bool inherited(uint16_t prop) {
 
 // Applies one entry; returns UI_STYLE_INHERITS_OTHER for `inherit` on a non-inherited
 // property.
-static uint32_t apply(const ui_styles *s, const ui_style_entry *e, const ui_computed *parent,
-                      ui_computed *c) {
+// The UI_TEXT_SET_* bit of a text property (0 for the others).
+static uint32_t text_field(uint16_t prop) {
+    switch (prop) {
+    case UI_STYLE_FONT_FAMILY: return UI_TEXT_SET_FAMILY;
+    case UI_STYLE_FONT_SIZE: return UI_TEXT_SET_SIZE;
+    case UI_STYLE_FONT_WEIGHT: return UI_TEXT_SET_WEIGHT;
+    case UI_STYLE_FONT_SLANT: return UI_TEXT_SET_SLANT;
+    case UI_STYLE_LANGUAGE: return UI_TEXT_SET_LANGUAGE;
+    case UI_STYLE_TEXT_COLOR: return UI_TEXT_SET_COLOR;
+    case UI_STYLE_LINE_HEIGHT: return UI_TEXT_SET_LINE_HEIGHT;
+    case UI_STYLE_TEXT_ALIGN: return UI_TEXT_SET_ALIGN;
+    case UI_STYLE_DIRECTION: return UI_TEXT_SET_DIRECTION;
+    default: return 0;
+    }
+}
+
+static uint32_t apply(const ui_style_view *view, const ui_style_entry *e, const ui_computed *parent,
+                      ui_computed *c, uint32_t *text_set) {
     ui_value v;
     if (e->value.kind == UI_VALUE_TOKEN &&
-        (!ui_styles_token_value(s, &e->value, &v) || !ui_style_value_valid(e->prop, &v, false)))
+        (!ui_style_view_token_value(view, &e->value, &v) || !ui_style_value_valid(e->prop, &v, false)))
         return 0; // a missing token, a cycle, or a value this property can't take: absent
     if (e->value.kind != UI_VALUE_TOKEN) v = e->value;
     if (v.kind == UI_VALUE_UNSET) return 0;
+    *text_set |= text_field(e->prop);
     if (v.kind == UI_VALUE_INHERIT || v.kind == UI_VALUE_INITIAL) {
         size_t off, size;
         if (!slot_of(e->prop, &off, &size)) return 0;
@@ -691,7 +757,7 @@ typedef struct block_ref {
     const ui_style_block *block;
 } block_ref;
 
-bool ui_style_cascade(const ui_styles *s, const uint32_t *ids, uint32_t count, uint8_t state,
+bool ui_style_cascade(const ui_style_view *v, const uint32_t *ids, uint32_t count, uint8_t state,
                       const ui_style_entry *overrides, uint32_t override_count,
                       const ui_style_entry ***list, uint32_t *len, uint32_t *cap) {
     // Matching blocks: at most 255 styles; more than 4 blocks each overflow to the heap.
@@ -699,7 +765,7 @@ bool ui_style_cascade(const ui_styles *s, const uint32_t *ids, uint32_t count, u
     uint32_t ref_cap = UI_ARRAY_LEN(local), n = 0, entries = override_count;
     bool ok = true;
     for (uint32_t i = 0; ok && i < count; i++) {
-        const ui_style_def *d = ui_styles_find(s, ids[i]);
+        const ui_style_def *d = ui_style_view_find(v, ids[i]);
         for (uint32_t b = 0; d && b < d->block_count; b++) {
             const ui_style_block *blk = &d->blocks[b];
             if (blk->states & ~state) continue;
@@ -740,10 +806,11 @@ bool ui_style_cascade(const ui_styles *s, const uint32_t *ids, uint32_t count, u
     return ok;
 }
 
-uint32_t ui_style_compute(const ui_styles *s, const ui_style_entry *const *list, uint32_t count,
-                          const ui_computed *parent, ui_computed *out) {
-    uint32_t flags = 0;
-    for (uint32_t i = 0; i < count; i++) flags |= apply(s, list[i], parent, out);
+uint32_t ui_style_compute(const ui_style_view *v, const ui_style_entry *const *list, uint32_t count,
+                          const ui_computed *parent, ui_computed *out, uint32_t *text_set) {
+    uint32_t flags = 0, set = 0;
+    for (uint32_t i = 0; i < count; i++) flags |= apply(v, list[i], parent, out, &set);
+    if (text_set) *text_set = set;
     return flags;
 }
 

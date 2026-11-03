@@ -28,6 +28,8 @@ typedef struct ui_text_style {
 typedef struct ui_text_span {
     uint32_t start, end; // byte offsets; sorted, non-overlapping, on code point boundaries
     ui_text_style style;
+    uint8_t from_node;   // UI_TEXT_SET_* bits taken from the paragraph's base style (drawing
+                         // uses the node's color; shaping a derived source, paragraph.h)
 } ui_text_span;
 
 typedef struct ui_text_input {

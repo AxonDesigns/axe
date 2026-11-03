@@ -31,7 +31,7 @@ static ui_paragraph *text_of(ui_scene *s) { return s->nodes[ui_handle_slot(node)
 
 static ui_text_desc basic(const char *text, uint32_t len) {
     static const char *const families[] = {"Noto Sans, sans-serif", "Mono"};
-    return (ui_text_desc){
+    return (ui_text_desc){.set = UI_TEXT_SET_ALL,
         .text = text, .length = len,
         .style = {.family = 0, .weight = 400, .size = 16, .color = {1, 1, 1, 1}},
         .families = families, .family_count = 2,
@@ -55,8 +55,8 @@ static void test_basic(void) {
     static const char *const languages[] = {"ro", "sr-Cyrl"};
     ui_text_span_desc spans[2] = {
         {0, 5, {.family = 1, .weight = 700, .slant = UI_TEXT_ITALIC, .size = 20, .color = {1, 0, 0, 1},
-                .language = 2}},
-        {6, 11, {.family = UI_TEXT_FAMILY_DEFAULT, .weight = 300, .size = 12, .color = {0, 0, 1, 0.5f}}},
+                .language = 2}, UI_TEXT_SET_SPAN_ALL},
+        {6, 11, {.family = UI_TEXT_FAMILY_DEFAULT, .weight = 300, .size = 12, .color = {0, 0, 1, 0.5f}}, UI_TEXT_SET_SPAN_ALL},
     };
     ui_text_desc d = basic("Hello world", 11);
     d.spans = spans;
@@ -168,7 +168,7 @@ static void test_invalid_utf8(void) {
     ui_cmd_writer_create(&w);
     // "a <FF> b <E2 82> c": two ill-formed subparts; the span covers "b".
     const char text[] = "a\xFF" "b\xE2\x82" "c";
-    ui_text_span_desc span = {2, 3, {.family = 0, .weight = 700, .size = 16, .color = {1, 1, 1, 1}}};
+    ui_text_span_desc span = {2, 3, {.family = 0, .weight = 700, .size = 16, .color = {1, 1, 1, 1}}, UI_TEXT_SET_SPAN_ALL};
     ui_text_desc d = basic(text, sizeof text - 1);
     d.spans = &span;
     d.span_count = 1;
@@ -189,8 +189,8 @@ static void test_validation(void) {
     ui_cmd_writer_create(&w);
     // The writer refuses bad input and stays unchanged.
     ui_text_span_desc spans[2] = {
-        {0, 3, {.family = 0, .weight = 400, .size = 16, .color = {1, 1, 1, 1}}},
-        {2, 4, {.family = 0, .weight = 400, .size = 16, .color = {1, 1, 1, 1}}},
+        {0, 3, {.family = 0, .weight = 400, .size = 16, .color = {1, 1, 1, 1}}, UI_TEXT_SET_SPAN_ALL},
+        {2, 4, {.family = 0, .weight = 400, .size = 16, .color = {1, 1, 1, 1}}, UI_TEXT_SET_SPAN_ALL},
     };
     ui_text_desc d = basic("abcdef", 6);
     d.spans = spans;
@@ -258,10 +258,48 @@ static void test_validation(void) {
     ui_scene_destroy(&s);
 }
 
+// Fields left to the node travel as from_node bits (header offset 70, span byte 13): only
+// the fields set are checked, and the others decode as placeholders the node replaces.
+static void test_from_node(void) {
+    ui_scene s;
+    setup(&s);
+    ui_cmd_writer *w;
+    ui_cmd_writer_create(&w);
+    ui_text_span_desc span = {0, 2, {.weight = 700, .size = 0}, UI_TEXT_SET_WEIGHT}; // size 0: unset
+    ui_text_desc d = {.text = "Hi there", .length = 8, .spans = &span, .span_count = 1,
+                      .style = {.size = 0, .weight = 0, .color = {0, 1, 0, 1}}, .set = UI_TEXT_SET_COLOR};
+    CHECK(ui_cmd_set_text(w, node, &d) == UI_OK);
+    uint8_t *b;
+    size_t n;
+    ui_cmd_writer_take(w, &b, &n);
+    const uint8_t *payload = b + UI_WIRE_HEADER_SIZE + UI_WIRE_OP_HEADER_SIZE;
+    CHECK_EQ_INT(ui_wire_get_u16(payload + 70), UI_TEXT_SET_ALL & ~UI_TEXT_SET_COLOR);
+    CHECK_EQ_INT(payload[UI_WIRE_SIZE_SET_TEXT_HEADER + 13], UI_TEXT_SET_SPAN_ALL & ~UI_TEXT_SET_WEIGHT);
+    CHECK(ui_scene_apply(&s, b, n, 0) == UI_OK);
+    free(b);
+    CHECK_EQ_INT(s.stats.dropped, 0);
+    const ui_text_source *src = s.nodes[ui_handle_slot(node)].text_base;
+    CHECK(src && src->from_node == (UI_TEXT_SET_ALL & ~UI_TEXT_SET_COLOR));
+    CHECK(src->base.size == 16 && src->base.weight == 400 && src->base.color[1] == 1); // placeholders, and the color
+    CHECK(src->spans[0].from_node == (UI_TEXT_SET_SPAN_ALL & ~UI_TEXT_SET_WEIGHT) && src->spans[0].style.weight == 700);
+    // A set field is checked; one left to the node isn't.
+    d.set = UI_TEXT_SET_SIZE;
+    CHECK(ui_cmd_set_text(w, node, &d) == UI_ERR_INVALID_ARGUMENT);
+    span.set = UI_TEXT_SET_SIZE;
+    d.set = 0;
+    CHECK(ui_cmd_set_text(w, node, &d) == UI_ERR_INVALID_ARGUMENT);
+    d.set = 0x200; // not a field
+    span.set = 0;
+    CHECK(ui_cmd_set_text(w, node, &d) == UI_ERR_INVALID_ARGUMENT);
+    ui_cmd_writer_destroy(w);
+    ui_scene_destroy(&s);
+}
+
 int main(void) {
     RUN(test_basic);
     RUN(test_long_text);
     RUN(test_invalid_utf8);
     RUN(test_validation);
+    RUN(test_from_node);
     return test_failures != 0;
 }

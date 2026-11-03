@@ -103,7 +103,30 @@ typedef struct ui_text_source {
     uint32_t ellipsis_len;
     ui_align align;
     float line_height;
+    uint16_t from_node;     // as in ui_paragraph_desc
+    struct ui_text_source *shared; // a derived source's base: owns the text it reads
 } ui_text_source;
+
+// What shaping takes from a node besides its set_text (docs/styles.md, "Inheritance"): the
+// computed family, size, weight, slant and language, and the paragraph's direction.
+// Strings are only read during the call.
+typedef struct ui_text_resolved {
+    const char *family;   // NULL: the default family
+    uint32_t family_len;
+    const char *language; // NULL: none
+    uint32_t language_len;
+    float size;
+    uint16_t weight;
+    uint8_t slant;
+    ui_bidi_dir dir;
+} ui_text_resolved;
+
+// True if shaping `s` gives what shaping it with `r` would: its base style already has r's
+// values and no span takes a shaping value from the node.
+bool ui_text_source_shapes_as(const ui_text_source *s, const ui_text_resolved *r);
+// A source that shapes `base` with `r`: r's values in the base style and in every span field
+// that comes from the node. It shares base's text (holding a reference to base).
+ui_result ui_text_source_derive(ui_text_source *base, const ui_text_resolved *r, ui_text_source **out);
 
 // Copies the description into a new source with one reference.
 ui_result ui_text_source_create(const ui_paragraph_desc *desc, ui_text_source **out);
@@ -170,6 +193,8 @@ struct ui_paragraph_desc {
     const uint8_t *ellipsis;
     uint32_t ellipsis_len;
     ui_align align;
+    uint16_t from_node;    // UI_TEXT_SET_* bits of the base style, line height, alignment and
+                           // direction that come from the node (docs/command-buffer.md)
     // 0: each line is as tall as its fonts need. Otherwise every line is line_height ×
     // base size, with the baseline placed by the base font's metrics, so fallback fonts with
     // tall metrics no longer change the spacing.

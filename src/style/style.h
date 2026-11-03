@@ -27,6 +27,16 @@ static inline const ui_istr *ui_istr_of(const char *bytes) {
     return (const ui_istr *)(const void *)(bytes - __builtin_offsetof(ui_istr, bytes));
 }
 
+static inline uint32_t ui_istr_len(const char *bytes) { return bytes ? ui_istr_of(bytes)->len : 0; }
+
+// Equal contents, for strings interned in different tables (NULL equals only NULL).
+static inline bool ui_istr_eq(const char *a, const char *b) {
+    if (a == b) return true;
+    if (!a || !b) return false;
+    uint32_t n = ui_istr_len(a);
+    return n == ui_istr_len(b) && !__builtin_memcmp(a, b, n);
+}
+
 typedef struct ui_style_block {
     uint8_t states; // ui_state bits that must all be set; 0: base
     uint32_t first, count;
@@ -169,6 +179,20 @@ bool ui_style_walk_define(const uint8_t *payload, uint32_t size);
 // or a cycle (the declaration then counts as absent).
 bool ui_styles_token_value(const ui_styles *s, const ui_value *v, ui_value *out);
 
+// What resolution reads definitions and tokens from: the styles, or the styles as a command
+// buffer not yet applied would leave them (core/preview.h). `over` has the buffer's
+// definitions and tokens; the ids in `gone_*` were destroyed or unset by it.
+typedef struct ui_style_view {
+    const ui_styles *styles;
+    const ui_styles *over; // NULL: the styles alone
+    const uint32_t *gone_defs, *gone_tokens;
+    uint32_t gone_def_count, gone_token_count;
+} ui_style_view;
+
+static inline ui_style_view ui_style_view_of(const ui_styles *s) { return (ui_style_view){.styles = s}; }
+const ui_style_def *ui_style_view_find(const ui_style_view *v, uint32_t id);
+bool ui_style_view_token_value(const ui_style_view *v, const ui_value *value, ui_value *out);
+
 // Every property's initial value.
 void ui_computed_init(ui_computed *c);
 // CSS's initial values: auto sizes, basis, minimums and insets; no maximums; flex 0 1 auto;
@@ -183,15 +207,16 @@ void ui_layout_style_init(ui_layout_style *l);
 //  2. Computing: starting values (ui_computed_start: initial values, and the parent's for
 //     inherited properties; the caller then puts set_text's in), then every entry of the
 //     cascade in order. Tokens are read then, so a token change only computes again.
-bool ui_style_cascade(const ui_styles *s, const uint32_t *ids, uint32_t count, uint8_t state,
+bool ui_style_cascade(const ui_style_view *v, const uint32_t *ids, uint32_t count, uint8_t state,
                       const ui_style_entry *overrides, uint32_t override_count,
                       const ui_style_entry ***list, uint32_t *len, uint32_t *cap);
 void ui_computed_start(ui_computed *out, const ui_computed *parent);
 // Returns UI_STYLE_INHERITS_OTHER when a non-inherited property took `inherit`: the node
-// then follows every change of its parent, not only of the inherited values.
+// then follows every change of its parent, not only of the inherited values. *text_set
+// (if not NULL) receives the UI_TEXT_SET_* bits of the text values an entry decided.
 enum { UI_STYLE_INHERITS_OTHER = 1 };
-uint32_t ui_style_compute(const ui_styles *s, const ui_style_entry *const *list, uint32_t count,
-                          const ui_computed *parent, ui_computed *out);
+uint32_t ui_style_compute(const ui_style_view *v, const ui_style_entry *const *list, uint32_t count,
+                          const ui_computed *parent, ui_computed *out, uint32_t *text_set);
 
 // The set of tokens that changed since the last call, closed over tokens referring to them
 // (a token whose chain reaches a changed token changed too), and the styles whose entries

@@ -43,7 +43,7 @@ static bool send(client *c) {
 
 static bool set_text(client *c, float size) {
     static const char *const families[] = {"Noto Sans"};
-    ui_text_desc d = {
+    ui_text_desc d = {.set = UI_TEXT_SET_ALL,
         .text = TEXT, .length = sizeof TEXT - 1,
         .style = {.family = 0, .weight = 400, .size = size, .color = {0, 0, 0, 1}},
         .families = families, .family_count = 1,

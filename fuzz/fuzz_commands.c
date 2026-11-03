@@ -7,6 +7,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "core/preview.h"
 #include "core/scene.h"
 #include "wire/wire.h"
 
@@ -62,8 +63,20 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
     // Applying twice runs the ops again against the state the first pass left (nodes that
     // now exist, slots whose generation moved on).
     for (int pass = 0; pass < 2; pass++) {
+        // What preparation predicts the buffer makes of every node's text values must be
+        // what applying it does (core/preview.h): a wrong prediction shapes on the core.
+        bool valid = ui_scene_validate(buf, UI_WIRE_HEADER_SIZE + body) == UI_OK;
+        ui_preview *pv = valid ? ui_preview_create(&s, &(ui_preview_buffer){buf, UI_WIRE_HEADER_SIZE + body}, 1) : NULL;
         ui_scene_apply(&s, buf, UI_WIRE_HEADER_SIZE + body, (uint64_t)pass * 16000000u);
         ui_scene_resolve(&s, (uint64_t)pass * 16000000u);
+        for (uint32_t slot = 0; pv && slot < s.handles.used; slot++) {
+            if (!s.handles.alive[slot]) continue;
+            ui_text_ctx want = ui_scene_text_ctx(&s, slot), got;
+            if (!ui_preview_ctx(pv, ui_scene_handle_of(&s, slot), &got, NULL) ||
+                !ui_text_values_eq(&want.values, &got.values) || want.declared != got.declared)
+                __builtin_trap();
+        }
+        ui_preview_destroy(pv);
         ui_scene_animate(&s, (uint64_t)(pass + 1) * 16000000u);
         for (int i = 0; i < 2; i++) {
             ui_display_list dl = {.surface = surfaces[i], .width = 400, .height = 300,

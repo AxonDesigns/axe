@@ -169,6 +169,7 @@ typedef struct ui_app_stats {
     uint64_t texts_prepared;            // set_text ops decoded and shaped on workers
     uint64_t glyphs_prepared;           // glyph bitmaps rasterized on workers
     uint64_t text_shaped_on_core;       // paragraphs the core had to shape itself
+    uint64_t text_reshaped;             // paragraphs shaped again on workers (fonts, values)
     uint64_t glyphs_rasterized_on_core; // glyphs the core had to rasterize itself
     uint64_t buffers_deferred;          // buffers that missed a frame waiting for preparation
     uint64_t max_head_wait_ns;          // longest such wait at the head of the queue

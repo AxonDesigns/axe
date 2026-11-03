@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "core/preview.h"
 #include "render/render.h"
 #include "wire/wire.h"
 
@@ -130,7 +131,7 @@ static ui_result init_text(ui_core *c, const ui_text_config *cfg) {
     ui_atlas_set_glyph_cache(c->atlas, c->glyphs);
     ui_preparer_desc pd = {
         .log = c->log, .hooks = c->hooks, .jobs = c->jobs, .fonts = c->fonts,
-        .glyphs = c->glyphs, .wake = core_wake, .wake_user = c,
+        .glyphs = c->glyphs, .wake = core_wake, .wake_user = c, .strings = &c->scene.styles,
     };
     r = ui_preparer_create(&pd, &c->preparer);
     if (r != UI_OK) return r;
@@ -439,27 +440,97 @@ static uint32_t surface_scales(const ui_core *c, float *out) {
     return n;
 }
 
-// The head step of a buffer with fonts: every existing paragraph is shaped again.
-static void head_step(ui_core *c, ui_prep_buffer *head) {
+// The paragraph shows a source that comes from the node's set_text.
+static bool shows_base(const ui_node *n) {
+    const ui_text_source *src = n->text->source;
+    return src == n->text_base || (src && src->shared == n->text_base);
+}
+
+// The head step (core/prepare.h) of pending[at]: with every earlier buffer applied, its
+// fonts are registered, its text is prepared again where the values it was guessed with
+// were wrong, and existing paragraphs whose values it changes (all of them after a font
+// load) are shaped again, all before it applies. Returns true if that submitted work (the
+// buffer then waits for it).
+static bool head_step(ui_core *c, uint32_t at) {
     sync_scales(c);
     ui_scene *s = &c->scene;
-    ui_prep_paragraph *paras = malloc((s->handles.live ? s->handles.live : 1) * sizeof *paras);
+    ui_prep_buffer *head = c->pending[at].prep;
     ui_prep_buffer **preps = malloc(c->pending_count * sizeof *preps);
-    uint32_t para_count = 0, prep_count = 0;
-    for (uint32_t slot = 0; paras && slot < s->handles.used; slot++) {
-        const ui_node *n = &s->nodes[slot];
-        if (!s->handles.alive[slot] || !n->text || !n->text->source) continue;
-        paras[para_count++] = (ui_prep_paragraph){ui_scene_handle_of(s, slot), n->text->source,
-                                                  s->roots[n->root].scale};
-    }
-    for (uint32_t i = 0; preps && i < c->pending_count; i++) {
+    uint32_t prep_count = 0;
+    for (uint32_t i = at; preps && i < c->pending_count; i++) {
         if (c->pending[i].prep) preps[prep_count++] = c->pending[i].prep;
     }
-    // Without memory for the lists, fonts are still registered; text left out is shaped
-    // on the core when laid out.
-    ui_prep_head_step(head, preps, prep_count, paras, para_count);
-    free(paras);
+    // Without memory for the list, fonts are still registered; text left out is shaped on
+    // the core when laid out.
+    bool fonts = ui_prep_register_fonts(head, preps, prep_count), submitted = fonts;
     free(preps);
+    ui_preview *pv = ui_preview_create(s, &(ui_preview_buffer){head->data, head->size}, 1);
+    for (uint32_t i = 0; pv && i < head->scene.text_count; i++) {
+        ui_scene_text_prep *tp = &head->scene.texts[i];
+        ui_text_ctx ctx;
+        if (!tp->op.source || !tp->scale_count || !ui_preview_ctx(pv, tp->op.node, &ctx, NULL)) continue;
+        ui_text_resolved key = ui_text_ctx_key(&ctx, tp->op.source);
+        if (!tp->shaped_source || !ui_text_source_shapes_as(tp->shaped_source, &key)) {
+            ui_prep_restyle_item(head, i, &ctx);
+            submitted = true;
+        }
+    }
+    if (fonts || !pv || ui_preview_global(pv)) {
+        ui_prep_paragraph *paras = malloc((s->handles.live ? s->handles.live : 1) * sizeof *paras);
+        bool *derived = malloc((s->handles.live ? s->handles.live : 1) * sizeof *derived);
+        uint32_t count = 0;
+        for (uint32_t slot = 0; paras && derived && slot < s->handles.used; slot++) {
+            ui_node *n = &s->nodes[slot];
+            if (!s->handles.alive[slot] || !n->text || !n->text_base || !n->text->source) continue;
+            ui_handle h = ui_scene_handle_of(s, slot);
+            ui_text_source *target = n->text->source;
+            bool made = false;
+            if (pv) {
+                ui_text_ctx ctx;
+                if (ui_preview_sets_text(pv, slot) || !ui_preview_ctx(pv, h, &ctx, NULL)) continue;
+                ui_text_resolved key = ui_text_ctx_key(&ctx, n->text_base);
+                if (!shows_base(n) || !ui_text_source_shapes_as(n->text->source, &key)) {
+                    if (ui_text_source_shapes_as(n->text_base, &key)) target = n->text_base;
+                    else if (ui_text_source_derive(n->text_base, &key, &target) == UI_OK) made = true;
+                    else continue; // out of memory: shaped on the core
+                } else if (!fonts) {
+                    continue; // unchanged
+                }
+            } else if (!fonts) {
+                break; // out of memory for the preview: changed values are shaped on the core
+            }
+            derived[count] = made;
+            paras[count++] = (ui_prep_paragraph){h, n->text_base, target, s->roots[n->root].scale};
+        }
+        if (paras && derived) ui_prep_reshape_paragraphs(head, paras, count); // references them
+        submitted |= count > 0;
+        for (uint32_t i = 0; derived && i < count; i++) {
+            if (derived[i]) ui_text_source_release(paras[i].source);
+        }
+        free(paras);
+        free(derived);
+    }
+    ui_preview_destroy(pv);
+    ui_prep_head_done(head);
+    return submitted;
+}
+
+// What the scene will make of the text of received buffer pending[at]: each set_text is
+// prepared with the values its node will have once every buffer up to it has applied (the
+// head step checks them).
+static void guess_text(ui_core *c, uint32_t at) {
+    ui_prep_buffer *b = c->pending[at].prep;
+    if (!b->scene.text_count) return;
+    ui_preview_buffer local[8], *bufs = at < 8 ? local : malloc((at + 1) * sizeof *bufs);
+    if (!bufs) return; // shaped with set_text's own values; the head step corrects them
+    for (uint32_t i = 0; i <= at; i++) bufs[i] = (ui_preview_buffer){c->pending[i].data, c->pending[i].size};
+    ui_preview *pv = ui_preview_create(&c->scene, bufs, at + 1);
+    if (bufs != local) free(bufs);
+    for (uint32_t i = 0; pv && i < b->scene.text_count; i++) {
+        ui_text_ctx ctx;
+        if (ui_preview_ctx(pv, ui_wire_get_handle(b->items[i].op.payload), &ctx, NULL)) ui_prep_guess(b, i, &ctx);
+    }
+    ui_preview_destroy(pv);
 }
 
 // Starts received buffers once font discovery is ready, and runs the head step of a head
@@ -471,24 +542,25 @@ static void advance_prep(ui_core *c) {
     uint32_t n = surface_scales(c, scales);
     for (uint32_t i = 0; i < c->pending_count; i++) {
         ui_prep_buffer *b = c->pending[i].prep;
-        if (b && !b->started) ui_prep_start(b, scales, n);
+        if (b && !b->started) {
+            guess_text(c, i);
+            ui_prep_start(b, scales, n);
+        }
     }
     ui_prep_buffer *head = c->pending[0].prep;
-    if (head && ui_prep_idle(head) && ui_prep_needs_head_step(head)) head_step(c, head);
+    if (head && ui_prep_idle(head) && ui_prep_needs_head_step(head)) head_step(c, 0);
 }
 
-// A buffer whose fonts changed the registered faces was applied: its reshaped paragraphs
-// replace the old shaping, all in this frame.
-static void fonts_applied(ui_core *c, ui_prep_buffer *b) {
-    c->text.generation = b->generation;
+
+// A prepared buffer was applied: its reshaped paragraphs are offered to their nodes, which
+// adopt them as they resolve in this frame (the fonts it registered apply from now on).
+static void prep_applied(ui_core *c, ui_prep_buffer *b) {
+    if (b->fonts_changed) c->text.generation = b->generation;
     for (uint32_t i = 0; i < b->reshape_count; i++) {
         ui_prep_reshape *r = &b->reshapes[i];
-        ui_node *n = r->ok ? ui_scene_node(&c->scene, r->node) : NULL;
-        if (n && n->text && n->text->source == r->source &&
-            c->scene.roots[n->root].scale == r->scale)
-            ui_paragraph_adopt_shaped(n->text, &r->shaped);
+        if (r->ok) ui_scene_offer_shaped(&c->scene, r->node, r->base, r->source, r->scale, &r->shaped);
     }
-    ui_scene_fonts_changed(&c->scene);
+    if (b->fonts_changed) ui_scene_fonts_changed(&c->scene);
 }
 
 // Applies every buffer from the head on that is ready, in order; the first that isn't, and
@@ -496,8 +568,15 @@ static void fonts_applied(ui_core *c, ui_prep_buffer *b) {
 static void apply_ready(ui_core *c, uint64_t now) {
     sync_scales(c);
     uint32_t done = 0;
-    for (; done < c->pending_count && pending_ready(&c->pending[done]); done++) {
+    for (; done < c->pending_count; done++) {
         struct ui_pending_cmds *p = &c->pending[done];
+        // A buffer that reaches the head here gets its head step now. If that gave the
+        // workers something to do, applying stops: whether it is done by now depends on the
+        // scheduler, and which frame applies it must not (single and threaded draw the same
+        // frames). What it found to do is the same under both, since its text was prepared
+        // for the scene as it is now (guess_text).
+        if (p->prep && ui_prep_idle(p->prep) && ui_prep_needs_head_step(p->prep) && head_step(c, done)) break;
+        if (!pending_ready(p)) break;
         if (p->deferred) {
             uint64_t waited = ui_monotonic_ns() - c->head_wait_since;
             c->stats.buffers_deferred++;
@@ -513,7 +592,7 @@ static void apply_ready(ui_core *c, uint64_t now) {
             UI_ERROR(c->log, MODULE, "rejected a malformed command buffer");
         c->applying = NULL;
         c->stats.commands_applied += c->scene.stats.applied - before;
-        if (p->prep && p->prep->fonts_changed) fonts_applied(c, p->prep);
+        if (p->prep) prep_applied(c, p->prep);
         if (p->prep) {
             // Its glyphs stay in the glyph cache until every surface has drawn once.
             c->unreleased_seq = p->prep->seq;
@@ -751,6 +830,7 @@ static void frame(ui_core *c) {
     ui_preparer_get_stats(c->preparer, &ps);
     c->stats.texts_prepared = ps.texts;
     c->stats.glyphs_prepared = ps.glyphs;
+    c->stats.text_reshaped = ps.reshapes;
     UI_HOOK_PHASE_END(c->hooks, UI_PHASE_COMMIT, main, frame_id);
     if (drew) ui_signal_notify(&c->render->signal);
 }

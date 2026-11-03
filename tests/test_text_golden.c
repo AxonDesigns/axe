@@ -27,10 +27,10 @@ typedef struct golden_case {
 // "Regular italic bold black, bold italic": italic is synthesized (Noto Sans has no italic
 // axis), weights come from the wght axis.
 static const ui_text_span_desc style_spans[] = {
-    {8, 14, {.family = 0, .weight = 400, .slant = UI_TEXT_ITALIC, .size = 18, .color = INK}},
-    {15, 19, {.family = 0, .weight = 700, .size = 18, .color = INK}},
-    {20, 25, {.family = 0, .weight = 900, .size = 18, .color = INK}},
-    {27, 38, {.family = 0, .weight = 700, .slant = UI_TEXT_ITALIC, .size = 18, .color = INK}},
+    {8, 14, {.family = 0, .weight = 400, .slant = UI_TEXT_ITALIC, .size = 18, .color = INK}, UI_TEXT_SET_SPAN_ALL},
+    {15, 19, {.family = 0, .weight = 700, .size = 18, .color = INK}, UI_TEXT_SET_SPAN_ALL},
+    {20, 25, {.family = 0, .weight = 900, .size = 18, .color = INK}, UI_TEXT_SET_SPAN_ALL},
+    {27, 38, {.family = 0, .weight = 700, .slant = UI_TEXT_ITALIC, .size = 18, .color = INK}, UI_TEXT_SET_SPAN_ALL},
 };
 
 static const golden_case cases[] = {
@@ -104,7 +104,7 @@ static ui_result on_events(void *user, const void *events, size_t size, ui_cmd_w
         ui_handle node;
         if ((r = ui_handle_alloc(l->alloc, &node)) != UI_OK) return r;
         static const char *const families[] = {"Noto Sans"};
-        ui_text_desc text = {
+        ui_text_desc text = {.set = UI_TEXT_SET_ALL,
             .text = l->c->text,
             .length = (uint32_t)strlen(l->c->text),
             .style = {.family = 0, .weight = 400, .size = 18, .color = {0.08f, 0.08f, 0.1f, 1}},

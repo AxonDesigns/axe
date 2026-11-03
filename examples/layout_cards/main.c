@@ -131,7 +131,7 @@ static ui_result define_styles(ui_cmd_writer *w) {
 }
 
 static ui_result text(ui_cmd_writer *w, ui_handle node, const char *s, float size, uint16_t weight) {
-    ui_text_desc t = {.text = s, .length = (uint32_t)strlen(s),
+    ui_text_desc t = {.set = UI_TEXT_SET_ALL, .text = s, .length = (uint32_t)strlen(s),
                       .style = {.family = 0, .weight = weight, .size = size, .color = {0, 0, 0, 1}},
                       .families = families, .family_count = 1};
     return ui_cmd_set_text(w, node, &t);

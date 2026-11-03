@@ -22,6 +22,7 @@ struct ui_preparer {
     ui_glyph_cache *glyphs;
     void (*wake)(void *user);
     void *wake_user;
+    ui_styles *strings;
     // Orders a text item's "done at generation g" against registrations, which bump the
     // generation and re-prepare items found done at an older one (ui_prep_head_step).
     mtx_t lock;
@@ -31,6 +32,7 @@ struct ui_preparer {
     ui_job_group discovery;
     bool discovery_started;
     _Atomic uint64_t texts, shapes, glyphs_done;
+    uint64_t reshapes; // core only
 };
 
 // A glyph to rasterize at every subpixel bin.
@@ -57,6 +59,7 @@ ui_result ui_preparer_create(const ui_preparer_desc *d, ui_preparer **out) {
     p->glyphs = d->glyphs;
     p->wake = d->wake;
     p->wake_user = d->wake_user;
+    p->strings = d->strings;
     p->worker_count = ui_jobs_threads(d->jobs) + 1;
     p->workers = calloc(p->worker_count, sizeof *p->workers);
     if (!p->workers || mtx_init(&p->lock, mtx_plain) != thrd_success) {
@@ -111,6 +114,7 @@ void ui_preparer_get_stats(ui_preparer *p, ui_preparer_stats *out) {
     out->texts = atomic_load_explicit(&p->texts, memory_order_relaxed);
     out->shapes = atomic_load_explicit(&p->shapes, memory_order_relaxed);
     out->glyphs = atomic_load_explicit(&p->glyphs_done, memory_order_relaxed);
+    out->reshapes = p->reshapes;
 }
 
 // ---- Glyphs ------------------------------------------------------------------------------
@@ -190,21 +194,36 @@ static void shape_item(ui_prep_item *it, prep_worker *w) {
     ui_prep_buffer *b = it->buf;
     ui_preparer *p = b->owner;
     ui_scene_text_prep *tp = &b->scene.texts[it->index];
-    ui_text_input in = ui_text_source_input(tp->op.source);
+    // What the node's values make of its set_text (core/scene.h, ui_text_ctx_key).
+    ui_text_source *source = tp->op.source;
+    bool ok = w != NULL;
+    if (it->has_ctx) {
+        ui_text_resolved key = ui_text_ctx_key(&it->ctx, source);
+        ui_text_source *derived;
+        if (!ui_text_source_shapes_as(source, &key)) {
+            if (ok && ui_text_source_derive(tp->op.source, &key, &derived) == UI_OK) source = derived;
+            else ok = false;
+        }
+    }
+    if (source == tp->op.source) ui_text_source_retain(source); // a derived one comes with one
+    ui_text_source_release(tp->shaped_source); // a previous preparation's
+    tp->shaped_source = source;
+    ui_text_input in = ui_text_source_input(source);
     for (;;) {
-        bool ok = w != NULL;
         for (uint32_t i = 0; ok && i < tp->scale_count; i++) {
             ok = ui_shape_paragraph(&w->shaper, p->fonts, &in, tp->scales[i], &tp->shaped[i]) == UI_OK;
             if (ok) atomic_fetch_add_explicit(&p->shapes, 1u, memory_order_relaxed);
         }
         mtx_lock(&p->lock);
-        uint64_t gen = tp->scale_count ? tp->shaped[0].generation : 0;
+        uint64_t gen = ok && tp->scale_count ? tp->shaped[0].generation : 0;
         bool current = !ok || !tp->scale_count || gen == ui_font_registry_generation(p->fonts);
         if (current) {
             // A failure leaves nothing to adopt: the core shapes the text when it lays it out.
             if (!ok) {
                 for (uint32_t i = 0; i < tp->scale_count; i++) ui_shaped_paragraph_free(&tp->shaped[i]);
                 tp->scale_count = 0;
+                ui_text_source_release(tp->shaped_source);
+                tp->shaped_source = NULL;
             }
             it->generation = gen;
             it->done = true;
@@ -268,6 +287,7 @@ ui_prep_buffer *ui_prep_create(ui_preparer *p, const uint8_t *data, size_t size)
     ui_wire_reader r;
     if (ui_wire_reader_init(&r, UI_WIRE_MAGIC_CMD, data, size) != UI_OK) return NULL;
     uint32_t texts = 0, fonts = 0;
+    bool styled = false; // ops that may change text values (the head step checks precisely)
     ui_wire_op op;
     while (ui_wire_reader_next(&r, &op) == UI_OK) {
         const char *path;
@@ -275,11 +295,16 @@ ui_prep_buffer *ui_prep_create(ui_preparer *p, const uint8_t *data, size_t size)
         if (op.opcode == UI_OP_SET_TEXT) texts++;
         if (op.opcode == UI_OP_LOAD_FONT && ui_scene_font_path_valid(op.payload, &path, &len))
             fonts++;
+        styled |= op.opcode == UI_OP_DEFINE_STYLE || op.opcode == UI_OP_DESTROY_STYLE ||
+                  op.opcode == UI_OP_SET_TOKEN || op.opcode == UI_OP_SET_STYLES ||
+                  op.opcode == UI_OP_SET_PROPS || op.opcode == UI_OP_SET_STATE ||
+                  op.opcode == UI_OP_MOVE_NODE;
     }
-    if (!texts && !fonts) return NULL;
+    if (!texts && !fonts && !styled) return NULL;
     ui_prep_buffer *b = calloc(1, sizeof *b);
     if (!b) return NULL;
     b->owner = p;
+    b->styled = styled || texts;
     b->seq = ++p->next_seq;
     b->data = data;
     b->size = size;
@@ -334,10 +359,30 @@ void ui_prep_start(ui_prep_buffer *b, const float *scales, uint32_t scale_count)
     ui_job_group_seal(&b->group);
 }
 
-void ui_prep_head_step(ui_prep_buffer *b, ui_prep_buffer *const *pending, uint32_t pending_count,
-                       const ui_prep_paragraph *paras, uint32_t para_count) {
+void ui_prep_guess(ui_prep_buffer *b, uint32_t index, const ui_text_ctx *ctx) {
+    ui_prep_item *it = &b->items[index];
+    ui_styles *strings = b->owner->strings;
+    if (it->has_ctx) {
+        ui_styles_release(strings, it->ctx.values.family);
+        ui_styles_release(strings, it->ctx.values.language);
+    }
+    it->ctx = *ctx;
+    it->has_ctx = true;
+    // Kept in the scene's table (a preview's strings go with the preview).
+    const char *f = ctx->values.family, *l = ctx->values.language;
+    it->ctx.values.family = f ? ui_styles_intern(strings, f, ui_istr_len(f)) : NULL;
+    it->ctx.values.language = l ? ui_styles_intern(strings, l, ui_istr_len(l)) : NULL;
+    if ((f && !it->ctx.values.family) || (l && !it->ctx.values.language)) {
+        ui_styles_release(strings, it->ctx.values.family);
+        ui_styles_release(strings, it->ctx.values.language);
+        it->has_ctx = false; // out of memory: shaped with set_text's values, then on the core
+    }
+}
+
+bool ui_prep_register_fonts(ui_prep_buffer *b, ui_prep_buffer *const *pending, uint32_t pending_count) {
     ui_preparer *p = b->owner;
     b->registered = true;
+    if (!b->font_count) return false;
     // Registering and finding text shaped before it happen under the lock that text jobs
     // take to declare themselves done, so every item is either found here or sees the new
     // generation itself (shape_item).
@@ -364,8 +409,7 @@ void ui_prep_head_step(ui_prep_buffer *b, ui_prep_buffer *const *pending, uint32
         }
     }
     mtx_unlock(&p->lock);
-    if (!b->fonts_changed) return;
-    for (uint32_t k = 0; k < pending_count; k++) {
+    for (uint32_t k = 0; b->fonts_changed && k < pending_count; k++) {
         ui_prep_buffer *pb = pending[k];
         bool open = false;
         for (uint32_t i = 0; pb->started && i < pb->scene.text_count; i++) {
@@ -383,20 +427,49 @@ void ui_prep_head_step(ui_prep_buffer *b, ui_prep_buffer *const *pending, uint32
         }
         if (open) ui_job_group_seal(&pb->group);
     }
-    // Every existing paragraph, shaped again with the new faces.
-    b->reshapes = calloc(para_count ? para_count : 1, sizeof *b->reshapes);
-    if (!b->reshapes) return; // the core shapes them when laid out
+    return b->fonts_changed;
+}
+
+void ui_prep_restyle_item(ui_prep_buffer *b, uint32_t index, const ui_text_ctx *ctx) {
+    ui_prep_item *it = &b->items[index];
+    b->owner->reshapes++;
+    ui_prep_guess(b, index, ctx);
+    mtx_lock(&b->owner->lock);
+    it->done = false;
+    mtx_unlock(&b->owner->lock);
     ui_job_group_reopen(&b->group);
-    for (uint32_t i = 0; i < para_count; i++) {
-        ui_prep_reshape *r = &b->reshapes[b->reshape_count++];
-        *r = (ui_prep_reshape){.buf = b, .node = paras[i].node, .scale = paras[i].scale,
-                               .source = ui_text_source_retain(paras[i].source)};
-        if (ui_jobs_submit(p->jobs, &b->group, reshape_job, r) != UI_OK) r->ok = false;
+    if (ui_jobs_submit(b->owner->jobs, &b->group, text_job, it) != UI_OK) {
+        // Out of memory: what it was shaped with is dropped; the core shapes it when laid out.
+        ui_scene_text_prep *tp = &b->scene.texts[index];
+        for (uint32_t s = 0; s < tp->scale_count; s++) ui_shaped_paragraph_free(&tp->shaped[s]);
+        tp->scale_count = 0;
+        it->done = true;
     }
     ui_job_group_seal(&b->group);
 }
 
-bool ui_prep_needs_head_step(const ui_prep_buffer *b) { return b->font_count && !b->registered; }
+void ui_prep_reshape_paragraphs(ui_prep_buffer *b, const ui_prep_paragraph *paras, uint32_t count) {
+    if (!count) return;
+    ui_prep_reshape *more = realloc(b->reshapes, (b->reshape_count + count) * sizeof *more);
+    if (!more) return; // the core shapes them when laid out
+    b->reshapes = more;
+    b->owner->reshapes += count;
+    ui_job_group_reopen(&b->group);
+    for (uint32_t i = 0; i < count; i++) {
+        ui_prep_reshape *r = &b->reshapes[b->reshape_count++];
+        *r = (ui_prep_reshape){.buf = b, .node = paras[i].node, .scale = paras[i].scale,
+                               .base = ui_text_source_retain(paras[i].base),
+                               .source = ui_text_source_retain(paras[i].source)};
+        if (ui_jobs_submit(b->owner->jobs, &b->group, reshape_job, r) != UI_OK) r->ok = false;
+    }
+    ui_job_group_seal(&b->group);
+}
+
+void ui_prep_head_done(ui_prep_buffer *b) { b->head_done = true; }
+
+bool ui_prep_needs_head_step(const ui_prep_buffer *b) {
+    return (b->font_count || b->styled) && !b->head_done;
+}
 
 bool ui_prep_idle(const ui_prep_buffer *b) { return b->started && ui_job_group_idle(&b->group); }
 
@@ -414,13 +487,19 @@ void ui_prep_free(ui_prep_buffer *b) {
     for (uint32_t i = 0; i < b->scene.text_count; i++) {
         ui_scene_text_prep *tp = &b->scene.texts[i];
         ui_text_op_free(&tp->op);
+        ui_text_source_release(tp->shaped_source);
         for (uint32_t s = 0; s < UI_MAX_SURFACES; s++) ui_shaped_paragraph_free(&tp->shaped[s]);
+        if (b->items[i].has_ctx) {
+            ui_styles_release(b->owner->strings, b->items[i].ctx.values.family);
+            ui_styles_release(b->owner->strings, b->items[i].ctx.values.language);
+        }
     }
     for (uint32_t i = 0; i < b->font_count; i++) {
         if (b->fonts[i].face) ui_face_destroy(b->fonts[i].face);
         free(b->fonts[i].path);
     }
     for (uint32_t i = 0; i < b->reshape_count; i++) {
+        ui_text_source_release(b->reshapes[i].base);
         ui_text_source_release(b->reshapes[i].source);
         ui_shaped_paragraph_free(&b->reshapes[i].shaped);
     }
