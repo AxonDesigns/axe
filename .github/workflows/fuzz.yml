@@ -71,7 +71,7 @@ jobs:
         run: |
           [[ "$MINUTES" =~ ^[0-9]+$ ]] || { echo "minutes must be a whole number"; exit 1; }
           mkdir -p corpus crashes
-          echo "corpus: $(ls corpus | wc -l) cached inputs"
+          echo "corpus: $(find corpus -type f | wc -l) cached inputs"
           "build/fuzz/fuzz/fuzz_$TARGET" -max_total_time=$((MINUTES * 60)) -max_len=8192 \
             -timeout=30 -rss_limit_mb=4096 -print_final_stats=1 -artifact_prefix=crashes/ \
             corpus "fuzz/corpus/$TARGET"
@@ -84,7 +84,7 @@ jobs:
           if "build/fuzz/fuzz/fuzz_$TARGET" -merge=1 -max_len=8192 -timeout=30 merged corpus; then
             rm -rf corpus && mv merged corpus
           fi
-          echo "corpus: $(ls corpus | wc -l) inputs"
+          echo "corpus: $(find corpus -type f | wc -l) inputs"
 
       - name: Save corpus
         if: always() && (steps.fuzz.outcome == 'success' || steps.fuzz.outcome == 'failure')
