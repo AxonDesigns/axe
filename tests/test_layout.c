@@ -408,6 +408,35 @@ static void test_rtl(void) {
     teardown(&f);
 }
 
+// Borders per side lay out per side, snapped to whole device pixels as browsers do; logical
+// sides follow the direction; a scale change lays them out again.
+static void test_borders(void) {
+    fixture f;
+    setup(&f, 300, 200);
+    ui_cmd_create_node(f.w, node(1), f.surfaces[0]);
+    props(&f, 1, (ui_style_decl[]){{UI_STYLE_ALIGN_ITEMS, ui_keyword(UI_FLEX_START)},
+                                   {UI_STYLE_BORDER_LEFT_WIDTH, ui_px(10)}, {UI_STYLE_BORDER_TOP_WIDTH, ui_px(3)},
+                                   {UI_STYLE_BORDER_END_WIDTH, ui_px(1)}, {UI_STYLE_HEIGHT, ui_px(100)}},
+          5);
+    ui_cmd_create_node(f.w, node(2), node(1));
+    props(&f, 2, (ui_style_decl[]){{UI_STYLE_WIDTH, ui_px(20)}, {UI_STYLE_HEIGHT, ui_px(20)}}, 2);
+    frame(&f);
+    CHECK(rect_is(&f, 1, 0, 0, 300, 100) && rect_is(&f, 2, 10, 3, 20, 20)); // left 10, end (right) 1
+    CHECK(f.s.nodes[1].computed.border_width[1] == 1);
+    // Right to left: the end side is the left one, and the later declaration wins it (1 px);
+    // the right side has none. The first item sits at the right edge.
+    props(&f, 1, &(ui_style_decl){UI_STYLE_DIRECTION, ui_keyword(UI_DIRECTION_RTL)}, 1);
+    frame(&f);
+    CHECK(f.s.nodes[1].computed.border_width[3] == 1 && f.s.nodes[1].computed.border_width[1] == 0);
+    CHECK(rect_is(&f, 2, 280, 3, 20, 20));
+    // At 1.25x a 3 px border is 3.75 device px, snapped to 3: 2.4 logical px.
+    for (int i = 0; i < 2; i++) ui_scene_layout(&f.s, f.surfaces[i], f.width, f.height, 1.25f, &text, f.now);
+    CHECK(rect_is(&f, 2, 280, 2.4f, 20, 20));
+    CHECK_NEAR(ui_layout_snap_border(0.2f, 1.25f), 0.8, 1e-6); // nonzero: at least a device pixel
+    CHECK(ui_layout_snap_border(0, 2) == 0);
+    teardown(&f);
+}
+
 int main(void) {
     ui_font_registry_create(&(ui_font_registry_desc){.log = &quiet}, &fonts);
     ui_font_registry_add_file(fonts, FONT("NotoSans-Regular-Static.ttf"), 0, NULL);
@@ -422,6 +451,7 @@ int main(void) {
     RUN(test_styles);
     RUN(test_styled_text);
     RUN(test_rtl);
+    RUN(test_borders);
     ui_text_context_free(&text);
     ui_font_registry_destroy(fonts);
     return test_failures != 0;

@@ -131,9 +131,9 @@ typedef struct ui_layout_style {
 // What a node's styles, state and overrides resolve to.
 typedef struct ui_computed {
     float background[4];   // linear light, straight alpha
-    float border_color[4];
-    float border_width;    // logical px
-    float corner_radius;   // logical px
+    float border_color[4][4]; // per side: top, right, bottom, left
+    float border_width[4];    // logical px, per side
+    float corner_radius[4];   // logical px: top left, top right, bottom right, bottom left
     float opacity;
     bool clip;
     ui_text_values text;   // inherited

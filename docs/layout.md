@@ -32,7 +32,9 @@ properties are style properties (`docs/styles.md`).
 - **`display: none`** removes a node and its subtree from layout and drawing.
 - Supported properties: direction, wrap, `justify-content`, `align-items`, `align-self`,
   `align-content`, grow, shrink, basis, gaps, sizes with min and max, margins (auto
-  included), padding, border width, insets, `aspect-ratio`, `display`, `position`. Lengths
+  included), padding, border widths (per side, snapped to whole device pixels at the
+  surface's scale, at least one when nonzero, as in browsers), insets, `aspect-ratio`,
+  `display`, `position`. Lengths
   are px, percent or auto (`docs/styles.md`).
 
 ## set_rect
@@ -167,11 +169,12 @@ Baselines:
 - **A clean node asked with the same inputs answers from its cache.** When its full layout
   is reused, its whole subtree is skipped.
 - **Changes mark a node dirty, and every ancestor up to the surface:**
-  - a resolved layout value or the border width changing;
+  - a resolved layout value, a border width or the direction changing;
   - new text, or the line height or max lines changing;
   - creating, destroying or moving a node;
   - a rect spring moving the frame;
-  - the surface's size or scale changing (a new scale re-measures every text node).
+  - the surface's size or scale changing (a new scale re-measures every text node and lays
+    out every node with a border, whose snapped widths change).
 - **Paint changes don't lay out.** Neither does a frame with nothing dirty.
 - **Work is skipped where the result can't depend on it:**
   - The automatic minimum size is computed only when the line shrinks, or when an explicit
@@ -267,7 +270,6 @@ one fixture next to Chrome's.
 ## Limitations
 
 - No `order`, no `flex-basis: content`, no `visibility: collapse`, no grid (milestone 2.1).
-- One border width for all sides.
 - Intrinsic sizes follow Chrome's simpler algorithm, not §9.9.1's flex fractions; the
   fixtures pin Chrome's behavior.
 - Fixtures run at scale 1; at other scales layout is the same in logical px, and only text

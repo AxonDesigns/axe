@@ -15,6 +15,34 @@ milestone first.
   library mapped until exit, and the suppressions match again. The cause on this machine
   wasn't pinned down (no driver or loader update; a reboot in between).
 
+### Per-side borders and per-corner radii
+- **Longhands** 66–77 (side widths and colors, corner radii) and logical ones 86–93; the
+  existing `border_width`, `border_color` and `corner_radius` are shorthands that set all
+  four at their place in the cascade. Logical borders and radii map with the logical side
+  machinery (seven groups: margins, padding, insets, border widths, border colors, top
+  corners, bottom corners), with the shorthands counting as setting both sides.
+- **Transitions stay on the shorthands:** border colors are four springs under one
+  transition, radii one four-component spring. `ui_node.jump` grew to 16 bits.
+- **Layout snaps border widths** to whole device pixels at the surface's scale (decided in
+  review: as Chrome). A scale change marks every bordered node dirty. Goldens regenerated:
+  `paint_borders` and `paint_flex_text` at 1.25 and 1.5, whose bordered boxes are up to a
+  pixel smaller now (a 1 px border is 0.8 px of layout at 1.25×).
+- **Two shaders.** Boxes with one radius, width and color keep `rrect.wgsl` and its 64-byte
+  instances; the rest use `border.wgsl` with 128-byte `ui_dl_border` instances in their own
+  display-list batches, keeping paint order.
+- **The shader** picks the corner whose region (within its radii of both edges) holds the
+  pixel and measures the implicit ellipse over its gradient, bounded by the edges; picking
+  by quadrant first drew notches when a radius exceeded half the box. Distances are in
+  physical pixels, so the anti-aliasing ramp is one pixel wide: `fwidth` of a distance that
+  switches formula at a region boundary left light ticks. A pixel's side is the one with
+  the smallest distance-to-edge ÷ width, which puts the boundary on the outer-to-inner
+  corner diagonal; the seam is blended over one pixel measured across that line (the
+  ratio difference × w₁w₂ / |(w₁, w₂)|). A first version blended over `fwidth` of the ratio,
+  which faded seams over several pixels (the user spotted it).
+- **Radii are scaled on the CPU** (CSS's factor: the smallest side ÷ sum of its radii).
+- **Compared with Chrome** by `tools/border-compare/compare.py`: 1.0–1.4% of pixels differ
+  by more than 8 levels, along curve and seam anti-aliasing (`docs/styles.md`, "Borders").
+
 ### Direction and logical properties
 - **`direction`** is an inherited style property (16) and a surface setting
   (`ui_surface_desc.direction`, what top-level nodes inherit). It lays out the node's

@@ -17,21 +17,21 @@
 
 #define UI_NO_SLOT UINT32_MAX
 
-// Animated node properties. The transitioned ones come in the order of UI_ANIM_* (style.h),
-// one after UI_SPRING_RECT.
+// Animated node properties. Each follows one style transition (UI_ANIM_*, style.h): the
+// four border colors share border_color's.
 enum {
     UI_SPRING_RECT = 0,     // set_rect's frame (start_spring)
     UI_SPRING_COLOR,        // background
-    UI_SPRING_BORDER_COLOR,
-    UI_SPRING_RADIUS,
+    UI_SPRING_BORDER_TOP,   // border colors, per side
+    UI_SPRING_BORDER_RIGHT,
+    UI_SPRING_BORDER_BOTTOM,
+    UI_SPRING_BORDER_LEFT,
+    UI_SPRING_RADIUS,       // the four corners
     UI_SPRING_OPACITY,
     UI_SPRING_TEXT_COLOR,
     UI_SPRING_LAYOUT,       // the presentation rect, toward the layout rect
     UI_SPRING_COUNT,
 };
-static_assert(UI_SPRING_COLOR == 1 + UI_ANIM_BACKGROUND && UI_SPRING_TEXT_COLOR == 1 + UI_ANIM_TEXT_COLOR &&
-                  UI_SPRING_LAYOUT == 1 + UI_ANIM_LAYOUT,
-              "springs follow the style transitions");
 
 // A node's springs, allocated the first time one of its properties animates.
 typedef struct ui_node_anim {
@@ -76,9 +76,9 @@ typedef struct ui_node {
     // What is drawn. Each follows its resolved value in `computed`, through a spring while
     // one runs.
     float color[4];        // background: linear, straight alpha
-    float border_color[4];
-    float border_width;    // logical px
-    float radius;
+    float border_color[4][4]; // per side: top, right, bottom, left
+    float border_width[4];    // logical px, per side
+    float radius[4];          // top left, top right, bottom right, bottom left
     float opacity;
     float text_color[4];   // the text's default style (spans keep their own colors)
     bool clip;             // text and descendants are clipped to the rect
@@ -89,7 +89,7 @@ typedef struct ui_node {
     ui_style_entry *overrides;
     uint16_t style_count, override_count, override_capacity;
     uint8_t state;         // ui_state bits
-    uint8_t jump;          // 1 << UI_SPRING_*: a set_* op set it (it jumps unless transitioned)
+    uint16_t jump;         // 1 << UI_SPRING_*: a set_* op set it (it jumps unless transitioned)
     bool style_dirty;      // resolve at the next ui_scene_resolve
     bool cascade_dirty;    // and gather its cascade again first (style.h)
     bool resolved;         // resolved before: changes may animate from now on

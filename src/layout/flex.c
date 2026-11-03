@@ -70,16 +70,25 @@ static float clampf(float v, float lo, float hi) {
 typedef struct box {
     uint32_t slot;              // UI_NO_SLOT: the surface root
     const ui_layout_style *st;
-    float border;               // uniform border width
+    float border[4];            // per side (top, right, bottom, left), snapped to device px
     uint32_t first_child;
     ui_paragraph *text;         // a text leaf's paragraph (docs/layout.md), or NULL
     bool rtl;                   // a right-to-left container: lays its children out mirrored
 } box;
 
+// A border as layout uses it: whole device pixels at the surface's scale, at least one when
+// nonzero, as browsers do (CSS Values 4, line-width snapping); so layout and drawing agree.
+float ui_layout_snap_border(float width, float scale) {
+    if (!(width > 0) || !(scale > 0)) return 0;
+    return fmaxf(floorf(width * scale + 1e-3f), 1.f) / scale;
+}
+
 static box node_box(ctx *c, uint32_t slot) {
     ui_node *n = &c->s->nodes[slot];
-    return (box){slot, &n->computed.layout, n->computed.border_width, n->first_child, n->text,
-                 n->computed.text.direction == UI_DIRECTION_RTL};
+    box b = {slot, &n->computed.layout, {0}, n->first_child, n->text,
+             n->computed.text.direction == UI_DIRECTION_RTL};
+    for (int i = 0; i < 4; i++) b.border[i] = ui_layout_snap_border(n->computed.border_width[i], c->scale);
+    return b;
 }
 
 static bool hidden(ctx *c, uint32_t slot) {
@@ -93,7 +102,7 @@ static bool absolute(ctx *c, uint32_t slot) {
 // Padding plus border per side (top, right, bottom, left); percentages resolve against
 // the containing block's width.
 static void padding_border(const box *b, float cb_width, float out[4]) {
-    for (int i = 0; i < 4; i++) out[i] = fmaxf(or_zero(resolve(b->st->padding[i], cb_width)), 0) + b->border;
+    for (int i = 0; i < 4; i++) out[i] = fmaxf(or_zero(resolve(b->st->padding[i], cb_width)), 0) + b->border[i];
 }
 
 static float sum_axis(const float sides[4], int axis) {
@@ -898,8 +907,10 @@ static void position_absolute(ctx *c, const box *b, const ui_layout_style *cst, 
     (void)b;
     ui_node *n = &c->s->nodes[slot];
     const ui_layout_style *st = &n->computed.layout;
-    float border = b->border;
-    float cb[2] = {fmaxf(size[0] - 2 * border, 0), fmaxf(size[1] - 2 * border, 0)};
+    float border[4];
+    memcpy(border, b->border, sizeof border);
+    if (b->rtl) swap_sides(border);
+    float cb[2] = {fmaxf(size[0] - border[1] - border[3], 0), fmaxf(size[1] - border[0] - border[2], 0)};
     float inset[4], margin[4];
     bool auto_margin[4];
     for (int i = 0; i < 4; i++) {
@@ -944,9 +955,9 @@ static void position_absolute(ctx *c, const box *b, const ui_layout_style *cst, 
             float shift = 0;
             if (extra > 0 && (auto_margin[lo] || auto_margin[hi]))
                 shift = auto_margin[lo] && auto_margin[hi] ? extra / 2 : auto_margin[lo] ? extra : 0;
-            pos[a] = border + inset[lo] + margin[lo] + shift;
+            pos[a] = border[lo] + inset[lo] + margin[lo] + shift;
         } else if (is_known(inset[hi])) {
-            pos[a] = border + cb[a] - inset[hi] - margin[hi] - sz[a];
+            pos[a] = border[lo] + cb[a] - inset[hi] - margin[hi] - sz[a];
         } else {
             // Static position: as the container's sole item, within its content box.
             float content = size[a] - sum_axis(pb, a), start = a == 0 ? pb[3] : pb[0];
@@ -981,7 +992,7 @@ void ui_layout_root(ui_scene *s, uint32_t root, float width, float height, float
     ctx c = {s, text, scale, stats, now_ns};
     stats->passes++;
     layout_styles();
-    box rb = {UI_NO_SLOT, &root_style, 0, s->roots[root].first_child, NULL,
+    box rb = {UI_NO_SLOT, &root_style, {0}, s->roots[root].first_child, NULL,
               s->roots[root].computed.text.direction == UI_DIRECTION_RTL};
     float known[2] = {width, height}, parent[2] = {width, height}, out[2], bl;
     compute_box(&c, &rb, known, parent, known, PERFORM, out, &bl);

@@ -225,7 +225,7 @@ static bool same_style(const ui_text_style *a, const ui_text_style *b) {
 }
 
 static bool same_node(const ui_node *a, const ui_node *b) {
-    if (memcmp(a->rect, b->rect, sizeof a->rect) || a->radius != b->radius ||
+    if (memcmp(a->rect, b->rect, sizeof a->rect) || memcmp(a->radius, b->radius, sizeof a->radius) ||
         memcmp(a->color, b->color, sizeof a->color) || a->clip != b->clip)
         return false;
     if (!a->anim != !b->anim) return false;
@@ -435,7 +435,7 @@ static void test_styles(void) {
     CHECK(d && d->block_count == 2 && d->entry_count == 1);
     if (d && d->entry_count) CHECK(d->entries[0].prop == UI_STYLE_OPACITY && d->entries[0].value.number == 0.5f);
     const ui_node *nd = &s.nodes[ui_handle_slot(node)];
-    CHECK(nd->border_width == 3 && nd->override_count == 1);
+    CHECK(nd->border_width[0] == 3 && nd->border_width[3] == 3 && nd->override_count == 1);
     CHECK(nd->opacity == 1); // the hover block doesn't match
     free(bytes);
     ui_scene_destroy(&s);

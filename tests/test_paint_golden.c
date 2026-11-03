@@ -1,6 +1,6 @@
-// Golden images of the paint properties (borders, opacity groups, clipping) and of a flex
-// layout with text, at scales 1.0, 1.25 and 1.5 under both schedulers (tests/golden.h has
-// the rules), plus checks that need no golden:
+// Golden images of the paint properties (borders, per-side borders and corners, opacity
+// groups, clipping) and of a flex layout with text, at scales 1.0, 1.25 and 1.5 under both
+// schedulers (tests/golden.h has the rules), plus checks that need no golden:
 //   - a group's overlapping children composite once at the group's opacity (CSS group
 //     opacity), not each at that opacity;
 //   - a box at rest snaps to whole pixels, a moving one (and its subtree) doesn't.
@@ -179,6 +179,47 @@ static void flex_text(builder *b, ui_handle root) {
     text(b, end, "End", 12);
 }
 
+// Per-side borders and per-corner radii (docs/styles.md, "Borders"): unequal widths with
+// large radii (elliptical inner corners), transparent sides, radii too large for their
+// sides (scaled down together), four colors meeting on the corner diagonals, and logical
+// sides in a right-to-left node.
+static void border_sides(builder *b, ui_handle root) {
+    ui_handle a = box(b, root, 12, 12, 90, 60, 0.95f, 0.92f, 0.85f, 1);
+    props(b, a, (ui_style_decl[]){{UI_STYLE_BORDER_TOP_WIDTH, ui_px(2)}, {UI_STYLE_BORDER_RIGHT_WIDTH, ui_px(12)},
+                                  {UI_STYLE_BORDER_BOTTOM_WIDTH, ui_px(6)}, {UI_STYLE_BORDER_LEFT_WIDTH, ui_px(20)},
+                                  {UI_STYLE_BORDER_COLOR, ui_rgba(0.15f, 0.35f, 0.75f, 1)},
+                                  {UI_STYLE_CORNER_RADIUS, ui_px(24)}}, 6);
+    ui_handle c = box(b, root, 116, 12, 90, 60, 1, 1, 1, 1);
+    props(b, c, (ui_style_decl[]){{UI_STYLE_BORDER_WIDTH, ui_px(10)},
+                                  {UI_STYLE_BORDER_TOP_COLOR, ui_rgba(0.9f, 0.2f, 0.2f, 1)},
+                                  {UI_STYLE_BORDER_RIGHT_COLOR, ui_rgba(0.2f, 0.7f, 0.3f, 1)},
+                                  {UI_STYLE_BORDER_BOTTOM_COLOR, ui_rgba(0.2f, 0.3f, 0.9f, 1)},
+                                  {UI_STYLE_BORDER_LEFT_COLOR, ui_rgba(0.9f, 0.7f, 0.1f, 1)}}, 5);
+    ui_handle d = box(b, root, 220, 12, 90, 60, 0.85f, 0.95f, 0.9f, 1); // transparent sides
+    props(b, d, (ui_style_decl[]){{UI_STYLE_BORDER_WIDTH, ui_px(6)}, {UI_STYLE_BORDER_COLOR, ui_rgba(0.3f, 0.2f, 0.5f, 1)},
+                                  {UI_STYLE_BORDER_RIGHT_COLOR, ui_rgba(0, 0, 0, 0)},
+                                  {UI_STYLE_BORDER_LEFT_COLOR, ui_rgba(0, 0, 0, 0)},
+                                  {UI_STYLE_CORNER_RADIUS_TOP_LEFT, ui_px(18)},
+                                  {UI_STYLE_CORNER_RADIUS_BOTTOM_RIGHT, ui_px(18)}}, 6);
+    ui_handle e = box(b, root, 12, 88, 90, 60, 0.9f, 0.85f, 0.95f, 1); // radii larger than the sides
+    props(b, e, (ui_style_decl[]){{UI_STYLE_CORNER_RADIUS_TOP_LEFT, ui_px(80)}, {UI_STYLE_CORNER_RADIUS_TOP_RIGHT, ui_px(40)},
+                                  {UI_STYLE_CORNER_RADIUS_BOTTOM_RIGHT, ui_px(10)},
+                                  {UI_STYLE_BORDER_WIDTH, ui_px(3)}, {UI_STYLE_BORDER_COLOR, ui_rgba(0.4f, 0.1f, 0.4f, 1)}}, 5);
+    ui_handle f = box(b, root, 116, 88, 90, 60, 1, 1, 1, 1); // one thick side and a large radius
+    props(b, f, (ui_style_decl[]){{UI_STYLE_BORDER_LEFT_WIDTH, ui_px(16)},
+                                  {UI_STYLE_BORDER_LEFT_COLOR, ui_rgba(0.85f, 0.35f, 0.1f, 1)},
+                                  {UI_STYLE_BORDER_TOP_WIDTH, ui_px(1)},
+                                  {UI_STYLE_BORDER_TOP_COLOR, ui_rgba(0.5f, 0.5f, 0.5f, 1)},
+                                  {UI_STYLE_CORNER_RADIUS_TOP_LEFT, ui_px(30)}}, 5);
+    ui_handle g = box(b, root, 220, 88, 90, 60, 0.95f, 0.95f, 1, 1); // logical sides, right to left
+    props(b, g, (ui_style_decl[]){{UI_STYLE_DIRECTION, ui_keyword(UI_DIRECTION_RTL)},
+                                  {UI_STYLE_BORDER_START_WIDTH, ui_px(14)},
+                                  {UI_STYLE_BORDER_START_COLOR, ui_rgba(0.1f, 0.5f, 0.6f, 1)},
+                                  {UI_STYLE_BORDER_END_WIDTH, ui_px(2)},
+                                  {UI_STYLE_BORDER_END_COLOR, ui_rgba(0.6f, 0.1f, 0.3f, 1)},
+                                  {UI_STYLE_CORNER_RADIUS_TOP_START, ui_px(22)}}, 6);
+}
+
 typedef struct paint_case {
     const char *name;
     void (*build)(builder *b, ui_handle root);
@@ -189,6 +230,7 @@ static const paint_case cases[] = {
     {"paint_opacity", opacity},
     {"paint_clipping", clipping},
     {"paint_flex_text", flex_text},
+    {"paint_border_sides", border_sides},
 };
 
 typedef struct paint_logic {

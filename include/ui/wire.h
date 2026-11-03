@@ -214,6 +214,20 @@ typedef enum ui_style_prop {
     // transitioned: UI_STYLE_TRANSITION(UI_STYLE_LAYOUT) animates the node from where it is
     // drawn to every new layout rect (layout animations, docs/layout.md).
     UI_STYLE_LAYOUT = 64,
+    // Per side and per corner (docs/styles.md, "Borders"). border_width, border_color and
+    // corner_radius set all four at once (shorthands).
+    UI_STYLE_BORDER_TOP_WIDTH = 66,   // px >= 0
+    UI_STYLE_BORDER_RIGHT_WIDTH = 67,
+    UI_STYLE_BORDER_BOTTOM_WIDTH = 68,
+    UI_STYLE_BORDER_LEFT_WIDTH = 69,
+    UI_STYLE_BORDER_TOP_COLOR = 70,   // color
+    UI_STYLE_BORDER_RIGHT_COLOR = 71,
+    UI_STYLE_BORDER_BOTTOM_COLOR = 72,
+    UI_STYLE_BORDER_LEFT_COLOR = 73,
+    UI_STYLE_CORNER_RADIUS_TOP_LEFT = 74, // px >= 0 (circular)
+    UI_STYLE_CORNER_RADIUS_TOP_RIGHT = 75,
+    UI_STYLE_CORNER_RADIUS_BOTTOM_RIGHT = 76,
+    UI_STYLE_CORNER_RADIUS_BOTTOM_LEFT = 77,
     // Logical sides (docs/styles.md, "Logical properties"): start is the left in a
     // left-to-right node and the right in a right-to-left one. They set the same values as
     // the physical properties: within a block, the later entry wins.
@@ -223,6 +237,14 @@ typedef enum ui_style_prop {
     UI_STYLE_PADDING_END = 83,
     UI_STYLE_INSET_START = 84,     // as insets
     UI_STYLE_INSET_END = 85,
+    UI_STYLE_BORDER_START_WIDTH = 86, // as border widths
+    UI_STYLE_BORDER_END_WIDTH = 87,
+    UI_STYLE_BORDER_START_COLOR = 88, // as border colors
+    UI_STYLE_BORDER_END_COLOR = 89,
+    UI_STYLE_CORNER_RADIUS_TOP_START = 90, // as corner radii
+    UI_STYLE_CORNER_RADIUS_TOP_END = 91,
+    UI_STYLE_CORNER_RADIUS_BOTTOM_START = 92,
+    UI_STYLE_CORNER_RADIUS_BOTTOM_END = 93,
 } ui_style_prop;
 
 // The transition of a property: a spring that animates the property's value whenever what

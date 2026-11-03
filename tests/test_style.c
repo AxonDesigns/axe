@@ -251,7 +251,7 @@ static void test_legacy_ops(void) {
     ui_cmd_set_corner_radius(f.w, f.node, 4);
     flush(&f);
     ui_node *n = n_of(&f);
-    CHECK(is_rgb(&f, 1, 0, 0) && n->radius == 4);
+    CHECK(is_rgb(&f, 1, 0, 0) && n->radius[0] == 4 && n->radius[3] == 4);
     float target[4] = {0, 0, 1, 1};
     ui_cmd_start_spring(f.w, f.node, UI_PROP_COLOR, target, 100, 20);
     flush(&f);
@@ -290,7 +290,7 @@ static void test_paint_values(void) {
     ui_cmd_set_styles(f.w, f.node, (uint32_t[]){1}, 1);
     flush(&f);
     ui_node *n = n_of(&f);
-    CHECK(n->border_width == 2 && n->border_color[3] == 0.5f && n->radius == 6);
+    CHECK(n->border_width[1] == 2 && n->border_color[2][3] == 0.5f && n->radius[2] == 6);
     CHECK(n->opacity == 0.25f && n->clip);
     // The writer refuses what a property can't take.
     ui_style_decl bad[] = {{UI_STYLE_OPACITY, ui_number(2)},
@@ -530,7 +530,37 @@ static void test_logical(void) {
     teardown(&f);
 }
 
+// Per-side colors and per-corner radii: one transition of border_color animates every
+// side's color, one of corner_radius every corner.
+static void test_sides(void) {
+    fixture f;
+    setup(&f);
+    props(&f, 1, (ui_style_decl[]){{UI_STYLE_BORDER_TOP_COLOR, ui_rgba(1, 0, 0, 1)},
+                                   {UI_STYLE_BORDER_LEFT_COLOR, ui_rgba(0, 0, 1, 1)},
+                                   {UI_STYLE_CORNER_RADIUS_TOP_LEFT, ui_px(10)},
+                                   {UI_STYLE_TRANSITION(UI_STYLE_BORDER_COLOR), ui_transition(100, 20)},
+                                   {UI_STYLE_TRANSITION(UI_STYLE_CORNER_RADIUS), ui_transition(100, 20)}},
+          5);
+    flush(&f);
+    ui_node *n = n_of(&f);
+    CHECK(n->border_color[0][0] == 1 && n->border_color[3][2] == 1 && n->border_color[1][3] == 0);
+    CHECK(n->radius[0] == 10 && n->radius[1] == 0);
+    // The shorthands set every side and corner, after the longhands: both animate.
+    props(&f, 1, (ui_style_decl[]){{UI_STYLE_BORDER_COLOR, ui_rgba(0, 1, 0, 1)}, {UI_STYLE_CORNER_RADIUS, ui_px(20)}}, 2);
+    flush(&f);
+    f.now += 50000000;
+    ui_scene_animate(&f.s, f.now);
+    CHECK(n->border_color[0][0] > 0 && n->border_color[0][0] < 1 && n->border_color[0][1] > 0);
+    CHECK(n->border_color[3][2] > 0 && n->border_color[3][2] < 1);
+    CHECK(n->radius[0] > 10 && n->radius[0] < 20 && n->radius[1] > 0 && n->radius[1] < 20);
+    f.now += 3000000000ull;
+    ui_scene_animate(&f.s, f.now);
+    for (int i = 0; i < 4; i++) CHECK(n->border_color[i][1] == 1 && n->radius[i] == 20);
+    teardown(&f);
+}
+
 int main(void) {
+    RUN(test_sides);
     RUN(test_logical);
     RUN(test_inheritance);
     RUN(test_inherit_initial);

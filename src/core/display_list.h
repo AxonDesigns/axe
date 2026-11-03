@@ -22,6 +22,19 @@ typedef struct ui_dl_rect {
     float border_color[4];
 } ui_dl_rect;
 
+// A rounded rectangle whose sides and corners differ (docs/styles.md, "Borders"): radii per
+// corner (top left, top right, bottom right, bottom left; already scaled down so adjacent
+// ones fit their side), border widths and colors per side (top, right, bottom, left). Inner
+// corners are elliptical where adjacent widths differ; side colors meet on the line from
+// the outer to the inner corner. Boxes with one radius, width and color use ui_dl_rect.
+typedef struct ui_dl_border {
+    float x, y, width, height;
+    float radius[4];
+    float border_width[4];
+    float color[4];
+    float border_color[4][4];
+} ui_dl_border;
+
 // One glyph quad: a rectangle of whole physical pixels showing the same-sized rectangle of
 // an atlas page at (u, v), tinted by a linear premultiplied color.
 typedef struct ui_dl_glyph {
@@ -36,6 +49,7 @@ typedef enum ui_dl_kind {
     UI_DL_GLYPHS,
     UI_DL_LAYER_BEGIN, // `first`: the layer; what follows draws into it
     UI_DL_LAYER_END,   // `page`: the layer; `first`: its composite quad in `rects`
+    UI_DL_BORDERS,     // a range of `borders`
 } ui_dl_kind;
 
 // An opacity group: content between its begin and end batches is drawn into an offscreen
@@ -82,6 +96,8 @@ typedef struct ui_display_list {
     ui_dl_rect *rects;
     uint32_t glyph_count, glyph_capacity;
     ui_dl_glyph *glyphs;
+    uint32_t border_count, border_capacity;
+    ui_dl_border *borders;
     uint32_t batch_count, batch_capacity;
     ui_dl_batch *batches;
     uint32_t layer_count, layer_capacity;
@@ -93,6 +109,7 @@ typedef struct ui_display_list {
 void ui_display_list_reset(ui_display_list *dl);
 ui_result ui_display_list_push_rect(ui_display_list *dl, const ui_dl_rect *rect);
 ui_result ui_display_list_push_glyph(ui_display_list *dl, uint16_t page, const ui_dl_glyph *glyph);
+ui_result ui_display_list_push_border(ui_display_list *dl, const ui_dl_border *border);
 // Opens a layer composited at `opacity`; pushes until the matching end draw into it.
 ui_result ui_display_list_begin_layer(ui_display_list *dl, float opacity);
 // Closes the innermost layer: fixes its bounds and adds its composite quad, drawn with the

@@ -39,7 +39,8 @@ bool ui_style_prop_known(uint16_t prop) {
     if (prop & 0x8000u) return transitionable(prop & 0x7FFFu);
     return (prop >= UI_STYLE_BACKGROUND_COLOR && prop <= UI_STYLE_DIRECTION) ||
            (prop >= UI_STYLE_DISPLAY && prop <= UI_STYLE_ASPECT_RATIO) ||
-           (prop >= UI_STYLE_MARGIN_START && prop <= UI_STYLE_INSET_END);
+           (prop >= UI_STYLE_BORDER_TOP_WIDTH && prop <= UI_STYLE_CORNER_RADIUS_BOTTOM_LEFT) ||
+           (prop >= UI_STYLE_MARGIN_START && prop <= UI_STYLE_CORNER_RADIUS_BOTTOM_END);
 }
 
 static bool length(const ui_value *v, bool negative, bool automatic, bool none) {
@@ -78,9 +79,29 @@ bool ui_style_value_valid(uint16_t prop, const ui_value *v, bool override) {
     switch ((ui_style_prop)prop) {
     case UI_STYLE_BACKGROUND_COLOR:
     case UI_STYLE_BORDER_COLOR:
+    case UI_STYLE_BORDER_TOP_COLOR:
+    case UI_STYLE_BORDER_RIGHT_COLOR:
+    case UI_STYLE_BORDER_BOTTOM_COLOR:
+    case UI_STYLE_BORDER_LEFT_COLOR:
+    case UI_STYLE_BORDER_START_COLOR:
+    case UI_STYLE_BORDER_END_COLOR:
     case UI_STYLE_TEXT_COLOR: return v->kind == UI_VALUE_COLOR && color_ok(v->color);
     case UI_STYLE_BORDER_WIDTH:
-    case UI_STYLE_CORNER_RADIUS: return v->kind == UI_VALUE_PX && isfinite(n) && n >= 0;
+    case UI_STYLE_BORDER_TOP_WIDTH:
+    case UI_STYLE_BORDER_RIGHT_WIDTH:
+    case UI_STYLE_BORDER_BOTTOM_WIDTH:
+    case UI_STYLE_BORDER_LEFT_WIDTH:
+    case UI_STYLE_BORDER_START_WIDTH:
+    case UI_STYLE_BORDER_END_WIDTH:
+    case UI_STYLE_CORNER_RADIUS:
+    case UI_STYLE_CORNER_RADIUS_TOP_LEFT:
+    case UI_STYLE_CORNER_RADIUS_TOP_RIGHT:
+    case UI_STYLE_CORNER_RADIUS_BOTTOM_RIGHT:
+    case UI_STYLE_CORNER_RADIUS_BOTTOM_LEFT:
+    case UI_STYLE_CORNER_RADIUS_TOP_START:
+    case UI_STYLE_CORNER_RADIUS_TOP_END:
+    case UI_STYLE_CORNER_RADIUS_BOTTOM_START:
+    case UI_STYLE_CORNER_RADIUS_BOTTOM_END: return v->kind == UI_VALUE_PX && isfinite(n) && n >= 0;
     case UI_STYLE_OPACITY: return v->kind == UI_VALUE_NUMBER && n >= 0 && n <= 1;
     case UI_STYLE_CLIP: return v->kind == UI_VALUE_KEYWORD && v->keyword <= UI_CLIP_RECT;
     case UI_STYLE_LINE_HEIGHT:

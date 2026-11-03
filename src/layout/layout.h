@@ -40,6 +40,10 @@ typedef struct ui_layout_node {
     ui_layout_cache final; // the last full layout (children positioned)
 } ui_layout_node;
 
+// A border width as layout and drawing use it at rest: whole device pixels at `scale`, at
+// least one when nonzero (logical px).
+float ui_layout_snap_border(float width, float scale);
+
 typedef struct ui_layout_stats {
     uint64_t computed;   // node computations that ran (cache misses)
     uint64_t cache_hits;

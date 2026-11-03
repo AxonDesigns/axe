@@ -11,9 +11,9 @@
 #define MODULE "scene"
 
 // Settle thresholds per spring, in the property's units (px, linear color, opacity).
-static const double spring_epsilon[UI_SPRING_COUNT] = {0.01, 1e-4, 1e-4, 0.01, 1e-4, 1e-4, 0.01};
+static const double spring_epsilon[UI_SPRING_COUNT] = {0.01, 1e-4, 1e-4, 1e-4, 1e-4, 1e-4, 0.01, 1e-4, 1e-4, 0.01};
 // Components per spring.
-static const uint32_t spring_components[UI_SPRING_COUNT] = {4, 4, 4, 1, 1, 4, 4};
+static const uint32_t spring_components[UI_SPRING_COUNT] = {4, 4, 4, 4, 4, 4, 4, 1, 4, 4};
 
 // What the build keeps per ancestor level.
 struct ui_build_level {
@@ -498,7 +498,7 @@ static bool apply_frame(ui_scene *s, ui_node *n) {
 // styles declare a transition for it.
 static bool set_paint(ui_scene *s, ui_node *n, uint16_t prop, ui_value v, int spring) {
     if (!set_override(s, n, prop, &v)) return false;
-    if (spring >= 0) n->jump |= (uint8_t)(1u << spring);
+    if (spring >= 0) n->jump |= (uint16_t)(1u << spring);
     mark_style_dirty(s, (uint32_t)(n - s->nodes), true);
     return true;
 }
@@ -705,7 +705,7 @@ static bool apply_node_op(ui_scene *s, const ui_wire_op *op, uint64_t now_ns) {
         a->requested[i] = true;
         a->requested_params[i][0] = stiffness;
         a->requested_params[i][1] = damping;
-        n->jump &= (uint8_t)~(1u << i);
+        n->jump &= (uint16_t)~(1u << i);
         mark_style_dirty(s, (uint32_t)(n - s->nodes), true);
         return true;
     }
@@ -841,8 +841,11 @@ static float *presented(ui_node *n, int spring) {
     case UI_SPRING_RECT: return n->frame;
     case UI_SPRING_LAYOUT: return n->rect;
     case UI_SPRING_COLOR: return n->color;
-    case UI_SPRING_BORDER_COLOR: return n->border_color;
-    case UI_SPRING_RADIUS: return &n->radius;
+    case UI_SPRING_BORDER_TOP:
+    case UI_SPRING_BORDER_RIGHT:
+    case UI_SPRING_BORDER_BOTTOM:
+    case UI_SPRING_BORDER_LEFT: return n->border_color[spring - UI_SPRING_BORDER_TOP];
+    case UI_SPRING_RADIUS: return n->radius;
     case UI_SPRING_OPACITY: return &n->opacity;
     default: return n->text_color;
     }
@@ -861,7 +864,7 @@ static void write_back(ui_scene *s, ui_node *n, int which) {
         n->rect[2] = fmaxf(n->rect[2], 0.f);
         n->rect[3] = fmaxf(n->rect[3], 0.f);
     } else if (which == UI_SPRING_RADIUS) {
-        n->radius = fmaxf(n->radius, 0.f);
+        for (int i = 0; i < 4; i++) n->radius[i] = fmaxf(n->radius[i], 0.f);
     } else {
         for (uint32_t i = 0; i < sp->components; i++) dst[i] = fminf(fmaxf(dst[i], 0.f), 1.f);
     }
@@ -1112,14 +1115,16 @@ static int resolve_node(ui_scene *s, ui_node *n, uint64_t now_ns) {
     n->text_declared = (uint16_t)declared;
     // What layout reads: the layout values, the border, and the direction (an rtl container
     // mirrors its children).
-    if (memcmp(&old.layout, &c->layout, sizeof old.layout) || old.border_width != c->border_width ||
+    if (memcmp(&old.layout, &c->layout, sizeof old.layout) ||
+        memcmp(old.border_width, c->border_width, sizeof old.border_width) ||
         old.text.direction != c->text.direction)
         layout_dirty(s, (uint32_t)(n - s->nodes));
     bool changed = false;
     changed |= update_paint(n, UI_SPRING_COLOR, c->background, c->transition[UI_ANIM_BACKGROUND], now_ns);
-    changed |= update_paint(n, UI_SPRING_BORDER_COLOR, c->border_color,
-                            c->transition[UI_ANIM_BORDER_COLOR], now_ns);
-    changed |= update_paint(n, UI_SPRING_RADIUS, &c->corner_radius, c->transition[UI_ANIM_RADIUS], now_ns);
+    for (int side = 0; side < 4; side++)
+        changed |= update_paint(n, UI_SPRING_BORDER_TOP + side, c->border_color[side],
+                                c->transition[UI_ANIM_BORDER_COLOR], now_ns);
+    changed |= update_paint(n, UI_SPRING_RADIUS, c->corner_radius, c->transition[UI_ANIM_RADIUS], now_ns);
     changed |= update_paint(n, UI_SPRING_OPACITY, &c->opacity, c->transition[UI_ANIM_OPACITY], now_ns);
     changed |= update_paint(n, UI_SPRING_TEXT_COLOR, c->text.color, c->transition[UI_ANIM_TEXT_COLOR], now_ns);
     // A layout animation whose transition went away ends at the layout rect.
@@ -1128,9 +1133,9 @@ static int resolve_node(ui_scene *s, ui_node *n, uint64_t now_ns) {
         memcpy(n->rect, n->layout.rect, sizeof n->rect);
         changed = true;
     }
-    changed |= n->clip != c->clip || n->border_width != c->border_width;
+    changed |= n->clip != c->clip || memcmp(n->border_width, c->border_width, sizeof n->border_width);
     n->clip = c->clip;
-    n->border_width = c->border_width;
+    memcpy(n->border_width, c->border_width, sizeof n->border_width);
     if (key_text(s, n)) {
         changed = true;
         layout_dirty(s, (uint32_t)(n - s->nodes)); // shaped differently, so measured differently
@@ -1291,10 +1296,12 @@ bool ui_scene_layout(ui_scene *s, ui_handle surface, float width, float height, 
     if (!root) return false;
     uint32_t index = (uint32_t)(root - s->roots);
     if (root->layout_scale != scale) {
-        // Text measures differently at another scale.
+        // Text measures differently at another scale, and borders snap to other widths.
         for (uint32_t slot = 0; slot < s->handles.used; slot++) {
-            if (s->handles.alive[slot] && s->nodes[slot].root == index && s->nodes[slot].text)
-                layout_dirty(s, slot);
+            const ui_node *n = &s->nodes[slot];
+            if (!s->handles.alive[slot] || n->root != index) continue;
+            const float *bw = n->computed.border_width;
+            if (n->text || bw[0] > 0 || bw[1] > 0 || bw[2] > 0 || bw[3] > 0) layout_dirty(s, slot);
         }
     }
     if (!root->layout_dirty && root->layout_size[0] == width && root->layout_size[1] == height &&
@@ -1465,8 +1472,22 @@ ui_result ui_scene_build(ui_scene *s, ui_handle surface, ui_display_list *dl,
         float clip[4];
         memcpy(clip, up->clip, sizeof clip);
         dl->clip = scissor_of(clip);
-        float bw = border_px(n->border_width, scale, !move);
-        bool border = bw > 0 && n->border_color[3] > 0;
+        // Borders per side, in whole device pixels at rest; radii scaled down together so
+        // adjacent ones fit each side (CSS backgrounds 3, "Overlapping curves").
+        float bw[4], rad[4];
+        bool border = false;
+        for (int i = 0; i < 4; i++) {
+            bw[i] = border_px(n->border_width[i], scale, !move);
+            border |= bw[i] > 0 && n->border_color[i][3] > 0;
+            rad[i] = n->radius[i] * scale;
+        }
+        float fit = 1;
+        const float sums[4] = {rad[0] + rad[1], rad[3] + rad[2], rad[0] + rad[3], rad[1] + rad[2]};
+        const float sides[4] = {pw, pw, ph, ph};
+        for (int i = 0; i < 4; i++) {
+            if (sums[i] > sides[i] && sums[i] > 0) fit = fminf(fit, sides[i] / sums[i]);
+        }
+        for (int i = 0; i < 4; i++) rad[i] *= fit;
         bool has_children = n->first_child != UI_NO_SLOT;
         // CSS group opacity: the node and its subtree draw into a layer composited at its
         // opacity. A lone background needs no layer: its alpha is multiplied.
@@ -1477,16 +1498,32 @@ ui_result ui_scene_build(ui_scene *s, ui_handle surface, ui_display_list *dl,
         bool visible = px1 + 1 > clip[0] && px0 - 1 < clip[2] && py1 + 1 > clip[1] &&
                        py0 - 1 < clip[3]; // 1 px: the rect shader's anti-aliasing margin
         if (pw > 0 && ph > 0 && (n->color[3] > 0 || border) && visible) {
-            float a = n->color[3] * alpha, ba = border ? n->border_color[3] * alpha : 0;
-            ui_dl_rect r = {
-                .x = px0, .y = py0, .width = pw, .height = ph,
-                .radius = n->radius * scale,
-                .border_width = border ? bw : 0,
-                .color = {n->color[0] * a, n->color[1] * a, n->color[2] * a, a},
-                .border_color = {n->border_color[0] * ba, n->border_color[1] * ba,
-                                 n->border_color[2] * ba, ba},
-            };
-            if ((res = ui_display_list_push_rect(dl, &r)) != UI_OK) return res;
+            float a = n->color[3] * alpha;
+            const float color[4] = {n->color[0] * a, n->color[1] * a, n->color[2] * a, a};
+            float side_color[4][4] = {{0}};
+            for (int i = 0; i < 4 && border; i++) {
+                float ba = bw[i] > 0 ? n->border_color[i][3] * alpha : 0;
+                for (int k = 0; k < 3; k++) side_color[i][k] = n->border_color[i][k] * ba;
+                side_color[i][3] = ba;
+            }
+            // One radius, one width and one color: the uniform shader (most boxes).
+            bool uniform = rad[0] == rad[1] && rad[0] == rad[2] && rad[0] == rad[3];
+            for (int i = 1; i < 4 && uniform && border; i++)
+                uniform = bw[i] == bw[0] && !memcmp(side_color[i], side_color[0], sizeof side_color[0]);
+            if (uniform) {
+                ui_dl_rect r = {.x = px0, .y = py0, .width = pw, .height = ph, .radius = rad[0],
+                                .border_width = border ? bw[0] : 0};
+                memcpy(r.color, color, sizeof r.color);
+                memcpy(r.border_color, side_color[0], sizeof r.border_color);
+                if ((res = ui_display_list_push_rect(dl, &r)) != UI_OK) return res;
+            } else {
+                ui_dl_border r = {.x = px0, .y = py0, .width = pw, .height = ph};
+                memcpy(r.radius, rad, sizeof r.radius);
+                for (int i = 0; i < 4; i++) r.border_width[i] = border ? bw[i] : 0;
+                memcpy(r.color, color, sizeof r.color);
+                memcpy(r.border_color, side_color, sizeof r.border_color);
+                if ((res = ui_display_list_push_border(dl, &r)) != UI_OK) return res;
+            }
         }
         // What the node's text and children see.
         float inner[4] = {clip[0], clip[1], clip[2], clip[3]};

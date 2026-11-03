@@ -7,6 +7,7 @@
 void ui_display_list_reset(ui_display_list *dl) {
     dl->rect_count = 0;
     dl->glyph_count = 0;
+    dl->border_count = 0;
     dl->batch_count = 0;
     dl->layer_count = 0;
     dl->clip = UI_DL_NO_CLIP;
@@ -55,6 +56,16 @@ ui_result ui_display_list_push_rect(ui_display_list *dl, const ui_dl_rect *rect)
     dl->rects[dl->rect_count++] = *rect;
     // One pixel of margin: the rect shader's anti-aliasing ramp.
     extend(dl, rect->x - 1, rect->y - 1, rect->x + rect->width + 1, rect->y + rect->height + 1);
+    return UI_OK;
+}
+
+ui_result ui_display_list_push_border(ui_display_list *dl, const ui_dl_border *border) {
+    ui_result r = ui_grow((void **)&dl->borders, &dl->border_capacity, dl->border_count + 1,
+                          sizeof *dl->borders);
+    if (r == UI_OK) r = batch(dl, UI_DL_BORDERS, 0, dl->border_count);
+    if (r != UI_OK) return r;
+    dl->borders[dl->border_count++] = *border;
+    extend(dl, border->x - 1, border->y - 1, border->x + border->width + 1, border->y + border->height + 1);
     return UI_OK;
 }
 
@@ -129,10 +140,13 @@ ui_result ui_display_list_end_layer(ui_display_list *dl) {
 void ui_display_list_free(ui_display_list *dl) {
     free(dl->rects);
     free(dl->glyphs);
+    free(dl->borders);
     free(dl->batches);
     free(dl->layers);
     dl->rects = NULL;
     dl->glyphs = NULL;
+    dl->borders = NULL;
+    dl->border_count = dl->border_capacity = 0;
     dl->batches = NULL;
     dl->layers = NULL;
     dl->rect_count = dl->rect_capacity = 0;

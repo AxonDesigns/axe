@@ -110,9 +110,9 @@ token, a state, an override, a redefined style, or new text with another color.
 | Id | Property | Values | Initial |
 | --- | --- | --- | --- |
 | 1 | `background_color` | color | transparent |
-| 2 | `border_color` | color | transparent |
-| 3 | `border_width` | px ≥ 0, all four sides | 0 |
-| 4 | `corner_radius` | px ≥ 0, all four corners | 0 |
+| 2 | `border_color` | color: all four sides (shorthand) | transparent |
+| 3 | `border_width` | px ≥ 0: all four sides (shorthand) | 0 |
+| 4 | `corner_radius` | px ≥ 0: all four corners (shorthand) | 0 |
 | 5 | `opacity` | number in [0, 1]: the node and its subtree, as one group | 1 |
 | 6 | `clip` | keyword: 0 none, 1 rect (text and descendants inside the node's rect) | 0 |
 | 7 | `text_color` (inherited) | color: the text's default style; spans keep their own colors | opaque black |
@@ -157,6 +157,12 @@ Layout properties ([`docs/layout.md`](layout.md)); keywords are the `ui_flex_*`,
 | 80, 81 | `margin_start`, `margin_end` | as margins | (the physical sides) |
 | 82, 83 | `padding_start`, `padding_end` | as padding | |
 | 84, 85 | `inset_start`, `inset_end` | as insets | |
+| 66–69 | `border_{top,right,bottom,left}_width` | px ≥ 0 | 0 |
+| 70–73 | `border_{top,right,bottom,left}_color` | color | transparent |
+| 74–77 | `corner_radius_{top_left,top_right,bottom_right,bottom_left}` | px ≥ 0 (circular) | 0 |
+| 86, 87 | `border_start_width`, `border_end_width` | as border widths | |
+| 88, 89 | `border_start_color`, `border_end_color` | as border colors | |
+| 90–93 | `corner_radius_{top_start,top_end,bottom_start,bottom_end}` | as corner radii | |
 
 Percentages of padding and margins resolve against the containing block's width, as in
 CSS. `border_width` (3) also takes part in layout.
@@ -173,8 +179,10 @@ have logical names.
 
 | Logical | Left-to-right node | Right-to-left node |
 | --- | --- | --- |
-| `margin_start`, `padding_start`, `inset_start` | left | right |
-| `margin_end`, `padding_end`, `inset_end` | right | left |
+| `margin_start`, `padding_start`, `inset_start`, `border_start_width`, `border_start_color` | left | right |
+| `margin_end`, `padding_end`, `inset_end`, `border_end_width`, `border_end_color` | right | left |
+| `corner_radius_top_start`, `corner_radius_bottom_start` | top left, bottom left | top right, bottom right |
+| `corner_radius_top_end`, `corner_radius_bottom_end` | top right, bottom right | top left, bottom left |
 
 - **They set the same values as the physical properties.** A node has one left margin,
   whether `margin_left` or `margin_start` set it.
@@ -192,9 +200,8 @@ have logical names.
 ### Drawing
 
 - **Borders** are drawn inside the node's edge, over the background, which covers the whole
-  rect as with CSS `background-clip: border-box`. The inner corners have the outer radius
-  minus the border width. A border at rest is a whole number of physical pixels, at least
-  one, as browsers draw them.
+  rect as with CSS `background-clip: border-box`. See [Borders](#borders) for sides and
+  corners.
 - **Opacity** applies to the node and its subtree as one group: they are drawn into an
   offscreen layer, which is then composited at that opacity, as CSS does. Overlapping
   children inside a group therefore don't show through each other.
@@ -259,9 +266,52 @@ transition a `set_*` op jumps and stops a running spring, as it always did; with
 change animates like any other. `set_rect` and `start_spring` on the rect are unchanged in
 this step (the layout step redefines them).
 
+### Borders
+
+Each side has its own width and color, and each corner its own radius, drawn as CSS
+(Backgrounds and Borders 3) draws them:
+- **Shorthands:** `border_width`, `border_color` and `corner_radius` set all four at their
+  place in the cascade; a later longhand or logical property changes one.
+- **Radii that don't fit are scaled down together:** every radius is multiplied by the
+  smallest of side length ÷ sum of the two radii on that side, when that is below 1.
+- **Inner corners are elliptical:** each inner corner's radius is the outer radius minus
+  the adjacent border width, along each axis, so a corner between a thin and a thick side
+  is an ellipse. An inner radius larger than its inner side is cut by the other edge.
+- **Side colors meet on the corner's diagonal**, the line from the outer corner to the
+  inner one, anti-aliased over one pixel. A transparent side shows the background.
+- **Widths snap:** at rest a border is a whole number of device pixels, at least one when
+  nonzero, and layout uses the snapped width, as browsers do, so a 1 px border is 0.8 px
+  of layout at 1.25×. A moving node draws its border unsnapped.
+- **Transitions:** `transition(border_color)` animates every side's color (a spring each),
+  `transition(corner_radius)` every corner (one spring). The longhands have no transitions
+  of their own.
+- **Drawing:** a box with one radius, width and color uses the cheap rounded-rect shader
+  (`rrect.wgsl`, 64-byte instances), as before; any other goes to `border.wgsl` (128-byte
+  instances), which computes the per-corner outer edge, the elliptical inner edge and the
+  side of each pixel.
+
+**Compared with Chrome.** `tools/border-compare/compare.py` writes the boxes of the
+`paint_border_sides` golden as HTML, screenshots them with the pinned
+`chrome-headless-shell` 156.0.8078.80, and puts each next to the golden (Chrome, Axe, and
+their difference × 4):
+
+| Scale | Pixels differing by more than 8 levels (of 255) | Largest difference |
+| --- | --- | --- |
+| 1.0 | 704 of 51,200 (1.38%) | 118 |
+| 1.25 | 888 of 80,000 (1.11%) | 114 |
+| 1.5 | 1,107 of 115,200 (0.96%) | 121 |
+
+![Chrome, Axe and their difference at 1.5x](images/border-compare@150.png)
+
+([1.0×](images/border-compare@100.png), [1.25×](images/border-compare@125.png))
+
+The shapes, colors and seams match. The differences are anti-aliasing along curves and
+corner seams (one-pixel edges, where Chrome uses Skia's analytic coverage and Axe a
+one-pixel distance ramp), plus one or two pixels where an inner curve between a 1 px and a
+16 px side ends along the thin side.
+
 ## Limitations
 
-- One border width and color for all four sides, and one radius for all four corners.
 - Clipping is rectangular; rounded clips need masks in the layers.
 - Layers are drawn again every frame. Caching them comes with damage tracking.
 - No z-index: paint order is tree order.

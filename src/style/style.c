@@ -623,6 +623,18 @@ static bool slot_of(uint16_t prop, size_t *off, size_t *size) {
     case UI_STYLE_BORDER_COLOR: return AT(border_color);
     case UI_STYLE_BORDER_WIDTH: return AT(border_width);
     case UI_STYLE_CORNER_RADIUS: return AT(corner_radius);
+    case UI_STYLE_BORDER_TOP_WIDTH:
+    case UI_STYLE_BORDER_RIGHT_WIDTH:
+    case UI_STYLE_BORDER_BOTTOM_WIDTH:
+    case UI_STYLE_BORDER_LEFT_WIDTH: return AT(border_width[prop - UI_STYLE_BORDER_TOP_WIDTH]);
+    case UI_STYLE_BORDER_TOP_COLOR:
+    case UI_STYLE_BORDER_RIGHT_COLOR:
+    case UI_STYLE_BORDER_BOTTOM_COLOR:
+    case UI_STYLE_BORDER_LEFT_COLOR: return AT(border_color[prop - UI_STYLE_BORDER_TOP_COLOR]);
+    case UI_STYLE_CORNER_RADIUS_TOP_LEFT:
+    case UI_STYLE_CORNER_RADIUS_TOP_RIGHT:
+    case UI_STYLE_CORNER_RADIUS_BOTTOM_RIGHT:
+    case UI_STYLE_CORNER_RADIUS_BOTTOM_LEFT: return AT(corner_radius[prop - UI_STYLE_CORNER_RADIUS_TOP_LEFT]);
     case UI_STYLE_OPACITY: return AT(opacity);
     case UI_STYLE_CLIP: return AT(clip);
     case UI_STYLE_TEXT_COLOR: return AT(text.color);
@@ -673,7 +685,15 @@ static bool slot_of(uint16_t prop, size_t *off, size_t *size) {
     case UI_STYLE_PADDING_START:
     case UI_STYLE_PADDING_END:
     case UI_STYLE_INSET_START:
-    case UI_STYLE_INSET_END: return false; // logical sides map to physical ones (ui_style_compute)
+    case UI_STYLE_INSET_END:
+    case UI_STYLE_BORDER_START_WIDTH:
+    case UI_STYLE_BORDER_END_WIDTH:
+    case UI_STYLE_BORDER_START_COLOR:
+    case UI_STYLE_BORDER_END_COLOR:
+    case UI_STYLE_CORNER_RADIUS_TOP_START:
+    case UI_STYLE_CORNER_RADIUS_TOP_END:
+    case UI_STYLE_CORNER_RADIUS_BOTTOM_START:
+    case UI_STYLE_CORNER_RADIUS_BOTTOM_END: return false; // logical: mapped (ui_style_compute)
     }
 #undef AT
     return false;
@@ -745,9 +765,29 @@ static uint32_t apply(const ui_style_view *view, const ui_style_entry *e, const 
     }
     switch ((ui_style_prop)e->prop) {
     case UI_STYLE_BACKGROUND_COLOR: ui_color_from_wire(v.color, c->background); break;
-    case UI_STYLE_BORDER_COLOR: ui_color_from_wire(v.color, c->border_color); break;
-    case UI_STYLE_BORDER_WIDTH: c->border_width = v.number; break;
-    case UI_STYLE_CORNER_RADIUS: c->corner_radius = v.number; break;
+    case UI_STYLE_BORDER_COLOR:
+        for (int i = 0; i < 4; i++) ui_color_from_wire(v.color, c->border_color[i]);
+        break;
+    case UI_STYLE_BORDER_WIDTH:
+        for (int i = 0; i < 4; i++) c->border_width[i] = v.number;
+        break;
+    case UI_STYLE_CORNER_RADIUS:
+        for (int i = 0; i < 4; i++) c->corner_radius[i] = v.number;
+        break;
+    case UI_STYLE_BORDER_TOP_WIDTH:
+    case UI_STYLE_BORDER_RIGHT_WIDTH:
+    case UI_STYLE_BORDER_BOTTOM_WIDTH:
+    case UI_STYLE_BORDER_LEFT_WIDTH: c->border_width[e->prop - UI_STYLE_BORDER_TOP_WIDTH] = v.number; break;
+    case UI_STYLE_BORDER_TOP_COLOR:
+    case UI_STYLE_BORDER_RIGHT_COLOR:
+    case UI_STYLE_BORDER_BOTTOM_COLOR:
+    case UI_STYLE_BORDER_LEFT_COLOR:
+        ui_color_from_wire(v.color, c->border_color[e->prop - UI_STYLE_BORDER_TOP_COLOR]);
+        break;
+    case UI_STYLE_CORNER_RADIUS_TOP_LEFT:
+    case UI_STYLE_CORNER_RADIUS_TOP_RIGHT:
+    case UI_STYLE_CORNER_RADIUS_BOTTOM_RIGHT:
+    case UI_STYLE_CORNER_RADIUS_BOTTOM_LEFT: c->corner_radius[e->prop - UI_STYLE_CORNER_RADIUS_TOP_LEFT] = v.number; break;
     case UI_STYLE_OPACITY: c->opacity = v.number; break;
     case UI_STYLE_CLIP: c->clip = v.keyword == UI_CLIP_RECT; break;
     case UI_STYLE_TEXT_COLOR: ui_color_from_wire(v.color, c->text.color); break;
@@ -765,26 +805,43 @@ static uint32_t apply(const ui_style_view *view, const ui_style_entry *e, const 
     return APPLIED;
 }
 
-// Logical sides (docs/styles.md, "Logical properties"): margins, padding and insets have a
-// start and an end, which are the left and right sides in a left-to-right node and the
-// right and left in a right-to-left one. Groups: 0 margin, 1 padding, 2 inset.
+// Logical sides (docs/styles.md, "Logical properties"): the inline sides of margins,
+// padding, insets, border widths and colors, and the top and bottom pairs of corners, have
+// a start and an end: left and right in a left-to-right node, right and left in a
+// right-to-left one. Each group pairs a left and a right property with its logical ones.
+enum { GROUPS = 7 };
+static const uint16_t GROUP_START[GROUPS] = {
+    UI_STYLE_MARGIN_START, UI_STYLE_PADDING_START, UI_STYLE_INSET_START, UI_STYLE_BORDER_START_WIDTH,
+    UI_STYLE_BORDER_START_COLOR, UI_STYLE_CORNER_RADIUS_TOP_START, UI_STYLE_CORNER_RADIUS_BOTTOM_START};
+static const uint16_t GROUP_END[GROUPS] = {
+    UI_STYLE_MARGIN_END, UI_STYLE_PADDING_END, UI_STYLE_INSET_END, UI_STYLE_BORDER_END_WIDTH,
+    UI_STYLE_BORDER_END_COLOR, UI_STYLE_CORNER_RADIUS_TOP_END, UI_STYLE_CORNER_RADIUS_BOTTOM_END};
+static const uint16_t GROUP_LEFT[GROUPS] = {
+    UI_STYLE_MARGIN_LEFT, UI_STYLE_PADDING_LEFT, UI_STYLE_LEFT, UI_STYLE_BORDER_LEFT_WIDTH,
+    UI_STYLE_BORDER_LEFT_COLOR, UI_STYLE_CORNER_RADIUS_TOP_LEFT, UI_STYLE_CORNER_RADIUS_BOTTOM_LEFT};
+static const uint16_t GROUP_RIGHT[GROUPS] = {
+    UI_STYLE_MARGIN_RIGHT, UI_STYLE_PADDING_RIGHT, UI_STYLE_RIGHT, UI_STYLE_BORDER_RIGHT_WIDTH,
+    UI_STYLE_BORDER_RIGHT_COLOR, UI_STYLE_CORNER_RADIUS_TOP_RIGHT, UI_STYLE_CORNER_RADIUS_BOTTOM_RIGHT};
+// The shorthand that sets both sides of a group too (0: none).
+static const uint16_t GROUP_BOTH[GROUPS] = {0, 0, 0, UI_STYLE_BORDER_WIDTH, UI_STYLE_BORDER_COLOR,
+                                            UI_STYLE_CORNER_RADIUS, UI_STYLE_CORNER_RADIUS};
+
+// The logical side (0 start, 1 end) of a property, and its group; -1 if not logical.
 static int logical_side(uint16_t prop, int *group) {
-    if (prop < UI_STYLE_MARGIN_START || prop > UI_STYLE_INSET_END) return -1;
-    *group = (prop - UI_STYLE_MARGIN_START) / 2;
-    return (prop - UI_STYLE_MARGIN_START) % 2; // 0 start, 1 end
-}
-
-static const uint16_t GROUP_LEFT[3] = {UI_STYLE_MARGIN_LEFT, UI_STYLE_PADDING_LEFT, UI_STYLE_LEFT};
-static const uint16_t GROUP_RIGHT[3] = {UI_STYLE_MARGIN_RIGHT, UI_STYLE_PADDING_RIGHT, UI_STYLE_RIGHT};
-
-// The physical side (0 left, 1 right) of a left or right property, and its group.
-static int physical_side(uint16_t prop, int *group) {
-    for (int g = 0; g < 3; g++) {
+    for (int g = 0; g < GROUPS; g++) {
         *group = g;
-        if (prop == GROUP_LEFT[g]) return 0;
-        if (prop == GROUP_RIGHT[g]) return 1;
+        if (prop == GROUP_START[g]) return 0;
+        if (prop == GROUP_END[g]) return 1;
     }
     return -1;
+}
+
+// Marks the physical sides (0 left, 1 right) an applied property set, in every group.
+static void note_physical(uint16_t prop, uint32_t at, uint32_t physical_at[GROUPS][2]) {
+    for (int g = 0; g < GROUPS; g++) {
+        if (prop == GROUP_LEFT[g] || prop == GROUP_BOTH[g]) physical_at[g][0] = at;
+        if (prop == GROUP_RIGHT[g] || prop == GROUP_BOTH[g]) physical_at[g][1] = at;
+    }
 }
 
 typedef struct block_ref {
@@ -848,8 +905,8 @@ uint32_t ui_style_compute(const ui_style_view *v, const ui_style_entry *const *l
     // Per group and side: the position of the last physical entry that set it, and the last
     // logical entry with a value (start, end). Logical ones are mapped once the node's
     // direction is known, and win where they came later.
-    uint32_t physical_at[3][2] = {{0}}, logical_at[3][2] = {{0}}; // position + 1; 0: none
-    const ui_style_entry *logical[3][2] = {{NULL}};
+    uint32_t physical_at[GROUPS][2] = {{0}}, logical_at[GROUPS][2] = {{0}}; // position + 1; 0: none
+    const ui_style_entry *logical[GROUPS][2] = {{NULL}};
     for (uint32_t i = 0; i < count; i++) {
         const ui_style_entry *e = list[i];
         int group, side = logical_side(e->prop, &group);
@@ -863,10 +920,10 @@ uint32_t ui_style_compute(const ui_style_view *v, const ui_style_entry *const *l
         }
         uint32_t r = apply(v, e, parent, out, &set);
         flags |= r & UI_STYLE_INHERITS_OTHER;
-        if ((r & APPLIED) && (side = physical_side(e->prop, &group)) >= 0) physical_at[group][side] = i + 1;
+        if (r & APPLIED) note_physical(e->prop, i + 1, physical_at);
     }
     bool rtl = out->text.direction == UI_DIRECTION_RTL;
-    for (int g = 0; g < 3; g++) {
+    for (int g = 0; g < GROUPS; g++) {
         for (int side = 0; side < 2; side++) {
             if (!logical[g][side]) continue;
             int physical = side ^ rtl; // start: left in ltr, right in rtl

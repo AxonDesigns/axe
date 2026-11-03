@@ -16,6 +16,7 @@
 #define MODULE "render"
 #define RECT_STRIDE 64u  // sizeof(ui_dl_rect): rect, params, color, border color
 #define GLYPH_STRIDE 48u // sizeof(ui_dl_glyph): rect, uv, color
+#define BORDER_STRIDE 128u // sizeof(ui_dl_border): rect, radii, widths, color, 4 side colors
 #define MAX_PIPELINES 4u
 // Each render pass reads its globals at its own offset of one uniform buffer: the target's,
 // then one per layer of the display list.
@@ -26,6 +27,7 @@
 
 static_assert(sizeof(ui_dl_rect) == RECT_STRIDE, "instance layout must match ui_dl_rect");
 static_assert(sizeof(ui_dl_glyph) == GLYPH_STRIDE, "instance layout must match ui_dl_glyph");
+static_assert(sizeof(ui_dl_border) == BORDER_STRIDE, "instance layout must match ui_dl_border");
 
 static const char rrect_wgsl[] = {
 #embed "shaders/rrect.wgsl"
@@ -36,8 +38,11 @@ static const char glyph_wgsl[] = {
 static const char composite_wgsl[] = {
 #embed "shaders/composite.wgsl"
     , 0};
+static const char border_wgsl[] = {
+#embed "shaders/border.wgsl"
+    , 0};
 
-typedef enum pipeline_kind { PIPE_RECT, PIPE_GLYPH, PIPE_COMPOSITE } pipeline_kind;
+typedef enum pipeline_kind { PIPE_RECT, PIPE_GLYPH, PIPE_COMPOSITE, PIPE_BORDER } pipeline_kind;
 
 typedef struct render_surface {
     bool used;
@@ -61,6 +66,8 @@ typedef struct render_surface {
     uint64_t instance_bytes;
     WGPUBuffer glyph_instances;
     uint64_t glyph_instance_bytes;
+    WGPUBuffer border_instances;
+    uint64_t border_instance_bytes;
 } render_surface;
 
 // One atlas page texture. The core decides what goes where; this side only uploads.
@@ -76,6 +83,7 @@ typedef struct pipeline_entry {
     WGPURenderPipeline rect;
     WGPURenderPipeline glyph;
     WGPURenderPipeline composite;
+    WGPURenderPipeline border;
 } pipeline_entry;
 
 // An offscreen texture an opacity group draws into, reused across layers and frames.
@@ -100,6 +108,7 @@ struct ui_render {
     WGPUShaderModule shader;
     WGPUShaderModule glyph_shader;
     WGPUShaderModule composite_shader;
+    WGPUShaderModule border_shader;
     WGPUBindGroupLayout bind_group_layout;  // group 0: globals
     WGPUBindGroupLayout atlas_layout;       // group 1 of the glyph pipeline: one atlas page
     WGPUPipelineLayout pipeline_layout;
@@ -217,10 +226,11 @@ static void wait_request(ui_render *r, const request_result *res) {
 
 static ui_result create_pipeline(ui_render *r, WGPUTextureFormat format, pipeline_kind kind,
                                  WGPURenderPipeline *out) {
-    // Rects and composites read ui_dl_rect records (4 vec4s); glyphs read ui_dl_glyph (3).
+    // Rects and composites read ui_dl_rect records (4 vec4s); glyphs read ui_dl_glyph (3);
+    // borders read ui_dl_border (8).
     bool glyph = kind == PIPE_GLYPH;
-    uint32_t vec4s = glyph ? 3 : 4;
-    WGPUVertexAttribute attributes[4];
+    uint32_t vec4s = glyph ? 3 : kind == PIPE_BORDER ? 8 : 4;
+    WGPUVertexAttribute attributes[8];
     for (uint32_t i = 0; i < vec4s; i++) {
         attributes[i] = WGPU_VERTEX_ATTRIBUTE_INIT;
         attributes[i].format = WGPUVertexFormat_Float32x4;
@@ -229,13 +239,14 @@ static ui_result create_pipeline(ui_render *r, WGPUTextureFormat format, pipelin
     }
     WGPUVertexBufferLayout instance_layout = WGPU_VERTEX_BUFFER_LAYOUT_INIT;
     instance_layout.stepMode = WGPUVertexStepMode_Instance;
-    instance_layout.arrayStride = glyph ? GLYPH_STRIDE : RECT_STRIDE;
+    instance_layout.arrayStride = glyph ? GLYPH_STRIDE : kind == PIPE_BORDER ? BORDER_STRIDE : RECT_STRIDE;
     instance_layout.attributeCount = vec4s;
     instance_layout.attributes = attributes;
     WGPUShaderModule module = kind == PIPE_RECT    ? r->shader
                               : kind == PIPE_GLYPH ? r->glyph_shader
+                              : kind == PIPE_BORDER ? r->border_shader
                                                    : r->composite_shader;
-    static const char *const labels[] = {"rrect", "glyph", "composite"};
+    static const char *const labels[] = {"rrect", "glyph", "composite", "border"};
 
     WGPUBlendState blend = WGPU_BLEND_STATE_INIT;
     blend.color = (WGPUBlendComponent){WGPUBlendOperation_Add, WGPUBlendFactor_One,
@@ -255,7 +266,7 @@ static ui_result create_pipeline(ui_render *r, WGPUTextureFormat format, pipelin
     WGPURenderPipelineDescriptor desc = WGPU_RENDER_PIPELINE_DESCRIPTOR_INIT;
     desc.label = sv(labels[kind]);
     // Glyphs and composites both read a texture in group 1.
-    desc.layout = kind == PIPE_RECT ? r->pipeline_layout : r->glyph_pipeline_layout;
+    desc.layout = kind == PIPE_RECT || kind == PIPE_BORDER ? r->pipeline_layout : r->glyph_pipeline_layout;
     desc.vertex.module = module;
     desc.vertex.entryPoint = sv("vs_main");
     desc.vertex.bufferCount = 1;
@@ -270,6 +281,7 @@ static ui_result create_pipelines(ui_render *r, WGPUTextureFormat format, pipeli
     *e = (pipeline_entry){.format = format};
     ui_result res = create_pipeline(r, format, PIPE_RECT, &e->rect);
     if (res == UI_OK) res = create_pipeline(r, format, PIPE_GLYPH, &e->glyph);
+    if (res == UI_OK) res = create_pipeline(r, format, PIPE_BORDER, &e->border);
     if (res == UI_OK) res = create_pipeline(r, format, PIPE_COMPOSITE, &e->composite);
     return res;
 }
@@ -358,7 +370,10 @@ static ui_result init_device(ui_render *r) {
     wgsl.code = sv(composite_wgsl);
     shader_desc.label = sv("composite.wgsl");
     r->composite_shader = wgpuDeviceCreateShaderModule(r->device, &shader_desc);
-    if (!r->shader || !r->glyph_shader || !r->composite_shader) return UI_ERR_GPU;
+    wgsl.code = sv(border_wgsl);
+    shader_desc.label = sv("border.wgsl");
+    r->border_shader = wgpuDeviceCreateShaderModule(r->device, &shader_desc);
+    if (!r->shader || !r->glyph_shader || !r->composite_shader || !r->border_shader) return UI_ERR_GPU;
 
     WGPUBindGroupLayoutEntry entry = WGPU_BIND_GROUP_LAYOUT_ENTRY_INIT;
     entry.binding = 0;
@@ -418,6 +433,7 @@ static void release_surface(render_surface *s) {
     if (s->uniforms) wgpuBufferRelease(s->uniforms);
     if (s->instances) wgpuBufferRelease(s->instances);
     if (s->glyph_instances) wgpuBufferRelease(s->glyph_instances);
+    if (s->border_instances) wgpuBufferRelease(s->border_instances);
     if (s->offscreen_view) wgpuTextureViewRelease(s->offscreen_view);
     if (s->offscreen) wgpuTextureRelease(s->offscreen);
     if (s->surface) {
@@ -815,11 +831,15 @@ static ui_result encode(ui_render *r, render_surface *s, const ui_display_list *
 
     uint64_t rect_bytes = (uint64_t)dl->rect_count * RECT_STRIDE;
     uint64_t glyph_bytes = (uint64_t)dl->glyph_count * GLYPH_STRIDE;
+    uint64_t border_bytes = (uint64_t)dl->border_count * BORDER_STRIDE;
     res = upload_instances(r, &s->instances, &s->instance_bytes, dl->rects, rect_bytes,
                            "rect instances");
     if (res == UI_OK)
         res = upload_instances(r, &s->glyph_instances, &s->glyph_instance_bytes, dl->glyphs,
                                glyph_bytes, "glyph instances");
+    if (res == UI_OK && border_bytes)
+        res = upload_instances(r, &s->border_instances, &s->border_instance_bytes, dl->borders,
+                               border_bytes, "border instances");
     if (res != UI_OK) {
         free(stack);
         return res;
@@ -885,6 +905,12 @@ static ui_result encode(ui_render *r, render_surface *s, const ui_display_list *
             if (ps.page != b->page) {
                 wgpuRenderPassEncoderSetBindGroup(ps.pass, 1, ap->bind_group, 0, NULL);
                 ps.page = b->page;
+            }
+        } else if (b->kind == UI_DL_BORDERS) {
+            if (ps.bound != PIPE_BORDER) {
+                wgpuRenderPassEncoderSetPipeline(ps.pass, pipes->border);
+                wgpuRenderPassEncoderSetVertexBuffer(ps.pass, 0, s->border_instances, 0, border_bytes);
+                ps.bound = PIPE_BORDER;
             }
         } else if (ps.bound != PIPE_RECT) {
             wgpuRenderPassEncoderSetPipeline(ps.pass, pipes->rect);
@@ -1129,6 +1155,7 @@ static void release_all(ui_render *r) {
     for (uint32_t i = 0; i < r->pipeline_count; i++) {
         if (r->pipelines[i].rect) wgpuRenderPipelineRelease(r->pipelines[i].rect);
         if (r->pipelines[i].glyph) wgpuRenderPipelineRelease(r->pipelines[i].glyph);
+        if (r->pipelines[i].border) wgpuRenderPipelineRelease(r->pipelines[i].border);
         if (r->pipelines[i].composite) wgpuRenderPipelineRelease(r->pipelines[i].composite);
     }
     for (uint32_t i = 0; i < r->layer_count; i++) release_layer_texture(&r->layers[i]);
@@ -1143,6 +1170,7 @@ static void release_all(ui_render *r) {
     if (r->shader) wgpuShaderModuleRelease(r->shader);
     if (r->glyph_shader) wgpuShaderModuleRelease(r->glyph_shader);
     if (r->composite_shader) wgpuShaderModuleRelease(r->composite_shader);
+    if (r->border_shader) wgpuShaderModuleRelease(r->border_shader);
     if (r->queue) wgpuQueueRelease(r->queue);
     if (r->device) {
         wgpuDeviceDestroy(r->device);
@@ -1157,6 +1185,7 @@ static void release_all(ui_render *r) {
     r->shader = NULL;
     r->glyph_shader = NULL;
     r->composite_shader = NULL;
+    r->border_shader = NULL;
     r->queue = NULL;
     r->device = NULL;
     r->adapter = NULL;
