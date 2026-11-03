@@ -627,6 +627,47 @@ static void commit(ui_core *c, ui_core_surface *s, uint64_t now) {
     ui_wire_event_frame_committed(&c->events, s->handle, dl->frame_id, now);
 }
 
+// True if the root's layout is what its surface's next frame would lay out: nothing under
+// it changed, and the surface's size and scale are those it was laid out for.
+static bool layout_current(ui_core *c, const ui_scene_root *root) {
+    for (uint32_t i = 0; i < UI_MAX_SURFACES; i++) {
+        const ui_core_surface *s = &c->surfaces[i];
+        if (ui_handle_is_null(s->handle) || !ui_handle_eq(s->handle, root->surface)) continue;
+        return !root->layout_dirty && root->layout_size[0] == (float)s->config.logical_width &&
+               root->layout_size[1] == (float)s->config.logical_height &&
+               root->layout_scale == (float)s->config.scale_120 / 120.f;
+    }
+    return false;
+}
+
+// Answers request_layout ops whose node's layout is current: right after the frame that
+// applied them laid the surface out, or at once when nothing under the surface changed (a
+// surface that didn't draw this step). The others wait for their surface's next frame;
+// requests never make a frame themselves. Answers keep the order of the requests.
+static void answer_requests(ui_core *c) {
+    ui_scene *sc = &c->scene;
+    if (!sc->request_count) return; // also keeps memmove away from a NULL array
+    uint32_t kept = 0, i = 0;
+    for (; i < sc->request_count; i++) {
+        ui_scene_request q = sc->requests[i];
+        ui_node *n = ui_scene_node(sc, q.node);
+        if (n && !layout_current(c, &sc->roots[n->root])) {
+            sc->requests[kept++] = q;
+            continue;
+        }
+        float rects[4][4];
+        ui_handle surface;
+        bool live = ui_scene_measure(sc, q.node, rects, &surface);
+        if (ui_wire_event_layout_measured(&c->events, q.id, q.node, surface,
+                                          live ? UI_OK : UI_ERR_STALE_HANDLE, rects) != UI_OK) {
+            UI_ERROR(c->log, MODULE, "out of memory answering request_layout");
+            break; // retried at the next frame, in order
+        }
+    }
+    memmove(sc->requests + kept, sc->requests + i, (sc->request_count - i) * sizeof *sc->requests);
+    sc->request_count = kept + (sc->request_count - i);
+}
+
 static void frame(ui_core *c) {
     // One animation time for the whole frame: the earliest predicted present among the
     // surfaces drawing now. Per-surface sampling arrives with multi-monitor support.
@@ -690,6 +731,7 @@ static void frame(ui_core *c) {
         }
     }
     if (busy) ui_atlas_end_frame(c->atlas);
+    if (busy) answer_requests(c);
     note_deferred(c);
     release_prepared_glyphs(c);
     c->stats.text_invalid_sequences = c->scene.stats.text_invalid;

@@ -472,8 +472,8 @@ static void test_styles(void) {
 }
 
 static void test_events(void) {
-    // A newer core appended fields to frame_committed and timer_fired: they are skipped, and
-    // the events after them still read correctly.
+    // A newer core appended fields to frame_committed, timer_fired and layout_measured: they
+    // are skipped, and the events after them still read correctly.
     ui_wire_buf b;
     ui_wire_buf_init(&b, UI_WIRE_MAGIC_EVENT);
     uint8_t *p = emit(&b, UI_EVENT_FRAME_COMMITTED, UI_WIRE_SIZE_FRAME_COMMITTED + 8);
@@ -488,6 +488,13 @@ static void test_events(void) {
     p = ui_wire_put_u64(p, 5);
     ui_wire_put_u64(p, 6);
     CHECK(ui_wire_event_surface_close(&b, surface) == UI_OK);
+    p = emit(&b, UI_EVENT_LAYOUT_MEASURED, UI_WIRE_SIZE_LAYOUT_MEASURED + 12);
+    memset(p, FILL, UI_WIRE_SIZE_LAYOUT_MEASURED + 12);
+    p = ui_wire_put_u32(p, 9);
+    p = ui_wire_put_u32(p, (uint32_t)UI_OK);
+    p = ui_wire_put_handle(p, node);
+    p = ui_wire_put_handle(p, surface);
+    for (int i = 0; i < 16; i++) p = ui_wire_put_f32(p, (float)i);
     size_t n;
     uint8_t *bytes = ui_wire_buf_finish(&b, &n);
     ui_event_reader rd;
@@ -498,6 +505,9 @@ static void test_events(void) {
     CHECK(ui_event_next(&rd, &ev) == UI_OK && ev.type == UI_EVENT_TIMER_FIRED);
     CHECK(ev.timer_fired.id == 7 && ev.timer_fired.deadline_ns == 5 && ev.timer_fired.now_ns == 6);
     CHECK(ui_event_next(&rd, &ev) == UI_OK && ev.type == UI_EVENT_SURFACE_CLOSE_REQUESTED);
+    CHECK(ui_event_next(&rd, &ev) == UI_OK && ev.type == UI_EVENT_LAYOUT_MEASURED);
+    CHECK(ev.layout_measured.request_id == 9 && ui_handle_eq(ev.layout_measured.node, node) &&
+          ev.layout_measured.presentation_in_surface.height == 15);
     CHECK(ui_event_next(&rd, &ev) == UI_ERR_END);
     free(bytes);
 

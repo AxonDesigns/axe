@@ -74,6 +74,29 @@ exactly what `set_rect` always did, so code written before layout keeps working.
   next layout, and the measurement op, see it. A spring starts at the animation time of the
   frame whose layout changed the rect, and later frames advance it.
 
+## Measurement
+
+`request_layout(node, id)` asks where a node is; `layout_measured` answers with the same id
+and four rects in logical px:
+
+| Rect | Is |
+| --- | --- |
+| `layout_in_parent` | the layout rect, relative to the parent's border box |
+| `layout_in_surface` | the layout rect, relative to the surface |
+| `presentation_in_parent` | where it is drawn, relative to the parent's presentation rect |
+| `presentation_in_surface` | where it is drawn, relative to the surface |
+
+- **The answer comes in the frame that applies the request**, right after that frame's
+  layout, so it reflects every command applied before it (and in the same buffer). A
+  surface that doesn't draw that frame has nothing to lay out, and is answered at once.
+- **A request never makes a frame**: it doesn't mark anything dirty.
+- **The two kinds differ only while a layout animation runs.** The layout rect is where the
+  node is going; the presentation rect is where it is now, which a parent's animation also
+  moves.
+- **A stale handle** is answered with `UI_ERR_STALE_HANDLE`, zero rects and a null surface,
+  so logic waiting for an answer always gets one. A node with `display: none`, or under
+  one, is answered with zero rects.
+
 ## The algorithm
 
 `src/layout/flex.c` follows CSS Flexible Box Layout Level 1, §9:

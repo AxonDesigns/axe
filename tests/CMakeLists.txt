@@ -203,3 +203,12 @@ target_link_libraries(test_layout_anim PRIVATE ui m)
 ui_target_warnings(test_layout_anim)
 add_test(NAME layout_anim COMMAND test_layout_anim)
 set_tests_properties(layout_anim PROPERTIES ENVIRONMENT "UI_GPU=software" TIMEOUT 120)
+
+# Measurement: request_layout and layout_measured.
+add_executable(test_measure test_measure.c)
+target_include_directories(test_measure PRIVATE ${PROJECT_SOURCE_DIR}/src)
+target_compile_definitions(test_measure PRIVATE _DEFAULT_SOURCE)
+target_link_libraries(test_measure PRIVATE ui m)
+ui_target_warnings(test_measure)
+add_test(NAME measure COMMAND test_measure)
+set_tests_properties(measure PROPERTIES ENVIRONMENT "UI_GPU=software" TIMEOUT 120)

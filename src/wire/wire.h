@@ -43,6 +43,8 @@ enum {
     UI_WIRE_SIZE_SET_TOKEN_HEADER = 4,   // id u32; one entry (property 0)
     UI_WIRE_SIZE_SET_STATE = 16,         // node, mask u32, value u32
     UI_WIRE_SIZE_MOVE_NODE = 24,         // node, parent, before (null: append)
+    UI_WIRE_SIZE_REQUEST_LAYOUT = 12,    // node, request_id u32
+    UI_WIRE_SIZE_LAYOUT_MEASURED = 88,   // request_id u32, result u32, node, surface, 4 rects
 };
 
 // A style entry: u16 property, u8 kind, u8 words (its size in 4-byte words, header
@@ -186,6 +188,10 @@ ui_result ui_wire_event_surface_resized(ui_wire_buf *b, ui_handle surface, float
                                         float height, uint32_t scale_120);
 ui_result ui_wire_event_surface_close(ui_wire_buf *b, ui_handle surface);
 ui_result ui_wire_event_font_loaded(ui_wire_buf *b, uint32_t id, ui_result result);
+// rects: layout in parent, layout in surface, presentation in parent, presentation in
+// surface; each x, y, width, height.
+ui_result ui_wire_event_layout_measured(ui_wire_buf *b, uint32_t request_id, ui_handle node,
+                                        ui_handle surface, ui_result result, const float rects[4][4]);
 ui_result ui_wire_event_timer_fired(ui_wire_buf *b, uint32_t id, uint64_t deadline_ns,
                                     uint64_t now_ns);
 

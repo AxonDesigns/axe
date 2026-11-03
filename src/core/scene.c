@@ -55,6 +55,7 @@ void ui_scene_destroy(ui_scene *s) {
     free(s->style_dirty);
     free(s->scratch);
     free(s->levels);
+    free(s->requests);
     memset(s, 0, sizeof *s);
 }
 
@@ -199,6 +200,7 @@ ui_result ui_scene_validate(const uint8_t *data, size_t size) {
         case UI_OP_DESTROY_STYLE: expected = UI_WIRE_SIZE_DESTROY_STYLE; break;
         case UI_OP_SET_STATE: expected = UI_WIRE_SIZE_SET_STATE; break;
         case UI_OP_MOVE_NODE: expected = UI_WIRE_SIZE_MOVE_NODE; break;
+        case UI_OP_REQUEST_LAYOUT: expected = UI_WIRE_SIZE_REQUEST_LAYOUT; break;
         case UI_OP_SET_STYLES: {
             if (op.payload_size < UI_WIRE_SIZE_SET_STYLES_HEADER) return UI_ERR_MALFORMED;
             uint32_t header = ui_wire_set_styles_header(op.payload);
@@ -407,6 +409,7 @@ static bool apply_op(ui_scene *s, const ui_wire_op *op, uint64_t now_ns) {
     case UI_OP_SET_PROPS:
     case UI_OP_SET_STATE:
     case UI_OP_MOVE_NODE:
+    case UI_OP_REQUEST_LAYOUT:
     case UI_OP_DESTROY_NODE:
     case UI_OP_SET_RECT:
     case UI_OP_SET_CORNER_RADIUS:
@@ -418,12 +421,13 @@ static bool apply_op(ui_scene *s, const ui_wire_op *op, uint64_t now_ns) {
         UI_DEBUG_REPORT(s->log, MODULE, "dropped unknown op %u", op->opcode);
         return false;
     }
-    // Every other known op addresses one node; a change marks that node's surface dirty.
+    // Every other known op addresses one node; a change marks that node's surface dirty. A
+    // layout request changes nothing: it never makes a frame.
     ui_handle h = ui_wire_get_handle(p);
     ui_node *n = node_of(s, h);
     uint32_t root = n ? n->root : 0;
     bool applied = apply_node_op(s, op, now_ns);
-    if (applied && n) s->roots[root].dirty = true;
+    if (applied && n && op->opcode != UI_OP_REQUEST_LAYOUT) s->roots[root].dirty = true;
     return applied;
 }
 
@@ -668,6 +672,13 @@ static bool apply_node_op(ui_scene *s, const ui_wire_op *op, uint64_t now_ns) {
     case UI_OP_MOVE_NODE:
         if (!n) return drop(s, "move_node", h);
         if (!apply_move(s, n, p)) return drop(s, "move_node (parent or sibling)", h);
+        return true;
+    case UI_OP_REQUEST_LAYOUT:
+        // Queued even for a stale handle: the logic waits for an answer either way.
+        if (ui_grow((void **)&s->requests, &s->request_capacity, s->request_count + 1, sizeof *s->requests) !=
+            UI_OK)
+            return drop(s, "request_layout (out of memory)", h);
+        s->requests[s->request_count++] = (ui_scene_request){h, ui_wire_get_u32(p + 8)};
         return true;
     case UI_OP_SET_STATE: {
         if (!n) return drop(s, "set_state", h);
@@ -929,6 +940,28 @@ void ui_scene_animate(ui_scene *s, uint64_t now_ns) {
 }
 
 ui_scene_root *ui_scene_root_of(ui_scene *s, ui_handle surface) { return find_root(s, surface); }
+
+bool ui_scene_measure(const ui_scene *s, ui_handle h, float rects[4][4], ui_handle *surface) {
+    memset(rects, 0, 16 * sizeof(float));
+    *surface = (ui_handle){0};
+    uint32_t slot = ui_handle_slot(h);
+    if (!ui_handle_table_valid(&s->handles, h)) return false;
+    const ui_node *n = &s->nodes[slot];
+    *surface = s->roots[n->root].surface;
+    for (uint32_t up = slot; up != UI_NO_SLOT; up = s->nodes[up].parent)
+        if (s->nodes[up].computed.layout.display == UI_DISPLAY_NONE) return true;
+    memcpy(rects[0], n->layout.rect, sizeof rects[0]);
+    memcpy(rects[2], n->rect, sizeof rects[2]);
+    memcpy(rects[1], rects[0], sizeof rects[1]);
+    memcpy(rects[3], rects[2], sizeof rects[3]);
+    for (uint32_t up = n->parent; up != UI_NO_SLOT; up = s->nodes[up].parent) {
+        rects[1][0] += s->nodes[up].layout.rect[0];
+        rects[1][1] += s->nodes[up].layout.rect[1];
+        rects[3][0] += s->nodes[up].rect[0];
+        rects[3][1] += s->nodes[up].rect[1];
+    }
+    return true;
+}
 
 ui_node *ui_scene_node(ui_scene *s, ui_handle h) { return node_of(s, h); }
 

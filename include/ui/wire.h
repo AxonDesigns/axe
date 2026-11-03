@@ -34,6 +34,7 @@ typedef enum ui_op {
     UI_OP_SET_TOKEN = 16,
     UI_OP_SET_STATE = 17,
     UI_OP_MOVE_NODE = 18,
+    UI_OP_REQUEST_LAYOUT = 19,
 } ui_op;
 
 // Animatable node properties and their component counts.
@@ -54,7 +55,13 @@ typedef enum ui_event_type {
     UI_EVENT_SURFACE_CLOSE_REQUESTED = 3,
     UI_EVENT_TIMER_FIRED = 4,
     UI_EVENT_FONT_LOADED = 5,
+    UI_EVENT_LAYOUT_MEASURED = 6,
 } ui_event_type;
+
+// A rectangle in logical pixels.
+typedef struct ui_rect {
+    float x, y, width, height;
+} ui_rect;
 
 typedef struct ui_event {
     ui_event_type type;
@@ -78,6 +85,19 @@ typedef struct ui_event {
             uint32_t id;          // the request id given to ui_cmd_load_font
             ui_result result;     // UI_OK, UI_ERR_IO (unreadable), UI_ERR_INVALID_ARGUMENT
         } font_loaded;
+        // The answer to ui_cmd_request_layout; `surface` is the node's surface (null when
+        // the handle is stale). The layout rect is where layout put the node; the
+        // presentation rect is where it is drawn, which differs while a layout animation
+        // runs. Each is given relative to the parent's border box (the parent's own layout or
+        // presentation rect) and to the surface. All four are zero for a node that isn't laid
+        // out: display none, or under a node that is.
+        struct {
+            uint32_t request_id;
+            ui_handle node;
+            ui_result result; // UI_OK, or UI_ERR_STALE_HANDLE (rects zero)
+            ui_rect layout_in_parent, layout_in_surface;
+            ui_rect presentation_in_parent, presentation_in_surface;
+        } layout_measured;
     };
 } ui_event;
 
@@ -101,6 +121,10 @@ ui_result ui_cmd_destroy_node(ui_cmd_writer *w, ui_handle node);
 // Moves a node (with its subtree) under `parent` (a node, or a surface for a root-level
 // node), before sibling `before`; a null `before` appends. Reorders when the parent stays.
 ui_result ui_cmd_move_node(ui_cmd_writer *w, ui_handle node, ui_handle parent, ui_handle before);
+// Asks for the node's layout and presentation rects, answered by a UI_EVENT_LAYOUT_MEASURED
+// with this id once the frame that applies the request has laid the node out (at once when
+// its layout is already current). Never causes a frame by itself.
+ui_result ui_cmd_request_layout(ui_cmd_writer *w, ui_handle node, uint32_t request_id);
 ui_result ui_cmd_set_rect(ui_cmd_writer *w, ui_handle node, float x, float y, float width,
                           float height);
 ui_result ui_cmd_set_corner_radius(ui_cmd_writer *w, ui_handle node, float radius);

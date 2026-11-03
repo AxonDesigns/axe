@@ -126,6 +126,12 @@ typedef struct ui_scene_text {
 
 typedef struct ui_build_level ui_build_level;
 
+// A request_layout op awaiting its answer (the handle may have gone stale since).
+typedef struct ui_scene_request {
+    ui_handle node;
+    uint32_t id;
+} ui_scene_request;
+
 typedef struct ui_scene {
     const ui_logger *log;
     ui_handle_table handles;
@@ -145,6 +151,8 @@ typedef struct ui_scene {
     void *timer_user;
     ui_scene_font_fn font_fn;
     void *font_user;
+    ui_scene_request *requests; // request_layout ops in the order applied; the core answers
+    uint32_t request_count, request_capacity; // and removes them
 } ui_scene;
 
 void ui_scene_init(ui_scene *s, const ui_logger *log);
@@ -201,6 +209,12 @@ void ui_layout_root(ui_scene *s, uint32_t root, float width, float height, float
 // Called by layout for a node whose layout rect changed, or that needs placing: what is
 // drawn follows, through the node's layout transition when it has one.
 void ui_scene_place(ui_scene *s, uint32_t slot, uint64_t now_ns);
+
+// The rects a layout_measured event reports for a node: its layout rect and its
+// presentation rect, each relative to its parent and to the surface (x, y, width, height).
+// All zero for a node that isn't laid out (display none, or under such a node). False, with
+// the rects zero, for a stale handle; *surface is then null.
+bool ui_scene_measure(const ui_scene *s, ui_handle node, float rects[4][4], ui_handle *surface);
 
 // The root for a surface, or NULL. Callers read and clear `dirty`.
 ui_scene_root *ui_scene_root_of(ui_scene *s, ui_handle surface);

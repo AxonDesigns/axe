@@ -112,7 +112,8 @@ static ui_result on_events(void *user, const void *events, size_t size, ui_cmd_w
         case UI_EVENT_FRAME_COMMITTED: r = on_frame(d, &ev, cmds); break;
         case UI_EVENT_TIMER_FIRED: r = on_timer(d, &ev, cmds); break;
         case UI_EVENT_SURFACE_CLOSE_REQUESTED:
-        case UI_EVENT_FONT_LOADED: break;
+        case UI_EVENT_FONT_LOADED:
+        case UI_EVENT_LAYOUT_MEASURED: break;
         }
         if (r != UI_OK) return r;
     }

@@ -179,6 +179,14 @@ ui_result ui_cmd_move_node(ui_cmd_writer *w, ui_handle node, ui_handle parent, u
     return UI_OK;
 }
 
+ui_result ui_cmd_request_layout(ui_cmd_writer *w, ui_handle node, uint32_t request_id) {
+    uint8_t *p = ui_wire_buf_op(&w->buf, UI_OP_REQUEST_LAYOUT, UI_WIRE_SIZE_REQUEST_LAYOUT);
+    if (!p) return UI_ERR_OUT_OF_MEMORY;
+    p = ui_wire_put_handle(p, node);
+    ui_wire_put_u32(p, request_id);
+    return UI_OK;
+}
+
 ui_result ui_cmd_set_clip(ui_cmd_writer *w, ui_handle node, bool clip) {
     uint8_t *p = ui_wire_buf_op(&w->buf, UI_OP_SET_CLIP, UI_WIRE_SIZE_SET_CLIP);
     if (!p) return UI_ERR_OUT_OF_MEMORY;
@@ -536,6 +544,19 @@ ui_result ui_wire_event_font_loaded(ui_wire_buf *b, uint32_t id, ui_result resul
     return UI_OK;
 }
 
+ui_result ui_wire_event_layout_measured(ui_wire_buf *b, uint32_t request_id, ui_handle node,
+                                        ui_handle surface, ui_result result, const float rects[4][4]) {
+    uint8_t *p = ui_wire_buf_op(b, UI_EVENT_LAYOUT_MEASURED, UI_WIRE_SIZE_LAYOUT_MEASURED);
+    if (!p) return UI_ERR_OUT_OF_MEMORY;
+    p = ui_wire_put_u32(p, request_id);
+    p = ui_wire_put_u32(p, (uint32_t)result);
+    p = ui_wire_put_handle(p, node);
+    p = ui_wire_put_handle(p, surface);
+    for (int r = 0; r < 4; r++)
+        for (int i = 0; i < 4; i++) p = ui_wire_put_f32(p, rects[r][i]);
+    return UI_OK;
+}
+
 ui_result ui_wire_event_timer_fired(ui_wire_buf *b, uint32_t id, uint64_t deadline_ns,
                                     uint64_t now_ns) {
     uint8_t *p = ui_wire_buf_op(b, UI_EVENT_TIMER_FIRED, UI_WIRE_SIZE_TIMER_FIRED);
@@ -601,6 +622,22 @@ ui_result ui_event_next(ui_event_reader *reader, ui_event *out) {
             out->font_loaded.id = ui_wire_get_u32(op.payload);
             out->font_loaded.result = (ui_result)ui_wire_get_u32(op.payload + 4);
             return UI_OK;
+        case UI_EVENT_LAYOUT_MEASURED: {
+            if (op.payload_size < UI_WIRE_SIZE_LAYOUT_MEASURED) return UI_ERR_MALFORMED;
+            out->layout_measured.request_id = ui_wire_get_u32(op.payload);
+            out->layout_measured.result = (ui_result)ui_wire_get_u32(op.payload + 4);
+            out->layout_measured.node = ui_wire_get_handle(op.payload + 8);
+            out->surface = ui_wire_get_handle(op.payload + 16);
+            ui_rect *rects[4] = {&out->layout_measured.layout_in_parent, &out->layout_measured.layout_in_surface,
+                                 &out->layout_measured.presentation_in_parent,
+                                 &out->layout_measured.presentation_in_surface};
+            for (int k = 0; k < 4; k++) {
+                const uint8_t *q = op.payload + 24 + 16 * k;
+                *rects[k] = (ui_rect){ui_wire_get_f32(q), ui_wire_get_f32(q + 4), ui_wire_get_f32(q + 8),
+                                      ui_wire_get_f32(q + 12)};
+            }
+            return UI_OK;
+        }
         default:
             continue; // unknown event from a newer core: skip it
         }

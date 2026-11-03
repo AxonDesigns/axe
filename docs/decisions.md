@@ -86,6 +86,24 @@ milestone first.
   takes 60 px, because a border box can't be smaller than its border, and the styled box's
   text sits inside its border. Both are CSS-correct.
 
+### Measurement
+- **Opcode 19 `request_layout`** (node, `u32 request_id`) and **event 6
+  `layout_measured`** with four named rects (review change 4): layout and presentation,
+  each relative to the parent and to the surface. The event also carries the node and its
+  surface, so logic can match answers without keeping the request.
+- **Answered after layout, in the frame that applies the request**, in request order. The
+  core keeps requests until the node's surface layout is current: nothing under it dirty,
+  laid out at the surface's size and scale. That is right after the surface's layout when
+  it draws, and at once when it doesn't (nothing changed). Requests apply only in frame
+  steps, so the answers are the same under both schedulers (`test_measure`).
+- **A request marks nothing dirty**, so it never makes a frame; `test_measure` checks the
+  frame count.
+- **Stale handles get an answer** (`UI_ERR_STALE_HANDLE`), unlike every other op on a stale
+  handle, which is dropped: logic waiting for the reply must not hang.
+- **Hidden nodes report zero rects**: their layout rects are stale or zero.
+- **`ui_event` gained `ui_rect`** in the public header. A `switch` over `ui_event_type`
+  without a `default` now needs the new case (the `spring_rect` example did).
+
 ### Layout animations
 - **`transition(layout)` on a pseudo-property** (64, `UI_STYLE_LAYOUT`) that can't be
   declared, only transitioned. It reuses the transition entry, so no new op or value kind,

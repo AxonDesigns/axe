@@ -81,6 +81,7 @@ the [op history](#op-history) lists appended fields.
 | 16 | `set_token` | `u32 id`, one entry (property 0) | 4 + entry |
 | 17 | `set_state` | node, `u32 mask`, `u32 value` | 16 |
 | 18 | `move_node` | node, parent handle (a node, or a surface for a root-level node), `before` handle (a sibling under that parent; null appends) | 24 |
+| 19 | `request_layout` | node, `u32 request_id`: answered by `layout_measured` ([`docs/layout.md`](layout.md), "Measurement") | 12 |
 
 `set_color`, `set_corner_radius` and `set_clip` set the node's overrides of the matching
 style properties ([`docs/styles.md`](styles.md), "Older ops"). Styles, tokens, states and
@@ -237,6 +238,7 @@ the family list "Noto Sans", and no spans:
 | 3 | `surface_close_requested` | surface handle | 8 |
 | 4 | `timer_fired` | `u32 id`, `u32` reserved, `u64 deadline_ns`, `u64 now_ns` (both animation clock) | 24 |
 | 5 | `font_loaded` | `u32 id` (from `load_font`), `u32 result` (`ui_result`: 0 OK, `UI_ERR_IO`, `UI_ERR_INVALID_ARGUMENT`) | 8 |
+| 6 | `layout_measured` | `u32 request_id`, `u32 result` (0 OK, `UI_ERR_STALE_HANDLE`), node handle, surface handle (null when stale), then four rects of `f32 x, y, width, height` (logical px): `layout_in_parent`, `layout_in_surface`, `presentation_in_parent`, `presentation_in_surface` | 88 |
 
 - `predicted_present_ns` is animation-clock time: when the frame is expected on screen.
   Pausing or stepping the clock moves it, so logic that keeps time from these events is
@@ -249,6 +251,8 @@ the family list "Noto Sans", and no spans:
   sends nothing, so logic must not use these events as a clock. Use timers for that.
 - When several timers are due at once they fire earliest deadline first, ties by `id`.
   Re-arming from `deadline_ns` rather than `now_ns` keeps a periodic timer from drifting.
+- `layout_measured` answers come in the order of their requests, after the
+  `frame_committed` of the frame that laid the node out.
 
 ## Validation and error handling
 

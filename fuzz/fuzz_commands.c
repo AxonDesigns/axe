@@ -1,8 +1,9 @@
 // Whole command buffers on the core thread's side: arbitrary bytes as the ops of a buffer
 // (the harness writes the 16-byte header so inputs don't have to guess sizes), validated
-// and applied to a scene, then animated and drawn into a display list. Covers the framing
-// rules of every op, including payloads from older and newer writers, handle checks, the
-// clip stack and culling. Text is laid out by fuzz_set_text; here it is not drawn.
+// and applied to a scene, then animated, laid out (answering layout requests) and drawn
+// into a display list. Covers the framing rules of every op, including payloads from older
+// and newer writers, handle checks, the clip stack and culling. Text is laid out by
+// fuzz_set_text; here it is not drawn.
 #include <stdlib.h>
 #include <string.h>
 
@@ -75,6 +76,13 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
             ui_scene_build(&s, surfaces[i], &dl, NULL);
             ui_display_list_free(&dl);
         }
+        // Layout requests, answered as the core does once laid out.
+        for (uint32_t i = 0; i < s.request_count; i++) {
+            float rects[4][4];
+            ui_handle surface;
+            ui_scene_measure(&s, s.requests[i].node, rects, &surface);
+        }
+        s.request_count = 0;
     }
     ui_scene_destroy(&s);
     free(buf);
