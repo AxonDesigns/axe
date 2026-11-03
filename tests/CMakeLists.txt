@@ -31,7 +31,7 @@ set_tests_properties(headless_spring_rect PROPERTIES
     TIMEOUT 120)
 
 # Internal-API tests that drive a full headless app.
-foreach(name IN ITEMS backpressure stall)
+foreach(name IN ITEMS backpressure stall clock_event)
     add_executable(test_${name} test_${name}.c)
     target_include_directories(test_${name} PRIVATE ${PROJECT_SOURCE_DIR}/src)
     target_compile_definitions(test_${name} PRIVATE _DEFAULT_SOURCE)
@@ -243,3 +243,11 @@ target_include_directories(test_js_engine PRIVATE ${PROJECT_SOURCE_DIR}/src)
 target_link_libraries(test_js_engine PRIVATE ui m)
 ui_target_warnings(test_js_engine)
 add_test(NAME js_engine COMMAND test_js_engine)
+
+# The script host with raw JS bundles in a headless app (docs/script.md).
+add_executable(test_script_host test_script_host.c)
+target_include_directories(test_script_host PRIVATE ${PROJECT_SOURCE_DIR}/src)
+target_link_libraries(test_script_host PRIVATE ui m)
+ui_target_warnings(test_script_host)
+add_test(NAME script_host COMMAND test_script_host)
+set_tests_properties(script_host PROPERTIES ENVIRONMENT "UI_GPU=software" TIMEOUT 120)

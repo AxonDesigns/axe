@@ -105,9 +105,11 @@ struct ui_core {
     ui_atlas_update *unsent;     // an atlas update the render inbox could not take (OOM)
     float text_contrast, text_gamma;
 
-    ui_wire_buf events;          // events not yet sent to logic
+    ui_wire_buf events;          // events not yet sent to logic; a clock event comes first
     uint32_t events_in_flight;   // event buffers logic has not finished
     uint64_t last_anim_ns;
+    uint64_t last_clock_ns;      // the last clock event sent: they never go backwards
+    bool sent_events;            // the first event buffer (sent at startup) is out
 
     bool quit_requested;
     ui_result failure;           // set when an actor reports a fatal error

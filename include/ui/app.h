@@ -12,6 +12,7 @@
 
 #include "ui/handle.h"
 #include "ui/result.h"
+#include "ui/script.h"
 #include "ui/wire.h"
 
 #ifdef __cplusplus
@@ -88,6 +89,9 @@ typedef struct ui_app_desc {
     ui_gpu_preference gpu;
     ui_surface_desc surface; // the app's first surface; more surfaces come later
     ui_logic_desc logic;
+    // An app in a script language instead of C logic: when set, `logic` must be empty and the
+    // logic actor runs the bundle (include/ui/script.h). Copied, except the bundle's bytes.
+    const ui_script_desc *script;
     ui_time_source time;     // optional; zeroed means CLOCK_MONOTONIC
     bool start_paused;       // start with the animation clock paused (tests)
     ui_text_config text;

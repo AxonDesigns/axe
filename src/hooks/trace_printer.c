@@ -139,6 +139,11 @@ static void on_trace(void *user, const ui_trace_event *ev) {
     case UI_TRACE_PHASE_END:
         phase_add(&p->phases[ev->phase], ev->time_ns - p->phases[ev->phase].begin_ns);
         break;
+    case UI_TRACE_SCRIPT_EXCEPTION:
+    case UI_TRACE_SCRIPT_REJECTION:
+    case UI_TRACE_SCRIPT_LONG_TASK:
+    case UI_TRACE_SCRIPT_LEAK:
+        break; // the script host logs these itself
     case UI_TRACE_PREPARE_BEGIN:
         prepare_begin_ns = ev->time_ns;
         break;

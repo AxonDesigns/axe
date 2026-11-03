@@ -15,7 +15,7 @@
 extern "C" {
 #endif
 
-#define UI_HOOKS_VERSION 0u
+#define UI_HOOKS_VERSION 1u // 1: script events, `text` and `duration_ns` (milestone 3a)
 #define UI_HOOKS_MAX_SUBSCRIBERS 8u
 
 typedef struct ui_app ui_app;
@@ -42,6 +42,12 @@ typedef enum ui_trace_kind {
     // counted from 1 in the order prepared buffers arrive; surface is null.
     UI_TRACE_PREPARE_BEGIN,
     UI_TRACE_PREPARE_END,
+    // The script runtime (docs/script.md, "Errors"), on the logic thread. `text` describes
+    // what happened (with a stack trace for errors); surface is null.
+    UI_TRACE_SCRIPT_EXCEPTION, // an uncaught exception: the app keeps running
+    UI_TRACE_SCRIPT_REJECTION, // a promise rejected with no handler at a microtask checkpoint
+    UI_TRACE_SCRIPT_LONG_TASK, // a task ran longer than the threshold; duration_ns says how long
+    UI_TRACE_SCRIPT_LEAK,      // debug builds: a subtree became unreachable without destroy()
 } ui_trace_kind;
 
 typedef struct ui_trace_event {
@@ -51,6 +57,9 @@ typedef struct ui_trace_event {
     uint64_t frame_id;
     uint64_t time_ns;      // CLOCK_MONOTONIC; for PRESENTED, the reported present time
     uint64_t refresh_ns;   // PRESENTED only; 0 if unknown
+    // Since version 1: script events only (NULL otherwise). Valid during the callback.
+    const char *text;
+    uint64_t duration_ns;  // SCRIPT_LONG_TASK only
 } ui_trace_event;
 
 typedef void (*ui_trace_fn)(void *user, const ui_trace_event *event);

@@ -30,6 +30,7 @@ struct ui_js {
     native_module *modules;
     uint32_t module_count;
     uint32_t live_refs;
+    bool compiling; // ui_js_compile_module: imports get empty stand-ins (they bind when evaluated)
 };
 
 struct ui_js_ref {
@@ -115,9 +116,14 @@ static native_module *find_module(ui_js *js, const char *name) {
     return NULL;
 }
 
+static int stub_module_init(JSContext *ctx, JSModuleDef *m) {
+    (void)ctx, (void)m;
+    return 0;
+}
+
 static char *normalize(JSContext *ctx, const char *base, const char *name, void *opaque) {
     ui_js *js = opaque;
-    if (find_module(js, name) || !js->desc.resolve) return js_strdup(ctx, name);
+    if (find_module(js, name) || !js->desc.resolve || js->compiling) return js_strdup(ctx, name);
     char *resolved = js->desc.resolve(js->desc.user, base, name);
     if (!resolved) {
         JS_ThrowReferenceError(ctx, "cannot find module '%s' (imported by '%s')", name, base);
@@ -185,6 +191,9 @@ static JSModuleDef *load_module(JSContext *ctx, const char *name, void *opaque) 
     ui_js *js = opaque;
     native_module *nm = find_module(js, name);
     if (nm) return make_native_module(ctx, nm);
+    // Compiling only: QuickJS loads the imports, but bytecode records them by name and they
+    // bind when the module is evaluated. An empty module stands in.
+    if (js->compiling) return JS_NewCModule(ctx, name, stub_module_init);
     ui_js_module_source src;
     if (!js->desc.load || !js->desc.load(js->desc.user, name, &src)) {
         JS_ThrowReferenceError(ctx, "cannot load module '%s'", name);
@@ -592,7 +601,9 @@ bool ui_js_eval_module(ui_js *js, const char *name, const ui_js_module_source *s
 }
 
 bool ui_js_compile_module(ui_js *js, const char *name, const char *src, size_t len, uint8_t **out, size_t *size) {
+    js->compiling = true;
     JSValue m = compile(js, name, &(ui_js_module_source){src, len, false});
+    js->compiling = false;
     if (JS_IsException(m)) return false;
     // Debug information stays (stack traces need its line table); the source text goes.
     uint8_t *bytes = JS_WriteObject(js->ctx, size, m, JS_WRITE_OBJ_BYTECODE | JS_WRITE_OBJ_STRIP_SOURCE);

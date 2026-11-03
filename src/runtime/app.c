@@ -64,7 +64,7 @@ ui_result ui_app_create(const ui_app_desc *desc, ui_app **out) {
     if (r != UI_OK) goto fail_platform;
     app->core.platform = app->platform;
 
-    r = ui_logic_init(&app->logic, &desc->logic, &app->log, &app->core.from_logic);
+    r = ui_logic_init(&app->logic, &desc->logic, desc->script, &app->log, &app->hooks, &app->core.from_logic);
     if (r != UI_OK) goto fail_logic;
     ui_render_desc render_desc = {
         .log = &app->log,

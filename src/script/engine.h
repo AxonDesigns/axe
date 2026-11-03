@@ -201,7 +201,10 @@ bool ui_js_define_module(ui_js *js, const char *name, ui_js_val exports);
 // evaluation's promise (top-level await): rejected if evaluation throws. False for a
 // syntax error or a failed import.
 bool ui_js_eval_module(ui_js *js, const char *name, const ui_js_module_source *src, ui_js_val *result);
-// Compiles a module (without evaluating it) to bytecode. Ownership: free() *out.
+// Compiles a module (without evaluating it) to bytecode. Its imports are recorded by name and
+// bind when the bytecode is evaluated; nothing is loaded now. Use an engine of its own for
+// compiling (as axe-jsc does): modules it saw while compiling stay registered as stand-ins.
+// Ownership: free() *out.
 bool ui_js_compile_module(ui_js *js, const char *name, const char *src, size_t len, uint8_t **out,
                           size_t *size);
 // Evaluates a classic script; *result is its completion value.

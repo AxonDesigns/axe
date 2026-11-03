@@ -3,6 +3,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "script/host/host.h"
+
 #define MODULE "logic"
 
 // Sends everything waiting in the outbox, in order. The channel to the core is unbounded,
@@ -35,7 +37,7 @@ static void send(ui_logic *l, ui_msg msg) {
 }
 
 static void flush(ui_logic *l) {
-    if (!ui_cmd_writer_op_count(l->writer)) return;
+    if (!l->writer || !ui_cmd_writer_op_count(l->writer)) return;
     uint8_t *bytes;
     size_t size;
     if (ui_cmd_writer_take(l->writer, &bytes, &size) != UI_OK) return;
@@ -44,6 +46,13 @@ static void flush(ui_logic *l) {
 
 static ui_result logic_start(void *self) {
     ui_logic *l = self;
+    if (l->script) {
+        // Like a JS exception at startup: reported, and the app keeps running (empty).
+        ui_script_env env = {.log = l->log, .hooks = l->hooks, .start_ns = l->start_ns};
+        ui_result r = ui_script_host_create(l->script, &env, &l->host);
+        if (r != UI_OK) UI_ERROR(l->log, MODULE, "the script host failed to start: %s", ui_result_str(r));
+        return UI_OK;
+    }
     ui_result r = ui_cmd_writer_create(&l->writer);
     if (r != UI_OK) return r;
     if (l->desc.start) {
@@ -66,7 +75,12 @@ static void logic_step(void *self) {
             ui_msg_drop(&msg);
             continue;
         }
-        if (l->desc.on_events) {
+        if (l->script) {
+            uint8_t *cmds = NULL;
+            size_t size = 0;
+            if (l->host) ui_script_host_turn(l->host, msg.ptr, msg.size, &cmds, &size);
+            if (cmds) send(l, (ui_msg){.type = UI_MSG_CMD_BUFFER, .ptr = cmds, .size = size});
+        } else if (l->desc.on_events) {
             ui_result r = l->desc.on_events(l->desc.user, msg.ptr, msg.size, l->writer);
             if (r != UI_OK) UI_ERROR(l->log, MODULE, "logic failed: %s", ui_result_str(r));
         }
@@ -79,13 +93,61 @@ static void logic_step(void *self) {
 
 static void logic_stop(void *self) {
     ui_logic *l = self;
+    ui_script_host_destroy(l->host);
+    l->host = NULL;
     if (l->desc.stop) l->desc.stop(l->desc.user);
     ui_cmd_writer_destroy(l->writer);
     l->writer = NULL;
 }
 
-ui_result ui_logic_init(ui_logic *l, const ui_logic_desc *desc, const ui_logger *log,
-                        ui_queue *core_queue) {
+static void free_script(ui_script_desc *d) {
+    if (!d) return;
+    free((void *)(uintptr_t)d->bundle_path);
+    free((void *)(uintptr_t)d->bundle_name);
+    for (uint32_t i = 0; i < d->arg_count; i++) free((void *)(uintptr_t)d->args[i]);
+    free((void *)(uintptr_t)d->args);
+    free(d);
+}
+
+static char *copy_str(const char *s, bool *ok) {
+    if (!s) return NULL;
+    char *c = strdup(s);
+    if (!c) *ok = false;
+    return c;
+}
+
+// The desc's strings and arguments are copied; the bundle's bytes are not.
+static ui_script_desc *copy_script(const ui_script_desc *src) {
+    ui_script_desc *d = calloc(1, sizeof *d);
+    if (!d) return NULL;
+    *d = *src;
+    bool ok = true;
+    d->bundle_path = copy_str(src->bundle_path, &ok);
+    d->bundle_name = copy_str(src->bundle_name, &ok);
+    d->args = NULL;
+    d->arg_count = 0;
+    if (ok && src->arg_count) {
+        char **args = calloc(src->arg_count, sizeof *args);
+        d->args = (const char *const *)args;
+        ok = args != NULL;
+        for (uint32_t i = 0; ok && i < src->arg_count; i++, d->arg_count++)
+            args[i] = copy_str(src->args[i] ? src->args[i] : "", &ok);
+    }
+    if (!ok) {
+        free_script(d);
+        return NULL;
+    }
+    return d;
+}
+
+ui_result ui_logic_init(ui_logic *l, const ui_logic_desc *desc, const ui_script_desc *script,
+                        const ui_logger *log, ui_hooks *hooks, ui_queue *core_queue) {
+    if (script && (desc->start || desc->on_events || desc->stop)) return UI_ERR_INVALID_ARGUMENT;
+    l->script = NULL;
+    l->host = NULL;
+    l->hooks = hooks;
+    l->start_ns = ui_monotonic_ns();
+    if (script && !(l->script = copy_script(script))) return UI_ERR_OUT_OF_MEMORY;
     l->desc = *desc;
     l->log = log;
     l->core_queue = core_queue;
@@ -98,6 +160,8 @@ ui_result ui_logic_init(ui_logic *l, const ui_logic_desc *desc, const ui_logger 
 }
 
 void ui_logic_destroy(ui_logic *l) {
+    free_script(l->script);
+    l->script = NULL;
     for (uint32_t i = 0; i < l->outbox_count; i++) ui_msg_drop(&l->outbox[i]);
     free(l->outbox);
     ui_actor_destroy(&l->actor);

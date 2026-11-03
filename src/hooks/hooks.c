@@ -35,6 +35,11 @@ void ui_hooks_emit_presented(ui_hooks *h, ui_handle surface, uint64_t frame_id,
     dispatch(h, &ev);
 }
 
+void ui_hooks_emit_script(ui_hooks *h, ui_trace_kind kind, const char *text, uint64_t duration_ns) {
+    ui_trace_event ev = {.kind = kind, .time_ns = ui_monotonic_ns(), .text = text, .duration_ns = duration_ns};
+    dispatch(h, &ev);
+}
+
 ui_result ui_hooks_subscribe(ui_app *app, ui_trace_fn fn, void *user, uint32_t *out_id) {
 #if UI_HOOKS_ENABLED
     if (!fn) return UI_ERR_INVALID_ARGUMENT;

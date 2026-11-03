@@ -271,6 +271,12 @@ the family list "Noto Sans", and no spans:
   Re-arming from `deadline_ns` rather than `now_ns` keeps a periodic timer from drifting.
 - `layout_measured` answers come in the order of their requests, after the
   `frame_committed` of the frame that laid the node out.
+- `clock` comes first in every event buffer, and one buffer (perhaps with nothing else) is
+  sent at startup. Its `now_ns` is the animation clock when the core sends the buffer (a
+  buffer that waited while logic was busy carries the time it finally left), and never goes
+  back: it is at least every time the buffer reports and every earlier clock. Logic keeps
+  time from it even while nothing draws, and language runtimes base their timers on it
+  ([`docs/script.md`](script.md), "Timers").
 
 ## Validation and error handling
 

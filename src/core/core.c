@@ -25,6 +25,14 @@ static void core_wake(void *user) {
 
 // ---- Timers (animation clock) ----------------------------------------------------------
 
+// The event buffer to append to. Its first event is the clock, written when the buffer
+// starts and stamped when it is sent (flush_events).
+static ui_wire_buf *events(ui_core *c) {
+    if (!c->events.op_count && ui_wire_clock_put(&c->events, &(ui_wire_clock){0}) != UI_OK)
+        UI_ERROR(c->log, MODULE, "out of memory starting an event buffer");
+    return &c->events;
+}
+
 // Scene callback for set_timer ops, applied at the frame boundary like every command.
 static void set_timer(void *user, uint32_t id, uint64_t deadline_ns) {
     ui_core *c = user;
@@ -66,7 +74,7 @@ static void load_font(void *user, uint32_t id, const char *path, uint32_t len, u
             ui_scene_fonts_changed(&c->scene);
         }
     }
-    if (ui_wire_font_loaded_put(&c->events, &(ui_wire_font_loaded){id, (uint32_t)r}) != UI_OK)
+    if (ui_wire_font_loaded_put(events(c), &(ui_wire_font_loaded){id, (uint32_t)r}) != UI_OK)
         UI_ERROR(c->log, MODULE, "out of memory queueing font events");
 }
 
@@ -89,7 +97,7 @@ static void fire_timers(ui_core *c) {
     uint32_t due = 0;
     while (due < c->timer_count && c->timers[due].deadline_ns <= now) {
         ui_wire_timer_fired ev = {.id = c->timers[due].id, .deadline_ns = c->timers[due].deadline_ns, .now_ns = now};
-        if (ui_wire_timer_fired_put(&c->events, &ev) != UI_OK) {
+        if (ui_wire_timer_fired_put(events(c), &ev) != UI_OK) {
             UI_ERROR(c->log, MODULE, "out of memory queueing timer events");
             break;
         }
@@ -236,7 +244,7 @@ static void on_frame(void *user, void *tag, uint64_t predicted_present_host_ns) 
 static void on_close(void *user, void *tag) {
     ui_core *c = user;
     ui_core_surface *s = tag;
-    if (ui_wire_surface_close_requested_put(&c->events, &(ui_wire_surface_close_requested){s->handle}) != UI_OK)
+    if (ui_wire_surface_close_requested_put(events(c), &(ui_wire_surface_close_requested){s->handle}) != UI_OK)
         UI_ERROR(c->log, MODULE, "out of memory queueing close event");
     // v0 policy: closing the window ends the app; logic still sees the event first.
     c->quit_requested = true;
@@ -706,11 +714,11 @@ static void commit(ui_core *c, ui_core_surface *s, uint64_t now) {
 
     if (s->resized_pending) {
         s->resized_pending = false;
-        ui_wire_surface_resized_put(&c->events, &(ui_wire_surface_resized){s->handle, (float)s->config.logical_width,
+        ui_wire_surface_resized_put(events(c), &(ui_wire_surface_resized){s->handle, (float)s->config.logical_width,
                                                                           (float)s->config.logical_height,
                                                                           s->config.scale_120});
     }
-    ui_wire_frame_committed_put(&c->events, &(ui_wire_frame_committed){s->handle, dl->frame_id, now});
+    ui_wire_frame_committed_put(events(c), &(ui_wire_frame_committed){s->handle, dl->frame_id, now});
 }
 
 // True if the root's layout is what its surface's next frame would lay out: nothing under
@@ -749,7 +757,7 @@ static void answer_requests(ui_core *c) {
         ui_wire_rect *out[4] = {&ev.layout_in_parent, &ev.layout_in_surface, &ev.presentation_in_parent,
                                 &ev.presentation_in_surface};
         for (int k = 0; k < 4; k++) *out[k] = (ui_wire_rect){rects[k][0], rects[k][1], rects[k][2], rects[k][3]};
-        if (ui_wire_layout_measured_put(&c->events, &ev) != UI_OK) {
+        if (ui_wire_layout_measured_put(events(c), &ev) != UI_OK) {
             UI_ERROR(c->log, MODULE, "out of memory answering request_layout");
             break; // retried at the next frame, in order
         }
@@ -860,7 +868,19 @@ static void wake_idle(ui_core *c) {
 }
 
 static void flush_events(ui_core *c) {
+    if (!c->sent_events) events(c); // logic gets a clock at startup, events or not
     if (!c->events.op_count || c->events_in_flight >= MAX_EVENTS_IN_FLIGHT) return;
+    // The clock event says when the buffer left (docs/command-buffer.md, Events), so logic
+    // keeps time even when nothing draws.
+    uint8_t *first = c->events.data + UI_WIRE_HEADER_SIZE;
+    if (ui_wire_get_u16(first) == UI_EVENT_CLOCK) {
+        uint64_t now = ui_clock_at(&c->clock, ui_clock_host_now(&c->clock));
+        if (now < c->last_anim_ns) now = c->last_anim_ns;
+        if (now < c->last_clock_ns) now = c->last_clock_ns;
+        c->last_clock_ns = now;
+        ui_wire_clock_write(first + UI_WIRE_OP_HEADER_SIZE, &(ui_wire_clock){now});
+    }
+    c->sent_events = true;
     size_t size;
     uint8_t *bytes = ui_wire_buf_finish(&c->events, &size);
     if (!bytes) return;
@@ -880,6 +900,10 @@ void ui_core_step(void *self) {
     advance_prep(c);
     fire_timers(c);
     frame(c);
+    // Timers the frame's commands armed for a time already past fire now, in this step's
+    // events, whichever scheduler runs it: the single scheduler takes no extra core step
+    // between frames, the threaded one might.
+    fire_timers(c);
     advance_prep(c);
     wake_idle(c);
     flush_events(c);

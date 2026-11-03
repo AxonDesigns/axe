@@ -17,6 +17,8 @@ add_library(ui STATIC
     runtime/queue.c
     runtime/sched_single.c
     runtime/sched_threaded.c
+    script/host/bundle.c
+    script/host/host.c
     script/quickjs/engine_quickjs.c
     wire/wire.c
     wire/gen/wire_gen.c
