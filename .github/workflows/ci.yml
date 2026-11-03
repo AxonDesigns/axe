@@ -1,6 +1,6 @@
 # Linux CI: builds the debug and asan presets and runs every test headless on lavapipe, and
 # runs each libFuzzer target from its seed corpus (the fuzz preset's tests). Longer fuzzing
-# runs nightly in fuzz.yml.
+# runs nightly in fuzz.yml. bench-callgrind checks the benchmarks' instruction counts.
 # The wgpu-native build (vendored crates + Cargo target dir) is cached per preset, keyed on
 # the pinned submodule commit and the Rust toolchain, so a warm run only builds our C code.
 name: ci
@@ -67,4 +67,55 @@ jobs:
             build/${{ matrix.preset }}/Testing/Temporary/LastTest.log
             build/${{ matrix.preset }}/tests/**/*.png
             build/${{ matrix.preset }}/fuzz/crash-*
+          if-no-files-found: ignore
+
+  # Instruction counts of the CPU benchmark cases under Callgrind, against
+  # bench/baselines.json: fails on a regression past the threshold there (CONTRIBUTING.md,
+  # "Benchmarks"). The counts are uploaded either way; new baselines come from them.
+  bench-callgrind:
+    name: bench (callgrind)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set up
+        id: setup
+        uses: ./.github/actions/setup
+        with:
+          preset: release
+
+      - name: Install valgrind
+        run: sudo apt-get install -y --no-install-recommends valgrind
+
+      - name: Configure
+        run: cmake --preset release
+
+      - name: Build
+        run: cmake --build --preset release --target bench_layout bench_text
+
+      - name: Save vendored crates
+        if: always() && steps.setup.outputs.vendor-key != '' && steps.setup.outputs.vendor-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: third_party/wgpu-native-vendor
+          key: ${{ steps.setup.outputs.vendor-key }}
+
+      - name: Save wgpu-native build
+        if: always() && steps.setup.outputs.cargo-key != '' && steps.setup.outputs.cargo-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: build/release/cargo
+          key: ${{ steps.setup.outputs.cargo-key }}
+
+      - name: Count and compare
+        run: python3 -I tools/bench/callgrind.py --build build/release --out callgrind-counts.json
+
+      - name: Upload counts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-callgrind
+          path: callgrind-counts.json
           if-no-files-found: ignore

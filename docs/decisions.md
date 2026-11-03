@@ -15,6 +15,35 @@ milestone first.
   library mapped until exit, and the suppressions match again. The cause on this machine
   wasn't pinned down (no driver or loader update; a reboot in between).
 
+### Benchmark reliability
+- **Every case prints median and best.** `bench_text` now does too. On this desktop,
+  medians move 10–20% between runs; the best run is steadier.
+- **Instruction counts in CI** (job `bench-callgrind`, CONTRIBUTING.md "Benchmarks"):
+  - Each CPU case is a noinline `bench_case_*` function holding exactly what is timed.
+    That covers `bench_layout`'s five cases and `bench_text`'s shaping, re-layout and
+    rasterization.
+  - `--callgrind` runs each once and skips the GPU cases.
+  - `tools/bench/callgrind.py` runs each benchmark under Callgrind with
+    `--toggle-collect=bench_case_*` and reads each case's inclusive count. It compares
+    the counts with `bench/baselines.json` and uploads them as an artifact.
+  - Both benchmarks use only the fonts in `tests/fonts` (system fonts are off by default),
+    so counts don't depend on the machine's fonts.
+- **Deterministic:** two runs gave identical counts, both locally and in the
+  `axe-ci-ubuntu:24.04` image.
+- **Toolchain-dependent:** the image's counts differ from this machine's by 0.3–6%. That is
+  why the plan has baselines come from CI's artifact.
+- **The threshold is 2%,** as proposed. A case over its baseline by more fails the job; one
+  under by more is reported as an improvement to record.
+- **The first baselines are provisional:** pushing is for the user to decide, so no CI run
+  exists yet. The first baselines were counted in the Docker image (Ubuntu 24.04, Clang 22,
+  valgrind 3.22 from apt, as CI) and marked `provisional`: reported, never failing. The
+  first CI artifact replaces them in a commit of its own.
+- **Valgrind** comes from apt in CI (3.22); locally it is 3.25. Baselines are only compared
+  with counts from the same CI image, so the difference doesn't matter.
+- **`bench_layout`'s token case** used to set, on its first run, the value the scene was
+  built with. With one run under Callgrind it measured a change that changed nothing. The
+  alternation now starts with a real change.
+
 ### Style resolution performance
 - **Profiled first** (Callgrind on `bench_layout`'s token case: one token that all 10,005
   nodes read for their background, through one style): 28.9M instructions and 6.4 ms. Of

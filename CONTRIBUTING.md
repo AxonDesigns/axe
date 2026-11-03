@@ -57,6 +57,48 @@ corpus holds only seeds and regression inputs.
 Fix the bug, then commit the input as `fuzz/corpus/<target>/regress-<what>` so every CI
 run replays it. Where a unit test can show the bug more directly, add one too.
 
+## Benchmarks
+
+`bench/bench_layout` and `bench/bench_text` print the median and the best of several runs.
+Run them from a release build:
+
+```sh
+cmake --build --preset release && build/release/bench/bench_layout && build/release/bench/bench_text
+```
+
+Times vary by 10–20% from run to run on a busy desktop. Compare best runs, and quote ranges
+across a few runs.
+
+CI catches regressions with instruction counts, which are deterministic. Every CPU case is
+a `noinline` `bench_case_*` function. The `bench-callgrind` job runs both benchmarks with
+`--callgrind` (each CPU case once), counts each case's instructions with Callgrind, and
+compares the counts with `bench/baselines.json`:
+
+```sh
+python3 -I tools/bench/callgrind.py --build build/release   # needs valgrind
+```
+
+- **Threshold:** a case more than **2%** above its baseline fails the job. Counts are exact,
+  so 2% is a real change in work, not noise. More than 2% below is reported as an
+  improvement to record.
+- **Baselines come from CI.** Counts depend on the compiler and the libraries: this
+  machine's differ from CI's by up to 6%. Take the counts from the job's `bench-callgrind`
+  artifact (`callgrind-counts.json`).
+- **Updating baselines.** Commit new baselines alone, with the reason in the commit message
+  and in the file:
+
+  ```sh
+  python3 -I tools/bench/callgrind.py --update callgrind-counts.json \
+      --reason "why the counts moved" --source "CI run <id>"
+  ```
+
+  A regression that is worth its cost (a fix, a feature) is accepted the same way. Say why
+  in the reason.
+- **Provisional baselines** (`"provisional": true`) are reported but never fail the job.
+  The first baselines are provisional because they were counted in the
+  `axe-ci-ubuntu:24.04` Docker image, not by CI itself. Replace them with the first CI
+  artifact.
+
 ## Wire format
 
 Changes to the command or event buffers follow the rules in

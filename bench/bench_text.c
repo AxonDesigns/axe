@@ -11,6 +11,10 @@
 //     paragraph (apply, animate and commit phases), with preparation on worker threads,
 //     next to the total preparation time and to the same work done on one thread (the
 //     single scheduler, where preparation runs inline on the core).
+// Every case prints its median and best run. Cases 1 and 2 run on the CPU alone, each in a
+// noinline bench_case_* function holding exactly what is timed: `bench_text --callgrind`
+// runs them once each and skips 3 and 4 (which need a GPU), so Callgrind can count their
+// instructions (tools/bench/callgrind.py). Only the fonts in tests/fonts are used.
 #include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -42,15 +46,35 @@ static int cmp_u64(const void *a, const void *b) {
     return x < y ? -1 : x > y;
 }
 
+// Median and best of n runs, in us. The best is the steadier figure on a busy machine.
 static double median_us(uint64_t *ns, int n) {
     qsort(ns, (size_t)n, sizeof *ns, cmp_u64);
     return (double)ns[n / 2] / 1000.0;
 }
 
+static double best_us(const uint64_t *ns, int n) {
+    uint64_t best = ns[0];
+    for (int i = 1; i < n; i++) best = ns[i] < best ? ns[i] : best;
+    return (double)best / 1000.0;
+}
+
+static bool callgrind; // --callgrind: the CPU cases once each
+
 static uint32_t count_cps(const char *s, size_t len) {
     uint32_t n = 0;
     for (size_t i = 0; i < len; i++) n += ((unsigned char)s[i] & 0xC0) != 0x80;
     return n;
+}
+
+__attribute__((noinline)) static const ui_paragraph_layout *bench_case_shape(ui_paragraph *p, ui_text_context *ctx) {
+    ui_result res;
+    return ui_paragraph_layout_get(p, ctx, 1.25f, 800, &res);
+}
+
+__attribute__((noinline)) static const ui_paragraph_layout *bench_case_relayout(ui_paragraph *p, ui_text_context *ctx,
+                                                                              float width) {
+    ui_result res;
+    return ui_paragraph_layout_get(p, ctx, 1.25f, width, &res);
 }
 
 static void bench_layout(ui_text_context *ctx) {
@@ -68,53 +92,64 @@ static void bench_layout(ui_text_context *ctx) {
         .families = "Noto Sans", .family_offsets = offsets, .family_count = 1,
     };
     enum { RUNS = 15 };
+    int runs = callgrind ? 1 : RUNS;
     uint64_t cold[RUNS], relayout[RUNS];
     uint32_t lines = 0;
-    for (int r = 0; r < RUNS; r++) {
+    for (int r = 0; r < runs; r++) {
         ui_paragraph p = {0};
         ui_paragraph_set(&p, &d);
-        ui_result res;
         uint64_t t0 = ui_monotonic_ns();
-        const ui_paragraph_layout *l = ui_paragraph_layout_get(&p, ctx, 1.25f, 800, &res);
+        const ui_paragraph_layout *l = bench_case_shape(&p, ctx);
         uint64_t t1 = ui_monotonic_ns();
-        l = ui_paragraph_layout_get(&p, ctx, 1.25f, 640 + (float)r, &res);
+        l = bench_case_relayout(&p, ctx, 640 + (float)r);
         uint64_t t2 = ui_monotonic_ns();
         cold[r] = t1 - t0;
         relayout[r] = t2 - t1;
         lines = l ? l->line_count : 0;
         ui_paragraph_free(&p);
     }
-    printf("shape+layout  %u code points (%zu bytes), %u lines: %.2f ms cold, %.2f ms re-layout\n",
-           count_cps(text, len), len, lines, median_us(cold, RUNS) / 1000,
-           median_us(relayout, RUNS) / 1000);
+    printf("shape+layout  %u code points (%zu bytes), %u lines: %.2f ms median cold (%.2f ms best), "
+           "%.2f ms median re-layout (%.2f ms best)\n",
+           count_cps(text, len), len, lines, median_us(cold, runs) / 1000, best_us(cold, runs) / 1000,
+           median_us(relayout, runs) / 1000, best_us(relayout, runs) / 1000);
     free(text);
 }
 
+enum { GLYPHS = 1000 };
+
+// Glyph IDs 1..1000 of Noto Sans: Latin, Greek, Cyrillic and Devanagari outlines. Returns
+// how many have ink.
+__attribute__((noinline)) static uint32_t bench_case_raster(ui_atlas *atlas, ui_raster *raster, ui_font *font,
+                                                           ui_font_key key) {
+    uint32_t drawn = 0;
+    for (uint32_t g = 1; g <= GLYPHS; g++) {
+        const ui_atlas_glyph *ag = ui_atlas_get(atlas, raster, font, (ui_glyph_key){key, g, 0});
+        drawn += ag && ag->width;
+    }
+    return drawn;
+}
+
 static void bench_raster(ui_font_registry *fonts) {
-    enum { RUNS = 9, GLYPHS = 1000 };
+    enum { RUNS = 9 };
+    int runs = callgrind ? 1 : RUNS;
     ui_font_key key;
     ui_font *font = ui_font_registry_font(fonts, 0, 20, 400, UI_FONT_NORMAL, &key);
     uint64_t t[RUNS];
     uint32_t drawn = 0;
-    for (int r = 0; r < RUNS; r++) {
+    for (int r = 0; r < runs; r++) {
         ui_atlas *atlas;
         ui_atlas_create(&(ui_atlas_desc){0}, &atlas);
         ui_raster raster = {0};
         ui_atlas_begin_frame(atlas, 1, UINT64_MAX);
         uint64_t t0 = ui_monotonic_ns();
-        drawn = 0;
-        // Glyph IDs 1..1000 of Noto Sans: Latin, Greek, Cyrillic and Devanagari outlines.
-        for (uint32_t g = 1; g <= GLYPHS; g++) {
-            const ui_atlas_glyph *ag = ui_atlas_get(atlas, &raster, font, (ui_glyph_key){key, g, 0});
-            drawn += ag && ag->width;
-        }
+        drawn = bench_case_raster(atlas, &raster, font, key);
         t[r] = ui_monotonic_ns() - t0;
         ui_raster_free(&raster);
         ui_atlas_destroy(atlas);
     }
-    double us = median_us(t, RUNS);
-    printf("rasterize     %u new glyphs at 20 px (%u with ink): %.2f ms, %.2f us/glyph\n", GLYPHS,
-           drawn, us / 1000, us / (double)GLYPHS);
+    double us = median_us(t, runs);
+    printf("rasterize     %u new glyphs at 20 px (%u with ink): %.2f ms median (%.2f ms best), %.2f us/glyph\n",
+           GLYPHS, drawn, us / 1000, best_us(t, runs) / 1000, us / (double)GLYPHS);
 }
 
 // ---- Frame benchmark ----------------------------------------------------------------------
@@ -212,8 +247,8 @@ static void bench_frames(void) {
     if (hooks) ui_hooks_unsubscribe(app, hook);
     ui_app_stats st;
     ui_app_get_stats(app, &st);
-    printf("frames        %u glyphs at 1.25x, 1600x900 px: %.3f ms median per frame", ink,
-           median_us(t, FRAMES) / 1000);
+    printf("frames        %u glyphs at 1.25x, 1600x900 px: %.3f ms median per frame (%.3f ms best)", ink,
+           median_us(t, FRAMES) / 1000, best_us(t, FRAMES) / 1000);
     if (hooks)
         printf(" (core commit %.3f ms, render encode %.3f ms)",
                (double)atomic_load(&pt.total[UI_PHASE_COMMIT]) / (double)FRAMES / 1e6,
@@ -315,18 +350,20 @@ static void bench_new_text(void) {
         }
         single[r] = sc + sp; // inline preparation runs on the core thread
     }
-    printf("new text      %u code points in 5 scripts: core thread %.3f ms with workers "
-           "(%.3f ms of preparation on workers, %llu glyphs); %.3f ms all on one thread\n",
-           count_cps(PARAGRAPH, sizeof PARAGRAPH - 1), median_us(core, RUNS) / 1000,
-           median_us(prep, RUNS) / 1000, (unsigned long long)st.glyphs_prepared,
-           median_us(single, RUNS) / 1000);
+    printf("new text      %u code points in 5 scripts: core thread %.3f ms median with workers "
+           "(%.3f ms best; %.3f ms of preparation on workers, %llu glyphs); %.3f ms median all on "
+           "one thread (%.3f ms best)\n",
+           count_cps(PARAGRAPH, sizeof PARAGRAPH - 1), median_us(core, RUNS) / 1000, best_us(core, RUNS) / 1000,
+           median_us(prep, RUNS) / 1000, (unsigned long long)st.glyphs_prepared, median_us(single, RUNS) / 1000,
+           best_us(single, RUNS) / 1000);
     if (st.text_shaped_on_core || st.glyphs_rasterized_on_core)
         printf("              (on the core anyway: %llu paragraphs shaped, %llu glyphs rasterized)\n",
                (unsigned long long)st.text_shaped_on_core,
                (unsigned long long)st.glyphs_rasterized_on_core);
 }
 
-int main(void) {
+int main(int argc, char **argv) {
+    callgrind = argc > 1 && !strcmp(argv[1], "--callgrind");
     ui_logger log = {UI_LOG_WARN};
     ui_font_registry *fonts;
     ui_font_registry_create(&(ui_font_registry_desc){.log = &log}, &fonts);
@@ -339,8 +376,10 @@ int main(void) {
 #endif
     bench_layout(&ctx);
     bench_raster(fonts);
-    bench_frames();
-    bench_new_text();
+    if (!callgrind) {
+        bench_frames();
+        bench_new_text();
+    }
     ui_text_context_free(&ctx);
     ui_font_registry_destroy(fonts);
     return 0;
