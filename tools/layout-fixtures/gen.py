@@ -140,11 +140,16 @@ def c_string(s):
     return '"' + s.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n") + '"'
 
 
+SCALES = [("expected", "100"), ("expected-125", "125"), ("expected-150", "150")]
+
+
 def deviations():
+    """Fixtures expected to fail: "name" (every scale) or "name@125" (one scale)."""
     out = {}
     path = HERE / "deviations.md"
     if path.exists():
-        for m in re.finditer(r"^- `([a-z0-9_-]+)`: (.+)$", path.read_text(encoding="utf-8"), re.M):
+        for m in re.finditer(r"^- `([a-z0-9_-]+(?:@(?:100|125|150))?)`: (.+)$",
+                             path.read_text(encoding="utf-8"), re.M):
             out[m.group(1)] = m.group(2)
     return out
 
@@ -159,10 +164,11 @@ def main() -> int:
     for k, name in enumerate(names):
         tree = Tree()
         tree.feed((HERE / "fixtures" / f"{name}.html").read_text(encoding="utf-8"))
-        expected = json.loads((HERE / "expected" / f"{name}.json").read_text())
-        boxes = expected["boxes"]
-        if len(boxes) != len(tree.nodes):
-            raise SystemExit(f"{name}: {len(tree.nodes)} nodes, {len(boxes)} boxes")
+        results = [json.loads((HERE / d / f"{name}.json").read_text()) for d, _ in SCALES]
+        expected = results[0]
+        for r in results:
+            if len(r["boxes"]) != len(tree.nodes):
+                raise SystemExit(f"{name}: {len(tree.nodes)} nodes, {len(r['boxes'])} boxes")
         rows = []
         for i, n in enumerate(tree.nodes):
             d, size = decls(n["style"])
@@ -170,17 +176,18 @@ def main() -> int:
                 lines.append(f"static const ui_style_decl f{k}_{i}[] = {{{', '.join(d)}}};")
             text = c_string(n["text"]) if n["tag"] == "p" else "NULL"
             ref = f"f{k}_{i}" if d else "NULL"
-            rows.append(f"    {{{n['parent']}, {ref}, {len(d)}, {text}, {float(size or 16)!r}f, "
-                        f"{{{', '.join(repr(float(v)) + 'f' for v in boxes[i])}}}}},")
+            per_scale = ", ".join("{" + ", ".join(repr(float(v)) + "f" for v in r["boxes"][i]) + "}"
+                                  for r in results)
+            rows.append(f"    {{{n['parent']}, {ref}, {len(d)}, {text}, {float(size or 16)!r}f, {{{per_scale}}}}},")
         lines.append(f"static const layout_fixture_node f{k}[] = {{")
         lines += rows
         lines.append("};")
         has_text = any(n["tag"] == "p" for n in tree.nodes)
         w, h = expected["surface"]
-        table.append(f'    {{"{name}", {w}, {h}, f{k}, {len(tree.nodes)}, {str(has_text).lower()}, '
-                     f'{str(name in xfail).lower()}}},')
+        fails = ", ".join(str(name in xfail or f"{name}@{s}" in xfail).lower() for _, s in SCALES)
+        table.append(f'    {{"{name}", {w}, {h}, f{k}, {len(tree.nodes)}, {str(has_text).lower()}, {{{fails}}}}},')
         lines.append("")
-    unknown = set(xfail) - set(names)
+    unknown = {x.split("@")[0] for x in xfail} - set(names)
     if unknown:
         raise SystemExit(f"deviations.md names unknown fixtures: {', '.join(sorted(unknown))}")
     lines.append("const layout_fixture layout_fixtures[] = {")

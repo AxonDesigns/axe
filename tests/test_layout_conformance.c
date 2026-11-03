@@ -21,7 +21,7 @@ static ui_font_registry *fonts;
 static ui_text_context text;
 
 // Lays out one fixture; returns the worst difference from Chrome (and where it is).
-static double run(const layout_fixture *f, uint32_t *worst_node, bool verbose) {
+static double run(const layout_fixture *f, int scale, uint32_t *worst_node, bool verbose) {
     ui_scene s;
     ui_scene_init(&s, &quiet);
     ui_handle surface = {(uint32_t)UI_HANDLE_SURFACE << UI_HANDLE_SLOT_BITS, 1};
@@ -47,10 +47,10 @@ static double run(const layout_fixture *f, uint32_t *worst_node, bool verbose) {
     CHECK_EQ_INT(s.stats.dropped, 0);
     free(bytes);
     ui_scene_resolve(&s, 0);
-    ui_scene_layout(&s, surface, (float)f->width, (float)f->height, 1, &text, 0);
+    ui_scene_layout(&s, surface, (float)f->width, (float)f->height, layout_fixture_scales[scale], &text, 0);
     double worst = 0;
     for (uint32_t i = 0; i < f->node_count; i++) {
-        const float *got = s.nodes[i + 1].layout.rect, *want = f->nodes[i].expected;
+        const float *got = s.nodes[i + 1].layout.rect, *want = f->nodes[i].expected[scale];
         for (int k = 0; k < 4; k++) {
             double d = fabs((double)got[k] - (double)want[k]);
             if (!(d <= worst)) {
@@ -69,29 +69,35 @@ static double run(const layout_fixture *f, uint32_t *worst_node, bool verbose) {
 }
 
 static void test_conformance(void) {
-    uint32_t passed = 0, expected_failures = 0;
     const char *only = getenv("UI_LAYOUT_FIXTURE"); // prints every box of the named fixture
-    for (uint32_t i = 0; i < layout_fixture_count; i++) {
-        const layout_fixture *f = &layout_fixtures[i];
-        if (only && strcmp(only, f->name)) continue;
-        uint32_t node = 0;
-        double worst = run(f, &node, only != NULL);
-        bool ok = worst <= (f->has_text ? TEXT_TOLERANCE : BOX_TOLERANCE);
-        passed += ok;
-        if (f->expected_failure) {
-            expected_failures++;
-            if (ok) {
-                fprintf(stderr, "  %s passes but is listed in deviations.md\n", f->name);
+    const char *only_scale = getenv("UI_LAYOUT_SCALE"); // 100, 125 or 150: just that scale
+    for (int k = 0; k < LAYOUT_FIXTURE_SCALES; k++) {
+        int percent = (int)lroundf(layout_fixture_scales[k] * 100);
+        if (only_scale && atoi(only_scale) != percent) continue;
+        uint32_t passed = 0, expected_failures = 0, total = 0;
+        for (uint32_t i = 0; i < layout_fixture_count; i++) {
+            const layout_fixture *f = &layout_fixtures[i];
+            if (only && strcmp(only, f->name)) continue;
+            total++;
+            uint32_t node = 0;
+            if (only) fprintf(stderr, "  at %d%%:\n", percent);
+            double worst = run(f, k, &node, only != NULL);
+            bool ok = worst <= (f->has_text ? TEXT_TOLERANCE : BOX_TOLERANCE);
+            passed += ok;
+            if (f->expected_failure[k]) {
+                expected_failures++;
+                if (ok) {
+                    fprintf(stderr, "  %s@%d passes but is listed in deviations.md\n", f->name, percent);
+                    test_failures++;
+                }
+            } else if (!ok) {
+                fprintf(stderr, "  %s@%d: node %u off by %.4f px\n", f->name, percent, node, worst);
                 test_failures++;
             }
-        } else if (!ok) {
-            fprintf(stderr, "  %s: node %u off by %.4f px\n", f->name, node, worst);
-            test_failures++;
         }
+        fprintf(stderr, "  at %.2fx: %u of %u fixtures match Chrome (%.1f%%); %u known deviations\n",
+                (double)layout_fixture_scales[k], passed, total, 100.0 * passed / total, expected_failures);
     }
-    uint32_t total = only ? 1 : layout_fixture_count;
-    fprintf(stderr, "  %u of %u fixtures match Chrome (%.1f%%); %u known deviations\n", passed, total,
-            100.0 * passed / total, expected_failures);
 }
 
 int main(void) {

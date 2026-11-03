@@ -550,11 +550,13 @@ static ui_result build_line(builder *b, uint32_t lcs, uint32_t lce, uint32_t met
     float height = roundf(asc + desc + gap);
     float baseline = roundf(top + gap * 0.5f + asc);
     if (b->fixed) {
-        // Half-leading around the base font: the same box and baseline on every line.
+        // Half-leading around the base font: the same box and baseline on every line. As in
+        // Chrome, the ascent and descent are whole pixels first and the half-leading above
+        // the text is floored, so baselines match its layout at any scale.
         asc = b->fixed_ascent;
         desc = b->fixed_descent;
         height = b->fixed_height;
-        baseline = roundf(top + (height - asc - desc) * 0.5f + asc);
+        baseline = top + roundf(asc) + floorf((height - roundf(asc) - roundf(desc)) * 0.5f);
     }
     o->lines[o->line_count++] = (ui_line){
         .start = lb, .end = le, .top = top, .height = height, .ascent = asc, .descent = desc,

@@ -270,17 +270,27 @@ The pipeline:
   - every `div` is `display: flex; position: relative; box-sizing: border-box`;
   - every `p` is a block in the test font (Noto Sans regular, static) at line-height 1.25,
     with `overflow-wrap: anywhere` and `white-space: pre-wrap`;
-  - Chrome runs with no font hinting, at scale 1.
+  - Chrome runs with no font hinting, at device scale factors 1, 1.25 and 1.5
+    (`expected/`, `expected-125/`, `expected-150/`).
 - **`gen.py`** turns fixtures and results into `tests/layout/fixtures_generated.c`.
 - **`test_layout_conformance`** builds each tree through the wire, lays it out with the
-  same font, and compares every box. CI never runs Chrome; the results are committed.
+  same font at each scale, and compares every box. CI never runs Chrome; the results are
+  committed.
 
 | | |
 | --- | --- |
-| Tolerance, boxes without text | 1/64 px (Chrome's LayoutUnit) |
+| Tolerance, boxes without text | 1/64 px (Chrome's LayoutUnit), at every scale |
 | Tolerance, fixtures with text | 0.5 px |
-| Result (2026-11-03) | **209 of 209 match** (100%) |
-| Known deviations | none (`tools/layout-fixtures/deviations.md`) |
+| Result at 1.0× (2026-11-03) | **209 of 209 match** (100%) |
+| Result at 1.25× | **209 of 209 match** (100%) |
+| Result at 1.5× | **209 of 209 match** (100%) |
+| Known deviations | none (`tools/layout-fixtures/deviations.md`; an entry can name one scale, `name@125`) |
+
+At fractional scales two things decide the results. Borders snap to whole device pixels in
+layout, as Chrome does (`docs/styles.md`, "Borders"). And a fixed line height places its
+baseline as Chrome does: the font's ascent and descent rounded to whole device pixels
+first, the half-leading above the text floored. Before that change seven baseline fixtures
+at 1.25× and three at 1.5× were off by exactly one device pixel.
 
 Text matches within the tolerance because both sides shape with HarfBuzz at the same size,
 and the fixtures use line heights that are whole pixels: 1.25 × 12, 16, 24 and 32 px.
@@ -295,15 +305,13 @@ python3 -I tools/layout-fixtures/gen.py
 ```
 
 `UI_LAYOUT_FIXTURE=<name> build/debug/tests/test_layout_conformance` prints every box of
-one fixture next to Chrome's.
+one fixture next to Chrome's; `UI_LAYOUT_SCALE=125` (or 100, 150) runs one scale.
 
 ## Limitations
 
 - No `order`, no `flex-basis: content`, no `visibility: collapse`, no grid (milestone 2.1).
 - Intrinsic sizes follow Chrome's simpler algorithm, not §9.9.1's flex fractions; the
   fixtures pin Chrome's behavior.
-- Fixtures run at scale 1; at other scales layout is the same in logical px, and only text
-  measures in physical pixels.
 - Moving text steps vertically by whole pixels, since baselines always snap
   (`docs/styles.md`, "Snapping").
 - A node moved to another surface, and a node shown again, appear in place rather than

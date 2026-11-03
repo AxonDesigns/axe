@@ -76,8 +76,10 @@ set_text (wire)  ──►  worker: decode ─► ui_text_source (immutable) ─
   the level) and L2 orders the pieces. A piece that begins or ends inside a run is sliced
   when HarfBuzz marks the boundary safe and reshaped otherwise.
 - **Metrics.** The line box is `round(ascent + descent + line gap)` over the line's fonts,
-  or, with an explicit line height, the same fixed box on every line. Baselines are whole
-  physical pixels at every scale.
+  or, with an explicit line height, the same fixed box on every line, whose baseline is
+  placed as Chrome places it: the base font's ascent and descent rounded to whole physical
+  pixels, the half-leading above them floored. Baselines are whole physical pixels at every
+  scale.
 - **Alignment:** start, end, left, right, center or justify (spaces stretch; a paragraph's
   last line stays start-aligned).
 - **Max lines** cuts the text, and the last kept line ends in an ellipsis (U+2026 by

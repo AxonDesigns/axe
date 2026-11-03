@@ -15,6 +15,19 @@ milestone first.
   library mapped until exit, and the suppressions match again. The cause on this machine
   wasn't pinned down (no driver or loader update; a reboot in between).
 
+### Conformance at fractional scales
+- **Every fixture is recorded at 1, 1.25 and 1.5** (`record.py`, `expected-125/`,
+  `expected-150/`; the 1.0 results didn't change on re-recording) and
+  `test_layout_conformance` runs all three, reporting a pass rate per scale. Deviations can
+  name a scale. Tolerances are unchanged: 1/64 px for boxes, 0.5 px with text.
+- **First run: 209, 202 and 206 of 209.** Every failure was a baseline-aligned fixture off
+  by exactly one device pixel. Chrome rounds a font's ascent and descent to whole device
+  pixels and floors the half-leading; we rounded the exact baseline instead. Fixed-height
+  lines now place their baseline Chrome's way: **209 of 209 at every scale.** One text
+  golden moved (`justify@125`, lines one pixel higher).
+- Borders snapping in layout (the per-side border step) was already in place; without it
+  bordered fixtures would differ at fractional scales.
+
 ### Text nodes with in-flow children
 - **A mistake, reported, not refused:** layout keeps placing such children over the text
   (as in M2), but a debug warning names the node once (a node flag) and the new stat

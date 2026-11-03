@@ -12,8 +12,12 @@ typedef struct layout_fixture_node {
     uint32_t decl_count;
     const char *text;            // a text leaf's text, else NULL
     float font_size;             // px
-    float expected[4];           // Chrome's border box, relative to the parent's
+    float expected[3][4];        // Chrome's border box, relative to the parent's, at each scale
 } layout_fixture_node;
+
+// The device scales fixtures are recorded at (expected[] and expected_failure[] follow it).
+#define LAYOUT_FIXTURE_SCALES 3
+static const float layout_fixture_scales[LAYOUT_FIXTURE_SCALES] = {1.f, 1.25f, 1.5f};
 
 typedef struct layout_fixture {
     const char *name;
@@ -21,7 +25,7 @@ typedef struct layout_fixture {
     const layout_fixture_node *nodes;
     uint32_t node_count;
     bool has_text;               // compared with the text tolerance
-    bool expected_failure;       // listed in tools/layout-fixtures/deviations.md
+    bool expected_failure[3];    // listed in tools/layout-fixtures/deviations.md, per scale
 } layout_fixture;
 
 extern const layout_fixture layout_fixtures[];
