@@ -208,6 +208,8 @@ void ui_scene_init(ui_scene *s, const ui_logger *log);
 void ui_scene_destroy(ui_scene *s);
 
 ui_result ui_scene_add_root(ui_scene *s, ui_handle surface);
+// Sets what the surface's top-level nodes inherit as their direction (ui_direction).
+void ui_scene_set_root_direction(ui_scene *s, ui_handle surface, uint8_t direction);
 // Destroys every node under the surface.
 void ui_scene_remove_root(ui_scene *s, ui_handle surface);
 

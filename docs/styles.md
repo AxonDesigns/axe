@@ -154,13 +154,40 @@ Layout properties ([`docs/layout.md`](layout.md)); keywords are the `ui_flex_*`,
 | 59–62 | insets (top, right, bottom, left) | px or percent (may be negative), or auto | auto |
 | 63 | `aspect_ratio` | number > 0 (width / height), or auto | auto |
 | 64 | `layout` | the layout rect: not declared, only transitioned (`0x8000 \| 64`) | |
+| 80, 81 | `margin_start`, `margin_end` | as margins | (the physical sides) |
+| 82, 83 | `padding_start`, `padding_end` | as padding | |
+| 84, 85 | `inset_start`, `inset_end` | as insets | |
 
 Percentages of padding and margins resolve against the containing block's width, as in
 CSS. `border_width` (3) also takes part in layout.
 
-Every value property also accepts `token`. The text properties don't change shaping, so
-setting them never reshapes text. Family, size, weight, slant and language stay on
-`set_text`, which is prepared off the core thread (`docs/text.md`).
+Every value property also accepts `token`. Text properties that change shaping (family,
+size, weight, slant, language, direction) reshape the text they reach, on the worker
+threads before the change applies (`docs/text.md`); the others never reshape.
+
+### Logical properties
+
+Margins, padding and insets have a start and an end side besides their physical ones.
+Writing modes are horizontal, so the block sides are top and bottom; only the inline sides
+have logical names.
+
+| Logical | Left-to-right node | Right-to-left node |
+| --- | --- | --- |
+| `margin_start`, `padding_start`, `inset_start` | left | right |
+| `margin_end`, `padding_end`, `inset_end` | right | left |
+
+- **They set the same values as the physical properties.** A node has one left margin,
+  whether `margin_left` or `margin_start` set it.
+- **The node's own direction maps them** (its computed `direction`, inherited or not), not
+  its parent's: in CSS a logical property is relative to the element's writing mode.
+- **The later declaration wins**, in cascade order: within a block, the later entry; across
+  blocks and overrides, the usual precedence. So `margin_right: 40; margin_start: 10` in a
+  right-to-left node gives a right margin of 10, and the reverse order 40.
+- **A change of direction maps them again** without gathering the cascade: the computed
+  values remember which entry set each side.
+- **`inherit` on a logical property** takes the parent's value of the physical side it maps
+  to. (CSS takes the parent's logical side, mapped with the parent's direction; the two
+  differ only when the parent's direction differs from the node's.)
 
 ### Drawing
 

@@ -33,6 +33,7 @@ KEYWORDS = {
     "align-content": ("UI_STYLE_ALIGN_CONTENT", {"normal": 0, "flex-start": 1, "start": 1, "flex-end": 2, "end": 2,
                       "center": 3, "stretch": 5, "space-between": 6, "space-around": 7, "space-evenly": 8}),
     "text-align": ("UI_STYLE_TEXT_ALIGN", {"start": 0, "end": 1, "left": 2, "right": 3, "center": 4, "justify": 5}),
+    "direction": ("UI_STYLE_DIRECTION", {"ltr": 0, "rtl": 1}),
 }
 LENGTHS = {
     "flex-basis": "UI_STYLE_FLEX_BASIS", "width": "UI_STYLE_WIDTH", "height": "UI_STYLE_HEIGHT",
@@ -41,6 +42,9 @@ LENGTHS = {
     "row-gap": "UI_STYLE_ROW_GAP", "column-gap": "UI_STYLE_COLUMN_GAP",
     "top": "UI_STYLE_TOP", "right": "UI_STYLE_RIGHT", "bottom": "UI_STYLE_BOTTOM", "left": "UI_STYLE_LEFT",
     "border-width": "UI_STYLE_BORDER_WIDTH",
+    "margin-inline-start": "UI_STYLE_MARGIN_START", "margin-inline-end": "UI_STYLE_MARGIN_END",
+    "padding-inline-start": "UI_STYLE_PADDING_START", "padding-inline-end": "UI_STYLE_PADDING_END",
+    "inset-inline-start": "UI_STYLE_INSET_START", "inset-inline-end": "UI_STYLE_INSET_END",
 }
 NUMBERS = {"flex-grow": "UI_STYLE_FLEX_GROW", "flex-shrink": "UI_STYLE_FLEX_SHRINK",
            "aspect-ratio": "UI_STYLE_ASPECT_RATIO"}
@@ -117,7 +121,11 @@ class Tree(html.parser.HTMLParser):
         if tag not in ("div", "p"):
             raise SystemExit(f"unsupported element {tag}")
         parent = self.stack[-1] if self.stack else -1
-        self.nodes.append({"tag": tag, "style": dict(attrs).get("style", ""), "parent": parent, "text": ""})
+        a = dict(attrs)
+        style = a.get("style", "")
+        if "dir" in a:  # the dir attribute sets the direction (before the inline style, as in CSS)
+            style = f"direction:{a['dir']};" + style
+        self.nodes.append({"tag": tag, "style": style, "parent": parent, "text": ""})
         self.stack.append(len(self.nodes) - 1)
 
     def handle_endtag(self, tag):

@@ -15,6 +15,27 @@ milestone first.
   library mapped until exit, and the suppressions match again. The cause on this machine
   wasn't pinned down (no driver or loader update; a reboot in between).
 
+### Direction and logical properties
+- **`direction`** is an inherited style property (16) and a surface setting
+  (`ui_surface_desc.direction`, what top-level nodes inherit). It lays out the node's
+  children (rows mirror) and is its paragraph's base direction unless `set_text` sets one.
+- **Mirroring by swapping sides.** A right-to-left container lays out in a mirrored frame:
+  its own and its items' left and right padding, borders, margins and insets are swapped,
+  the algorithm runs unchanged, and x positions are mirrored back. Sizes don't depend on
+  direction, so the layout cache needs no direction in its key; a direction change marks
+  the node dirty like a layout value.
+- **Logical properties** 80–85 (start/end margins, padding, insets) map onto the physical
+  slots with the node's own direction, after the cascade has run, and win where they came
+  later than the physical entry for that side. The computation keeps the cascade position
+  of each side's last physical and logical entry, so a direction change remaps them
+  without gathering the cascade again. `inherit` on a logical property takes the parent's
+  value of the physical side it maps to (CSS maps with the parent's direction; documented).
+  Logical border widths, colors and radii come with per-side borders.
+- **Fixtures:** 44 right-to-left fixtures (`dir="rtl"` on the fixture root, also `ltr` for
+  logical properties). All 209 match Chrome; the rtl group matched on its first run.
+  `test_layout_conformance` leaves each paragraph's direction to its node, as `<p>`
+  inherits it in HTML.
+
 ### Shaping properties in styles, through preparation
 - **`set_text` leaves fields to the node** (decided in review: the C API inherits by
   default). `ui_text_desc.set` / `ui_text_span_desc.set` name the explicit fields; the rest

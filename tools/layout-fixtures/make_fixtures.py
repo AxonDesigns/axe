@@ -21,6 +21,15 @@ def div(style="", *children):
     return ("div", style, list(children))
 
 
+def rtl(style="", *children):
+    """A div with dir="rtl": it and its subtree lay out right to left."""
+    return ("div", style, list(children), {"dir": "rtl"})
+
+
+def ltr(style="", *children):
+    return ("div", style, list(children), {"dir": "ltr"})
+
+
 def p(text, style=""):
     return ("p", style, text)
 
@@ -32,9 +41,10 @@ def fx(name, w, h, *nodes):
 
 
 def render(node, depth):
-    tag, style, body = node
+    tag, style, body = node[:3]
     pad = "  " * depth
-    attr = f' style="{html.escape(style)}"' if style else ""
+    attr = "".join(f' {k}="{v}"' for k, v in (node[3] if len(node) > 3 else {}).items())
+    attr += f' style="{html.escape(style)}"' if style else ""
     if tag == "p":
         return f"{pad}<p{attr}>{html.escape(body)}</p>\n"
     inner = "".join(render(c, depth + 1) for c in body)
@@ -300,6 +310,77 @@ fx("baseline_first_fixed", 420, 120, div("align-items:baseline;width:400px;heigh
 fx("baseline_first_fixed_column", 420, 120, div("align-items:baseline;width:400px;height:100px",
    div("flex-direction:column", div("height:30px;padding-top:5px", p("Inner")), p("Next")),
    p("Outside", "font-size:24px")))
+
+# ---- Right to left ------------------------------------------------------------------------
+# dir="rtl" on the fixture's root: main-start of a row is on the right; start and end
+# alignment, auto margins, absolute insets and logical properties follow (CSS Writing Modes).
+for j in JUSTIFY:
+    fx(f"rtl_justify_row_{j}", 320, 120, rtl(f"justify-content:{j};width:300px;height:100px",
+                                              box(50, 30), box(40, 20), box(60, 40)))
+for j in ["flex-start", "flex-end"]:
+    fx(f"rtl_justify_row_reverse_{j}", 320, 120,
+       rtl(f"flex-direction:row-reverse;justify-content:{j};width:300px;height:100px", box(50, 30), box(40, 20)))
+for a in ["flex-start", "flex-end", "center", "stretch"]:
+    fx(f"rtl_column_align_{a}", 220, 220, rtl(f"flex-direction:column;align-items:{a};width:200px;height:200px",
+                                               box(50, 30), div("height:20px"), box(80, 40)))
+fx("rtl_column_align_self", 220, 220, rtl("flex-direction:column;width:200px;height:200px",
+   box(50, 30, "align-self:flex-start"), box(50, 30, "align-self:flex-end"), box(50, 30, "align-self:center")))
+fx("rtl_wrap", 320, 220, rtl("flex-wrap:wrap;width:200px;height:200px",
+   box(80, 30), box(80, 40), box(80, 20), box(60, 30), box(90, 30)))
+fx("rtl_wrap_reverse", 320, 220, rtl("flex-wrap:wrap-reverse;width:200px;height:200px",
+   box(80, 30), box(80, 40), box(80, 20)))
+fx("rtl_wrap_align_content", 320, 220, rtl("flex-wrap:wrap;align-content:space-between;width:200px;height:200px",
+   box(120, 30), box(120, 40), box(50, 20)))
+fx("rtl_gap", 320, 120, rtl("column-gap:12px;width:300px;height:100px", box(50, 30), box(40, 20), box(60, 40)))
+fx("rtl_grow_shrink", 320, 120, rtl("width:300px;height:100px",
+   div("flex:1 1 0px;height:20px"), div("flex:2 1 0px;height:20px"), box(40, 20, "flex-shrink:0")))
+fx("rtl_baseline", 320, 120, rtl("align-items:baseline;width:300px;height:100px",
+   p("Big", "font-size:32px"), box(40, 20), p("small", "font-size:12px")))
+# Auto margins and physical sides
+fx("rtl_margin_left_auto", 320, 120, rtl("width:300px;height:100px", box(50, 30), box(40, 20, "margin-left:auto")))
+fx("rtl_margin_right_auto", 320, 120, rtl("width:300px;height:100px", box(50, 30, "margin-right:auto"), box(40, 20)))
+fx("rtl_margin_both_auto", 320, 120, rtl("width:300px;height:100px", box(50, 30, "margin:0 auto")))
+fx("rtl_margins_physical", 320, 120, rtl("width:300px;height:100px",
+   box(50, 30, "margin-left:10px;margin-right:30px"), box(40, 20, "margin-left:5px")))
+fx("rtl_padding_physical", 320, 120, rtl("padding-left:10px;padding-right:30px;border-width:4px;width:300px;height:100px",
+   box(50, 30), box(40, 20)))
+# Absolute positioning
+fx("rtl_abs_left_top", 320, 220, rtl("width:300px;height:200px", box(40, 40),
+   box(50, 30, "position:absolute;left:10px;top:20px")))
+fx("rtl_abs_right", 320, 220, rtl("width:300px;height:200px;padding:7px", box(40, 40),
+   box(50, 30, "position:absolute;right:10px;top:20px")))
+fx("rtl_abs_static_row", 320, 220, rtl("justify-content:center;width:300px;height:200px", box(40, 40),
+   box(50, 30, "position:absolute")))
+fx("rtl_abs_static_start", 320, 220, rtl("padding-left:6px;padding-right:14px;width:300px;height:200px",
+   box(50, 30, "position:absolute")))
+fx("rtl_abs_static_column", 320, 220, rtl("flex-direction:column;align-items:flex-start;width:300px;height:200px",
+   box(50, 30, "position:absolute")))
+fx("rtl_abs_auto_margins", 320, 220, rtl("width:300px;height:200px",
+   box(50, 30, "position:absolute;left:10px;right:40px;margin-left:auto;margin-right:auto")))
+# Logical properties, both directions
+for d, make in [("rtl", rtl), ("ltr", ltr)]:
+    fx(f"{d}_margin_inline", 320, 120, make("width:300px;height:100px",
+       box(50, 30, "margin-inline-start:10px;margin-inline-end:30px"), box(40, 20)))
+    fx(f"{d}_padding_inline", 320, 120, make("padding-inline-start:12px;padding-inline-end:4px;width:300px;height:100px",
+       box(50, 30), box(40, 20)))
+    fx(f"{d}_inset_inline_start", 320, 220, make("width:300px;height:200px",
+       box(50, 30, "position:absolute;inset-inline-start:10px;top:5px")))
+    fx(f"{d}_inset_inline_end", 320, 220, make("width:300px;height:200px",
+       box(50, 30, "position:absolute;inset-inline-end:10px;top:5px")))
+# Within one declaration block the later of a logical and a physical property wins.
+fx("rtl_logical_after_physical", 320, 120, rtl("width:300px;height:100px",
+   box(50, 30, "margin-right:40px;margin-inline-start:10px")))
+fx("rtl_physical_after_logical", 320, 120, rtl("width:300px;height:100px",
+   box(50, 30, "margin-inline-start:10px;margin-right:40px")))
+# Text and nesting
+fx("rtl_text_align_start", 320, 120, rtl("flex-direction:column;width:300px;height:100px",
+   p("Start aligned"), p("End aligned", "text-align:end")))
+fx("rtl_text_wrap", 220, 220, rtl("flex-direction:column;align-items:flex-start;width:200px;height:200px",
+   p("A paragraph that wraps over several lines", "width:120px")))
+fx("rtl_nested_ltr", 320, 220, rtl("width:300px;height:200px",
+   box(40, 40), ltr("width:150px;height:60px", box(30, 30), box(20, 20))))
+fx("ltr_nested_rtl", 320, 220, div("width:300px;height:200px",
+   box(40, 40), rtl("width:150px;height:60px", box(30, 30), box(20, 20))))
 
 
 def main() -> int:

@@ -491,7 +491,47 @@ static void test_strings(void) {
     teardown(&f);
 }
 
+// Logical sides map with the node's own direction; the later of a logical and a physical
+// declaration wins, within a block and across the cascade; a direction inherited anew maps
+// them again.
+static void test_logical(void) {
+    fixture f;
+    setup(&f);
+    ui_cmd_create_node(f.w, h(2), h(1));
+    props(&f, 1, &(ui_style_decl){UI_STYLE_DIRECTION, ui_keyword(UI_DIRECTION_RTL)}, 1);
+    ui_style_decl block[] = {{UI_STYLE_MARGIN_RIGHT, ui_px(40)}, {UI_STYLE_MARGIN_START, ui_px(10)},
+                             {UI_STYLE_PADDING_START, ui_px(3)}, {UI_STYLE_PADDING_LEFT, ui_px(9)},
+                             {UI_STYLE_INSET_END, ui_percent(5)}};
+    define(&f, 4, &(ui_style_block_desc){0, block, 5}, 1);
+    ui_cmd_set_styles(f.w, h(2), (uint32_t[]){4}, 1);
+    flush(&f);
+    const ui_layout_style *l = &cv(&f, 2)->layout;
+    // rtl: start is right, end is left.
+    CHECK(l->margin[1].value == 10 && l->margin[3].unit == UI_LEN_PX && l->margin[3].value == 0); // later start wins
+    CHECK(l->padding[3].value == 9 && l->padding[1].value == 3); // later left wins over start (= right)
+    CHECK(l->inset[3].unit == UI_LEN_PERCENT && l->inset[3].value == 5);
+    // The parent turns ltr: the same cascade maps the other way.
+    props(&f, 1, &(ui_style_decl){UI_STYLE_DIRECTION, ui_keyword(UI_DIRECTION_LTR)}, 1);
+    flush(&f);
+    CHECK(l->margin[3].value == 10 && l->margin[1].value == 40); // start = left; right stays 40
+    CHECK(l->padding[3].value == 9 && l->padding[1].value == 0); // left 9 came after start (= left)
+    CHECK(l->inset[1].unit == UI_LEN_PERCENT && l->inset[3].unit == UI_LEN_AUTO);
+    // Across the cascade: an override's physical side beats the style's logical one.
+    props(&f, 2, &(ui_style_decl){UI_STYLE_MARGIN_LEFT, ui_px(1)}, 1);
+    flush(&f);
+    CHECK(l->margin[3].value == 1);
+    // An invalid token makes a logical declaration absent: an earlier one shows through.
+    ui_style_decl more[] = {{UI_STYLE_MARGIN_END, ui_px(7)}, {UI_STYLE_MARGIN_END, ui_token_ref(99)}};
+    props(&f, 2, &(ui_style_decl){UI_STYLE_MARGIN_LEFT, ui_unset()}, 1);
+    define(&f, 5, &(ui_style_block_desc){0, more, 2}, 1);
+    ui_cmd_set_styles(f.w, h(2), (uint32_t[]){4, 5}, 2);
+    flush(&f);
+    CHECK(l->margin[1].value == 7); // end = right in ltr
+    teardown(&f);
+}
+
 int main(void) {
+    RUN(test_logical);
     RUN(test_inheritance);
     RUN(test_inherit_initial);
     RUN(test_text_inheritance);

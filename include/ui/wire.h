@@ -214,6 +214,15 @@ typedef enum ui_style_prop {
     // transitioned: UI_STYLE_TRANSITION(UI_STYLE_LAYOUT) animates the node from where it is
     // drawn to every new layout rect (layout animations, docs/layout.md).
     UI_STYLE_LAYOUT = 64,
+    // Logical sides (docs/styles.md, "Logical properties"): start is the left in a
+    // left-to-right node and the right in a right-to-left one. They set the same values as
+    // the physical properties: within a block, the later entry wins.
+    UI_STYLE_MARGIN_START = 80,    // as margins
+    UI_STYLE_MARGIN_END = 81,
+    UI_STYLE_PADDING_START = 82,   // as padding
+    UI_STYLE_PADDING_END = 83,
+    UI_STYLE_INSET_START = 84,     // as insets
+    UI_STYLE_INSET_END = 85,
 } ui_style_prop;
 
 // The transition of a property: a spring that animates the property's value whenever what

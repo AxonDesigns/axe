@@ -73,11 +73,13 @@ typedef struct box {
     float border;               // uniform border width
     uint32_t first_child;
     ui_paragraph *text;         // a text leaf's paragraph (docs/layout.md), or NULL
+    bool rtl;                   // a right-to-left container: lays its children out mirrored
 } box;
 
 static box node_box(ctx *c, uint32_t slot) {
     ui_node *n = &c->s->nodes[slot];
-    return (box){slot, &n->computed.layout, n->computed.border_width, n->first_child, n->text};
+    return (box){slot, &n->computed.layout, n->computed.border_width, n->first_child, n->text,
+                 n->computed.text.direction == UI_DIRECTION_RTL};
 }
 
 static bool hidden(ctx *c, uint32_t slot) {
@@ -273,7 +275,21 @@ static uint8_t used_align(const ui_layout_style *container, const ui_layout_styl
     return a ? a : UI_FLEX_STRETCH;
 }
 
-static void init_item(item *it, const box *b, const ui_layout_style *cst, const float inner[2]) {
+// Swaps the left and right sides: a right-to-left container lays its children out in a
+// mirrored frame, then mirrors their positions back (docs/layout.md, "Direction").
+static void swap_sides(float v[4]) {
+    float t = v[1];
+    v[1] = v[3];
+    v[3] = t;
+}
+
+static void swap_flags(bool v[4]) {
+    bool t = v[1];
+    v[1] = v[3];
+    v[3] = t;
+}
+
+static void init_item(item *it, const box *b, const ui_layout_style *cst, bool rtl, const float inner[2]) {
     memset(it, 0, sizeof *it);
     it->b = *b;
     const ui_layout_style *st = b->st;
@@ -283,6 +299,11 @@ static void init_item(item *it, const box *b, const ui_layout_style *cst, const 
         it->margin[i] = or_zero(resolve(st->margin[i], inner[0]));
     }
     padding_border(b, inner[0], it->pb);
+    if (rtl) {
+        swap_sides(it->margin);
+        swap_flags(it->auto_margin);
+        swap_sides(it->pb);
+    }
     for (int a = 0; a < 2; a++) {
         it->auto_size[a] = st->size[a].unit == UI_LEN_AUTO;
         it->size[a] = resolve(st->size[a], inner[a]);
@@ -405,6 +426,10 @@ static void compute_box(ctx *c, const box *b, const float known[2], const float 
         return;
     }
 
+    // A right-to-left container works in a mirrored frame (its own left and right sides
+    // swapped, and its items'); positions are mirrored back at the end.
+    if (b->rtl) swap_sides(pb);
+
     // Content box: settled sizes give definite inner sizes; otherwise the available space,
     // or a content constraint, passes on.
     float inner[2], inner_avail[2];
@@ -437,7 +462,7 @@ static void compute_box(ctx *c, const box *b, const float known[2], const float 
         }
         if (absolute(c, s)) continue;
         box cb = node_box(c, s);
-        init_item(&items[count++], &cb, st, inner);
+        init_item(&items[count++], &cb, st, b->rtl, inner);
     }
     (void)capacity;
     bool single_line = st->wrap == UI_FLEX_NOWRAP;
@@ -835,9 +860,11 @@ static void compute_box(ctx *c, const box *b, const float known[2], const float 
             compute_item(c, &it->b, k, parent_inner, a, PERFORM, sz, &bl);
             it->baseline = bl;
         }
-        if (perform)
-            set_layout_rect(c, it->b.slot, it->pos[0], it->pos[1], m == 0 ? it->target : it->cross,
+        if (perform) {
+            float w = m == 0 ? it->target : it->cross;
+            set_layout_rect(c, it->b.slot, b->rtl ? size[0] - it->pos[0] - w : it->pos[0], it->pos[1], w,
                             m == 0 ? it->cross : it->target);
+        }
         // The container's first baseline: the first baseline-aligned item of the first
         // line, else the first item's, synthesized from its bottom border edge when it has
         // none (§8.5).
@@ -879,6 +906,11 @@ static void position_absolute(ctx *c, const box *b, const ui_layout_style *cst, 
         inset[i] = resolve(st->inset[i], cb[i % 2 == 1 ? 0 : 1]);
         auto_margin[i] = st->margin[i].unit == UI_LEN_AUTO;
         margin[i] = or_zero(resolve(st->margin[i], cb[0]));
+    }
+    if (b->rtl) { // the container's frame is mirrored (pb already is)
+        swap_sides(inset);
+        swap_sides(margin);
+        swap_flags(auto_margin);
     }
     box nb = node_box(c, slot);
     float npb[4];
@@ -938,7 +970,7 @@ static void position_absolute(ctx *c, const box *b, const ui_layout_style *cst, 
     float done[2];
     compute(c, slot, (float[]){sz[0], sz[1]}, parent, (float[]){sz[0], sz[1]}, perform ? PERFORM : MEASURE,
             done, &bl);
-    set_layout_rect(c, slot, pos[0], pos[1], done[0], done[1]);
+    set_layout_rect(c, slot, b->rtl ? size[0] - pos[0] - done[0] : pos[0], pos[1], done[0], done[1]);
 }
 
 // ---- Entry point --------------------------------------------------------------------------
@@ -949,7 +981,8 @@ void ui_layout_root(ui_scene *s, uint32_t root, float width, float height, float
     ctx c = {s, text, scale, stats, now_ns};
     stats->passes++;
     layout_styles();
-    box rb = {UI_NO_SLOT, &root_style, 0, s->roots[root].first_child, NULL};
+    box rb = {UI_NO_SLOT, &root_style, 0, s->roots[root].first_child, NULL,
+              s->roots[root].computed.text.direction == UI_DIRECTION_RTL};
     float known[2] = {width, height}, parent[2] = {width, height}, out[2], bl;
     compute_box(&c, &rb, known, parent, known, PERFORM, out, &bl);
 }

@@ -373,6 +373,41 @@ static void test_styled_text(void) {
     teardown(&f);
 }
 
+// A right-to-left surface: its top-level nodes inherit rtl, so the surface column puts
+// them at its cross-start (the right), and text inside follows the node's direction unless
+// set_text sets one.
+static void test_rtl(void) {
+    fixture f;
+    setup(&f, 400, 200);
+    ui_scene_set_root_direction(&f.s, f.surfaces[0], UI_DIRECTION_RTL);
+    ui_cmd_create_node(f.w, node(1), f.surfaces[0]);
+    props(&f, 1, (ui_style_decl[]){{UI_STYLE_WIDTH, ui_px(100)}, {UI_STYLE_HEIGHT, ui_px(50)},
+                                   {UI_STYLE_ALIGN_ITEMS, ui_keyword(UI_FLEX_START)}},
+          3);
+    ui_cmd_create_node(f.w, node(2), node(1));
+    props(&f, 2, (ui_style_decl[]){{UI_STYLE_WIDTH, ui_px(30)}, {UI_STYLE_MARGIN_START, ui_px(5)}}, 2);
+    ui_cmd_create_node(f.w, node(3), node(1));
+    ui_text_desc t = {.text = "abc", .length = 3, .set = UI_TEXT_SET_ALL & ~UI_TEXT_SET_DIRECTION,
+                      .style = {.family = UI_TEXT_FAMILY_DEFAULT, .weight = 400, .size = 12, .color = {0, 0, 0, 1}}};
+    CHECK(ui_cmd_set_text(f.w, node(3), &t) == UI_OK);
+    frame(&f);
+    CHECK(rect_is(&f, 1, 300, 0, 100, 50));
+    CHECK(rect(&f, 2)[0] == 100 - 5 - 30); // the first item at the right, after its start margin
+    CHECK(f.s.nodes[3].text->source->dir == UI_BIDI_RTL);
+    // The surface turns ltr: everything lays out again, mirrored back.
+    ui_scene_set_root_direction(&f.s, f.surfaces[0], UI_DIRECTION_LTR);
+    frame(&f);
+    CHECK(rect_is(&f, 1, 0, 0, 100, 50) && rect(&f, 2)[0] == 5);
+    CHECK(f.s.nodes[3].text->source->dir == UI_BIDI_LTR);
+    // A set_text that sets its direction keeps it.
+    t.set = UI_TEXT_SET_ALL;
+    t.direction = UI_TEXT_DIR_AUTO;
+    CHECK(ui_cmd_set_text(f.w, node(3), &t) == UI_OK);
+    frame(&f);
+    CHECK(f.s.nodes[3].text->source->dir == UI_BIDI_AUTO);
+    teardown(&f);
+}
+
 int main(void) {
     ui_font_registry_create(&(ui_font_registry_desc){.log = &quiet}, &fonts);
     ui_font_registry_add_file(fonts, FONT("NotoSans-Regular-Static.ttf"), 0, NULL);
@@ -386,6 +421,7 @@ int main(void) {
     RUN(test_incremental);
     RUN(test_styles);
     RUN(test_styled_text);
+    RUN(test_rtl);
     ui_text_context_free(&text);
     ui_font_registry_destroy(fonts);
     return test_failures != 0;

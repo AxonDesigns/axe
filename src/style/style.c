@@ -667,7 +667,13 @@ static bool slot_of(uint16_t prop, size_t *off, size_t *size) {
     case UI_STYLE_BOTTOM:
     case UI_STYLE_LEFT: return AT(layout.inset[prop - UI_STYLE_TOP]);
     case UI_STYLE_ASPECT_RATIO: return AT(layout.aspect_ratio);
-    case UI_STYLE_LAYOUT: return false;
+    case UI_STYLE_LAYOUT:
+    case UI_STYLE_MARGIN_START:
+    case UI_STYLE_MARGIN_END:
+    case UI_STYLE_PADDING_START:
+    case UI_STYLE_PADDING_END:
+    case UI_STYLE_INSET_START:
+    case UI_STYLE_INSET_END: return false; // logical sides map to physical ones (ui_style_compute)
     }
 #undef AT
     return false;
@@ -706,28 +712,36 @@ static uint32_t text_field(uint16_t prop) {
     }
 }
 
+// apply()'s result besides UI_STYLE_INHERITS_OTHER: the entry set a value.
+enum { APPLIED = 0x100 };
+
+// The entry's value through its token (false: absent, as a missing or invalid token).
+static bool entry_value(const ui_style_view *view, const ui_style_entry *e, ui_value *v) {
+    if (e->value.kind != UI_VALUE_TOKEN) {
+        *v = e->value;
+        return v->kind != UI_VALUE_UNSET;
+    }
+    return ui_style_view_token_value(view, &e->value, v) && ui_style_value_valid(e->prop, v, false);
+}
+
 static uint32_t apply(const ui_style_view *view, const ui_style_entry *e, const ui_computed *parent,
                       ui_computed *c, uint32_t *text_set) {
     ui_value v;
-    if (e->value.kind == UI_VALUE_TOKEN &&
-        (!ui_style_view_token_value(view, &e->value, &v) || !ui_style_value_valid(e->prop, &v, false)))
-        return 0; // a missing token, a cycle, or a value this property can't take: absent
-    if (e->value.kind != UI_VALUE_TOKEN) v = e->value;
-    if (v.kind == UI_VALUE_UNSET) return 0;
+    if (!entry_value(view, e, &v)) return 0; // a missing token, a cycle, or a value it can't take: absent
     *text_set |= text_field(e->prop);
     if (v.kind == UI_VALUE_INHERIT || v.kind == UI_VALUE_INITIAL) {
         size_t off, size;
         if (!slot_of(e->prop, &off, &size)) return 0;
         const ui_computed *from = v.kind == UI_VALUE_INITIAL || !parent ? initial_values() : parent;
         memcpy((char *)c + off, (const char *)from + off, size);
-        return v.kind == UI_VALUE_INHERIT && parent && !inherited(e->prop) ? UI_STYLE_INHERITS_OTHER : 0;
+        return APPLIED | (v.kind == UI_VALUE_INHERIT && parent && !inherited(e->prop) ? UI_STYLE_INHERITS_OTHER : 0);
     }
     if (e->prop & 0x8000u) {
         int a = anim_of(e->prop & 0x7FFFu);
         if (a < 0) return 0;
         c->transition[a][0] = v.kind == UI_VALUE_SPRING ? v.spring.stiffness : 0;
         c->transition[a][1] = v.kind == UI_VALUE_SPRING ? v.spring.damping : 0;
-        return 0;
+        return APPLIED;
     }
     switch ((ui_style_prop)e->prop) {
     case UI_STYLE_BACKGROUND_COLOR: ui_color_from_wire(v.color, c->background); break;
@@ -748,7 +762,29 @@ static uint32_t apply(const ui_style_view *view, const ui_style_entry *e, const 
     case UI_STYLE_DIRECTION: c->text.direction = (uint8_t)v.keyword; break;
     default: apply_layout(&c->layout, e->prop, &v); break;
     }
-    return 0;
+    return APPLIED;
+}
+
+// Logical sides (docs/styles.md, "Logical properties"): margins, padding and insets have a
+// start and an end, which are the left and right sides in a left-to-right node and the
+// right and left in a right-to-left one. Groups: 0 margin, 1 padding, 2 inset.
+static int logical_side(uint16_t prop, int *group) {
+    if (prop < UI_STYLE_MARGIN_START || prop > UI_STYLE_INSET_END) return -1;
+    *group = (prop - UI_STYLE_MARGIN_START) / 2;
+    return (prop - UI_STYLE_MARGIN_START) % 2; // 0 start, 1 end
+}
+
+static const uint16_t GROUP_LEFT[3] = {UI_STYLE_MARGIN_LEFT, UI_STYLE_PADDING_LEFT, UI_STYLE_LEFT};
+static const uint16_t GROUP_RIGHT[3] = {UI_STYLE_MARGIN_RIGHT, UI_STYLE_PADDING_RIGHT, UI_STYLE_RIGHT};
+
+// The physical side (0 left, 1 right) of a left or right property, and its group.
+static int physical_side(uint16_t prop, int *group) {
+    for (int g = 0; g < 3; g++) {
+        *group = g;
+        if (prop == GROUP_LEFT[g]) return 0;
+        if (prop == GROUP_RIGHT[g]) return 1;
+    }
+    return -1;
 }
 
 typedef struct block_ref {
@@ -809,7 +845,36 @@ bool ui_style_cascade(const ui_style_view *v, const uint32_t *ids, uint32_t coun
 uint32_t ui_style_compute(const ui_style_view *v, const ui_style_entry *const *list, uint32_t count,
                           const ui_computed *parent, ui_computed *out, uint32_t *text_set) {
     uint32_t flags = 0, set = 0;
-    for (uint32_t i = 0; i < count; i++) flags |= apply(v, list[i], parent, out, &set);
+    // Per group and side: the position of the last physical entry that set it, and the last
+    // logical entry with a value (start, end). Logical ones are mapped once the node's
+    // direction is known, and win where they came later.
+    uint32_t physical_at[3][2] = {{0}}, logical_at[3][2] = {{0}}; // position + 1; 0: none
+    const ui_style_entry *logical[3][2] = {{NULL}};
+    for (uint32_t i = 0; i < count; i++) {
+        const ui_style_entry *e = list[i];
+        int group, side = logical_side(e->prop, &group);
+        if (side >= 0) {
+            ui_value value;
+            if (entry_value(v, e, &value)) {
+                logical[group][side] = e;
+                logical_at[group][side] = i + 1;
+            }
+            continue;
+        }
+        uint32_t r = apply(v, e, parent, out, &set);
+        flags |= r & UI_STYLE_INHERITS_OTHER;
+        if ((r & APPLIED) && (side = physical_side(e->prop, &group)) >= 0) physical_at[group][side] = i + 1;
+    }
+    bool rtl = out->text.direction == UI_DIRECTION_RTL;
+    for (int g = 0; g < 3; g++) {
+        for (int side = 0; side < 2; side++) {
+            if (!logical[g][side]) continue;
+            int physical = side ^ rtl; // start: left in ltr, right in rtl
+            if (logical_at[g][side] < physical_at[g][physical]) continue; // a later physical entry
+            ui_style_entry mapped = {physical ? GROUP_RIGHT[g] : GROUP_LEFT[g], logical[g][side]->value};
+            flags |= apply(v, &mapped, parent, out, &set) & UI_STYLE_INHERITS_OTHER;
+        }
+    }
     if (text_set) *text_set = set;
     return flags;
 }

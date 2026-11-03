@@ -97,6 +97,26 @@ and four rects in logical px:
   so logic waiting for an answer always gets one. A node with `display: none`, or under
   one, is answered with zero rects.
 
+## Direction
+
+A node's `direction` (ltr or rtl, inherited; a surface's direction is
+`ui_surface_desc.direction`) lays out its children:
+- **In a right-to-left row, main-start is on the right.** `flex-start` packs items to the
+  right, `row-reverse` packs them to the left, and the first item comes first from the right.
+- **In a right-to-left column, cross-start is on the right:** `align-items: flex-start`
+  aligns to the right.
+- **Physical sides stay physical.** A left margin is on the left in either direction, so
+  `margin_left: auto` pushes an item to the right, as in CSS. Logical properties
+  (`docs/styles.md`) give start and end sides.
+- **Absolute children** use their physical insets; with no inline inset they sit at their
+  static position, which follows the container's direction.
+- **Text** follows its node's direction (`docs/styles.md`, "Inheritance").
+
+`flex.c` lays out a right-to-left container in a mirrored frame: the left and right values
+of the container and of its items are swapped, layout runs as for left to right, and the
+items' x positions are mirrored back. Sizes don't depend on direction, so measurements are
+shared; only the final positions differ.
+
 ## The algorithm
 
 `src/layout/flex.c` follows CSS Flexible Box Layout Level 1, §9:
@@ -192,7 +212,7 @@ after a change, which flexbox's algorithm doesn't offer.
 
 ## Conformance
 
-`tools/layout-fixtures` holds 165 fixtures. Each covers one property or interaction:
+`tools/layout-fixtures` holds 209 fixtures. Each covers one property or interaction:
 - direction × `justify-content`, `align-items` and `align-self`;
 - grow, shrink and basis;
 - wrap and `align-content`, gaps;
@@ -200,7 +220,12 @@ after a change, which flexbox's algorithm doesn't offer.
 - absolute positioning;
 - `display: none`, `aspect-ratio`;
 - nesting, intrinsic sizes, baselines;
-- text measurement and wrapping.
+- text measurement and wrapping;
+- right to left (`dir="rtl"` on the fixture's root, 44 fixtures): `justify-content` and
+  `align-items` in rows and columns, wrap and `align-content`, gaps, grow and shrink,
+  baselines, auto margins and physical margins and padding, absolute insets and static
+  positions, logical margins, padding and insets in both directions, logical against
+  physical precedence, text, and nested directions.
 
 The pipeline:
 - **`make_fixtures.py`** writes the fixtures from compact specs. Each fixture is a fragment
@@ -221,7 +246,7 @@ The pipeline:
 | --- | --- |
 | Tolerance, boxes without text | 1/64 px (Chrome's LayoutUnit) |
 | Tolerance, fixtures with text | 0.5 px |
-| Result (2026-11-02) | **165 of 165 match** (100%) |
+| Result (2026-11-03) | **209 of 209 match** (100%) |
 | Known deviations | none (`tools/layout-fixtures/deviations.md`) |
 
 Text matches within the tolerance because both sides shape with HarfBuzz at the same size,
@@ -241,7 +266,6 @@ one fixture next to Chrome's.
 
 ## Limitations
 
-- Left-to-right only: `direction: rtl` doesn't mirror rows yet (text inside is bidi).
 - No `order`, no `flex-basis: content`, no `visibility: collapse`, no grid (milestone 2.1).
 - One border width for all sides.
 - Intrinsic sizes follow Chrome's simpler algorithm, not §9.9.1's flex fractions; the

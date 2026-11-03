@@ -38,7 +38,8 @@ static bool transitionable(uint16_t p) {
 bool ui_style_prop_known(uint16_t prop) {
     if (prop & 0x8000u) return transitionable(prop & 0x7FFFu);
     return (prop >= UI_STYLE_BACKGROUND_COLOR && prop <= UI_STYLE_DIRECTION) ||
-           (prop >= UI_STYLE_DISPLAY && prop <= UI_STYLE_ASPECT_RATIO);
+           (prop >= UI_STYLE_DISPLAY && prop <= UI_STYLE_ASPECT_RATIO) ||
+           (prop >= UI_STYLE_MARGIN_START && prop <= UI_STYLE_INSET_END);
 }
 
 static bool length(const ui_value *v, bool negative, bool automatic, bool none) {
@@ -118,6 +119,12 @@ bool ui_style_value_valid(uint16_t prop, const ui_value *v, bool override) {
     case UI_STYLE_PADDING_RIGHT:
     case UI_STYLE_PADDING_BOTTOM:
     case UI_STYLE_PADDING_LEFT: return length(v, false, false, false);
+    case UI_STYLE_PADDING_START:
+    case UI_STYLE_PADDING_END: return length(v, false, false, false);
+    case UI_STYLE_MARGIN_START:
+    case UI_STYLE_MARGIN_END:
+    case UI_STYLE_INSET_START:
+    case UI_STYLE_INSET_END:
     case UI_STYLE_MARGIN_TOP:
     case UI_STYLE_MARGIN_RIGHT:
     case UI_STYLE_MARGIN_BOTTOM:

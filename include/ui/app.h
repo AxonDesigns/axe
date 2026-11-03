@@ -36,6 +36,8 @@ typedef struct ui_surface_desc {
     uint32_t width, height; // initial logical size; the compositor may override for windows
     uint32_t scale_120;     // headless only: scale in 120ths (0 means 120 = 1.0)
     const char *title;      // windows only; copied
+    // What its top-level nodes inherit as their direction (ui_direction; 0: left to right).
+    uint32_t direction;
 } ui_surface_desc;
 
 // The stand-in for a language runtime. Its callbacks run on the logic actor (the logic

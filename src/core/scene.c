@@ -82,6 +82,7 @@ static ui_scene_root *find_root(ui_scene *s, ui_handle surface) {
     return NULL;
 }
 
+
 uint32_t ui_scene_root_index(const ui_scene *s, ui_handle surface) {
     for (uint32_t i = 0; i < UI_MAX_SURFACES; i++) {
         if (!ui_handle_is_null(s->roots[i].surface) && ui_handle_eq(s->roots[i].surface, surface)) return i;
@@ -326,6 +327,15 @@ static bool set_override(ui_scene *s, ui_node *n, uint16_t prop, const ui_value 
     n->overrides[n->override_count++] = (ui_style_entry){prop, *v};
     n->cascade_dirty = true;
     return true;
+}
+
+void ui_scene_set_root_direction(ui_scene *s, ui_handle surface, uint8_t direction) {
+    uint32_t i = ui_scene_root_index(s, surface);
+    if (i == UI_MAX_SURFACES || s->roots[i].computed.text.direction == direction) return;
+    s->roots[i].computed.text.direction = direction;
+    for (uint32_t slot = s->roots[i].first_child; slot != UI_NO_SLOT; slot = s->nodes[slot].next_sibling)
+        mark_style_dirty(s, slot, false);
+    s->roots[i].layout_dirty = true;
 }
 
 static bool apply_create(ui_scene *s, const uint8_t *p) {
@@ -1100,8 +1110,10 @@ static int resolve_node(ui_scene *s, ui_node *n, uint64_t now_ns) {
     n->inherits_other = ui_style_compute(&view, n->cascade, n->cascade_count, parent, c, &declared) &
                         UI_STYLE_INHERITS_OTHER;
     n->text_declared = (uint16_t)declared;
-    // What layout reads: the layout values and the border.
-    if (memcmp(&old.layout, &c->layout, sizeof old.layout) || old.border_width != c->border_width)
+    // What layout reads: the layout values, the border, and the direction (an rtl container
+    // mirrors its children).
+    if (memcmp(&old.layout, &c->layout, sizeof old.layout) || old.border_width != c->border_width ||
+        old.text.direction != c->text.direction)
         layout_dirty(s, (uint32_t)(n - s->nodes));
     bool changed = false;
     changed |= update_paint(n, UI_SPRING_COLOR, c->background, c->transition[UI_ANIM_BACKGROUND], now_ns);

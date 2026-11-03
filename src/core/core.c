@@ -279,6 +279,7 @@ ui_result ui_core_add_surface(ui_core *c, const ui_surface_desc *desc, ui_handle
     ui_mailbox_init(&s->mailbox, &s->lists[0], &s->lists[1], &s->lists[2]);
 
     r = ui_scene_add_root(&c->scene, h);
+    if (r == UI_OK) ui_scene_set_root_direction(&c->scene, h, desc->direction == UI_DIRECTION_RTL);
     if (r == UI_OK) r = c->platform->vt->surface_create(c->platform, desc, s, &s->platform);
     if (r != UI_OK) goto fail;
     if (!s->configured) {
