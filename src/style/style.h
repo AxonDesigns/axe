@@ -10,7 +10,14 @@
 
 typedef struct ui_style_entry {
     uint16_t prop;  // ui_style_prop or UI_STYLE_TRANSITION(prop)
-    ui_value value; // as on the wire: colors are sRGB here; strings are interned
+    // Derived from prop by ui_style_entry_of, for computing: its UI_FAMILY_*, its logical
+    // side (group * 2 + 0 start, 1 end; -1: none), and the physical sides it sets (bit
+    // group * 2 + 0 left, 1 right).
+    uint8_t family;
+    int8_t logical;
+    uint16_t physical;
+    ui_value value; // as on the wire, but colors are linear (converted once, when decoded)
+                    // and strings are interned
 } ui_style_entry;
 
 // An interned string. Equal strings share one, so values compare by pointer; style entries,
@@ -128,18 +135,19 @@ typedef struct ui_layout_style {
     ui_length inset[4];
 } ui_layout_style;
 
-// What a node's styles, state and overrides resolve to.
+// What a node's styles, state and overrides resolve to. The values a paint change reads
+// come first.
 typedef struct ui_computed {
     float background[4];   // linear light, straight alpha
-    float border_color[4][4]; // per side: top, right, bottom, left
-    float border_width[4];    // logical px, per side
-    float corner_radius[4];   // logical px: top left, top right, bottom right, bottom left
     float opacity;
     bool clip;
     uint8_t content_animation; // ui_content_animation
-    ui_text_values text;   // inherited
     uint32_t max_lines;    // 0: unlimited
     float transition[UI_ANIM_COUNT][2]; // stiffness, damping; stiffness 0: none
+    ui_text_values text;   // inherited
+    float border_color[4][4]; // per side: top, right, bottom, left
+    float border_width[4];    // logical px, per side
+    float corner_radius[4];   // logical px: top left, top right, bottom right, bottom left
     ui_layout_style layout;
 } ui_computed;
 
@@ -219,9 +227,35 @@ enum { UI_STYLE_INHERITS_OTHER = 1 };
 uint32_t ui_style_compute(const ui_style_view *v, const ui_style_entry *const *list, uint32_t count,
                           const ui_computed *parent, ui_computed *out, uint32_t *text_set);
 
-// The set of tokens that changed since the last call, closed over tokens referring to them
-// (a token whose chain reaches a changed token changed too), and the styles whose entries
-// use any of them, appended to the changed styles. Returns false if nothing changed.
-// `tokens` receives the closure (malloc'd; free it).
+// Property families: what a change can be limited to (docs/styles.md, "Resolution"). A
+// node whose token changed computes again only the families of the entries using it, and
+// a node whose parent's inherited text values changed only its text family. Direction and
+// the layout values are OTHER, which means everything: direction maps the logical
+// properties of every family.
+enum {
+    UI_FAMILY_BACKGROUND = 1u << 0,
+    UI_FAMILY_BORDER_COLOR = 1u << 1,
+    UI_FAMILY_RADIUS = 1u << 2,
+    UI_FAMILY_OPACITY = 1u << 3,
+    UI_FAMILY_TEXT = 1u << 4, // the inherited text values but direction
+    UI_FAMILY_OTHER = 1u << 5,
+    UI_FAMILY_ALL = (1u << 6) - 1,
+};
+uint32_t ui_style_family(uint16_t prop);
+// An entry of `prop` with `value`, its derived fields filled in.
+ui_style_entry ui_style_entry_of(uint16_t prop, ui_value value);
+// ui_computed_start and ui_style_compute for `families` only: the other values in `out`
+// stay as they are. Starting resets the families' values to their initial ones (the
+// parent's for the text family; direction stays); the caller then puts set_text's in, and
+// computing applies the cascade's entries of those families. *text_set then has the text
+// family's bits only.
+void ui_computed_start_families(ui_computed *out, const ui_computed *parent, uint32_t families);
+uint32_t ui_style_compute_families(const ui_style_view *v, const ui_style_entry *const *list, uint32_t count,
+                                   const ui_computed *parent, uint32_t families, ui_computed *out,
+                                   uint32_t *text_set);
+
+// The styles (re)defined or destroyed since the last call, and the tokens that changed,
+// closed over tokens referring to them (a token whose chain reaches a changed token changed
+// too). Returns false if nothing changed. Both lists are malloc'd: free them.
 bool ui_styles_take_changes(ui_styles *s, uint32_t **styles, uint32_t *style_count,
                             uint32_t **tokens, uint32_t *token_count);

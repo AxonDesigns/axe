@@ -37,6 +37,7 @@ static void flush(fixture *f) {
     CHECK(ui_scene_apply(&f->s, bytes, size, f->now) == UI_OK);
     free(bytes);
     ui_scene_resolve(&f->s, f->now);
+    CHECK(ui_scene_check_resolved(&f->s)); // as resolving every node from scratch
     ui_scene_animate(&f->s, f->now);
 }
 
@@ -559,7 +560,81 @@ static void test_sides(void) {
     teardown(&f);
 }
 
+static bool red(const float *c) { return c[0] == 1 && c[1] == 0 && c[2] == 0; }
+
+// A token change computes again only the families of the entries reading it (docs/styles.md,
+// "Resolution"), and what those changes reach; every flush also checks the result against
+// resolving everything from scratch (ui_scene_check_resolved).
+static void test_partial_resolution(void) {
+    fixture f;
+    tree(&f); // 1 > 2 > {3, 4 > 5}; 4 declares its own text color
+    ui_cmd_set_token(f.w, 1, ui_rgba(0, 1, 0, 1));
+    ui_cmd_set_token(f.w, 4, ui_token_ref(1)); // a chain
+    ui_cmd_set_token(f.w, 2, ui_rgba(0, 1, 0, 1));
+    ui_cmd_set_token(f.w, 3, ui_px(6));
+    ui_style_decl fallback[] = {bg(1, 0, 0), {UI_STYLE_BORDER_RIGHT_COLOR, ui_rgba(1, 0, 0, 1)}};
+    ui_style_decl themed[] = {{UI_STYLE_BACKGROUND_COLOR, ui_token_ref(4)},
+                              {UI_STYLE_TEXT_COLOR, ui_token_ref(2)},
+                              {UI_STYLE_BORDER_WIDTH, ui_px(2)},
+                              {UI_STYLE_BORDER_START_COLOR, ui_token_ref(1)},
+                              {UI_STYLE_MARGIN_TOP, ui_token_ref(3)}};
+    define(&f, 9, &(ui_style_block_desc){0, fallback, 2}, 1);
+    define(&f, 10, &(ui_style_block_desc){0, themed, 5}, 1);
+    ui_cmd_set_styles(f.w, h(1), (uint32_t[]){9, 10}, 2);
+    props(&f, 1, &(ui_style_decl){UI_STYLE_DIRECTION, ui_keyword(UI_DIRECTION_RTL)}, 1);
+    props(&f, 2, &(ui_style_decl){UI_STYLE_BACKGROUND_COLOR, ui_inherit()}, 1);
+    flush(&f);
+    CHECK(green(cv(&f, 1)->background) && green(cv(&f, 1)->border_color[1])); // start is right in rtl
+    CHECK(green(cv(&f, 2)->background) && green(cv(&f, 3)->text.color));
+    // The color token: the root's background and border, and the child taking its
+    // background with inherit. Not text, so not 2's children.
+    uint64_t before = f.s.stats.styles_computed;
+    ui_cmd_set_token(f.w, 1, ui_rgba(0, 0, 1, 1));
+    flush(&f);
+    CHECK_EQ_INT(f.s.stats.styles_computed - before, 2); // 1, then 2 (inherit)
+    CHECK(blue(cv(&f, 1)->background) && blue(cv(&f, 1)->border_color[1]) && blue(n_of(&f)->color));
+    CHECK(blue(cv(&f, 2)->background) && cv(&f, 3)->background[3] == 0);
+    CHECK(green(cv(&f, 1)->text.color));
+    // The text token: the text family, inherited down to where 4 declares its own.
+    before = f.s.stats.styles_computed;
+    ui_cmd_set_token(f.w, 2, ui_rgba(1, 0, 0, 1));
+    flush(&f);
+    CHECK_EQ_INT(f.s.stats.styles_computed - before, 4); // 1, 2, 3, and 4 (unchanged: 5 isn't)
+    CHECK(red(cv(&f, 3)->text.color) && blue(cv(&f, 5)->text.color));
+    // A token whose value the property can't take makes the entry absent: the lower one shows.
+    ui_cmd_set_token(f.w, 1, ui_px(3));
+    flush(&f);
+    CHECK(red(cv(&f, 1)->background) && red(cv(&f, 1)->border_color[1]) && red(cv(&f, 2)->background));
+    ui_cmd_set_token(f.w, 1, ui_rgba(0, 1, 0, 1));
+    flush(&f);
+    CHECK(green(cv(&f, 1)->background) && green(cv(&f, 1)->border_color[1]));
+    // A layout token computes everything and lays out again.
+    f.s.roots[0].layout_dirty = false;
+    ui_cmd_set_token(f.w, 3, ui_px(11));
+    flush(&f);
+    CHECK(cv(&f, 1)->layout.margin[0].value == 11 && f.s.nodes[1].layout.dirty);
+    // Redefining the style gathers its users' cascades again.
+    define(&f, 10, &(ui_style_block_desc){0, themed, 1}, 1);
+    flush(&f);
+    CHECK(green(cv(&f, 1)->background) && red(cv(&f, 1)->border_color[1]) && cv(&f, 1)->layout.margin[0].value == 0);
+    // Enough users that one walk of the tree resolves them (rather than a queue sorted by
+    // depth), with transitions: values head to the new color.
+    for (uint32_t i = 0; i < 300; i++) {
+        ui_cmd_create_node(f.w, h(10 + i), h(i % 3 ? 2 : 4));
+        ui_cmd_set_styles(f.w, h(10 + i), (uint32_t[]){10}, 1);
+    }
+    props(&f, 2, &(ui_style_decl){UI_STYLE_TRANSITION(UI_STYLE_BACKGROUND_COLOR), ui_transition(100, 20)}, 1);
+    flush(&f);
+    before = f.s.stats.styles_computed;
+    ui_cmd_set_token(f.w, 1, ui_rgba(0, 0, 1, 1));
+    flush(&f);
+    CHECK_EQ_INT(f.s.stats.styles_computed - before, 302); // the users, and 2 (inherit)
+    CHECK(blue(cv(&f, 10)->background) && blue(cv(&f, 309)->background));
+    teardown(&f);
+}
+
 int main(void) {
+    RUN(test_partial_resolution);
     RUN(test_sides);
     RUN(test_logical);
     RUN(test_inheritance);

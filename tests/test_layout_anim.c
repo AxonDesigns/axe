@@ -49,6 +49,7 @@ static void frame(fixture *f) {
         free(bytes);
     }
     ui_scene_resolve(&f->s, f->now);
+    CHECK(ui_scene_check_resolved(&f->s)); // as resolving every node from scratch
     ui_scene_animate(&f->s, f->now);
     ui_scene_layout(&f->s, f->surface, 400, 300, 1, NULL, f->now);
 }

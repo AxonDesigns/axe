@@ -15,6 +15,72 @@ milestone first.
   library mapped until exit, and the suppressions match again. The cause on this machine
   wasn't pinned down (no driver or loader update; a reboot in between).
 
+### Style resolution performance
+- **Profiled first** (Callgrind on `bench_layout`'s token case: one token that all 10,005
+  nodes read for their background, through one style): 28.9M instructions and 6.4 ms. Of
+  them, `update_paint` 22%, `resolve_node` 10%, computing 8.6%, gathering cascades again
+  8.4% (every user's, although a token never changes which entries apply), sRGB to linear
+  8% (`powf` on every color, on every computation), the depth sort 8%, copying and
+  comparing whole computed values 11%, and the scan for users 5%.
+- **Property families** (docs/styles.md, "Resolution"): background, border colors, radii,
+  opacity, text (inherited text values but direction) and other (layout, direction,
+  transitions, the rest). A node can be queued for some families; computing them resets
+  only their values (the parent's for text), applies only their entries, and runs only
+  their effects. Other means everything, since direction maps every family's logical
+  properties. The plan said "per property"; families are as precise for themes (a theme
+  token feeds one or two families) with far less bookkeeping.
+- **Token changes queue families, not cascades.** A user is queued with the families of
+  its entries reading a changed token (closed over chains); its cascade isn't gathered
+  again. A token that makes a declaration invalid needs nothing special: computing treats
+  the entry as absent and the lower one shows, so the plan's "cascade again when validity
+  changes" wasn't needed. Redefined and destroyed styles still gather their users'
+  cascades again.
+- **Finding users without indices.** Each node keeps a 64-bit filter of the token ids its
+  cascade reads and the families of those entries, rebuilt whenever it is computed
+  entirely. A token change scans nodes' filters (0.06 ms for 10k) and reads a cascade only
+  when the filter matches and more than one family reads tokens. The planned style → nodes
+  and token → nodes indices would save part of that scan but need upkeep in `set_styles`,
+  overrides and destruction; not worth it at this cost.
+- **Inherited changes** queue children with the text family only (everything on a
+  direction change, or for a child taking `inherit` on a non-inherited property). The
+  paragraph is keyed again only if a shaping value changed, and its line parameters set
+  only if line height or alignment did.
+- **One walk instead of a sort** for queues over 64 nodes and an eighth of the scene: the
+  tree in order, resolving queued nodes and what they reach. What the walk doesn't reach
+  (nothing while every node is under a surface) is sorted as before.
+- **Colors are linear from decoding:** entries, tokens and the overrides `set_color` and
+  `start_spring` write convert once, so computing copies them.
+- **Memory decides the rest.** 10k nodes take 10.5 MB, beyond this machine's 4 MB L3, so
+  after the above the time followed cache lines touched, not instructions. `ui_node`'s
+  fields are now grouped by use (the tree and style bookkeeping, what is drawn, the computed
+  values with the paint ones first), entries carry their family and logical side, and
+  computing no longer reads the direction unless a logical entry needs it, nor `set_text`'s
+  source unless the text family is computed. The last two alone took the token case from
+  about 1.06 to 0.76 ms. Prefetching the next nodes in the walk didn't help.
+- **Results** (release, Ryzen 5 3400G, medians of 15 runs over several runs of the
+  benchmark on 2026-11-03; 10,005 nodes):
+
+  | Case | Before | After | Instructions (Callgrind) |
+  | --- | --- | --- | --- |
+  | Token change (a background) | 6.4 ms | 0.76–0.90 ms | 28.9M → 5.6M |
+  | Inherited text color at the root | 5.0 ms | 1.8–2.0 ms | 4.7M after |
+
+  The token case meets the < 1 ms target with little margin; it is bound by memory (about
+  three cache misses per node), so a slower memory system would miss it. Going further
+  means splitting `ui_node` into hot and cold arrays. The inherited case's remaining misses
+  are the text values themselves and each text node's `set_text` source.
+- **Checked against resolving everything:** `ui_scene_check_resolved` computes every node
+  from scratch and compares (and that what is drawn follows the values, or a spring heads
+  there). `test_style`, `test_layout` and `test_layout_anim` run it after every resolution;
+  `fuzz_commands` traps on a difference. Planting two bugs (text changes not reaching
+  children; a partial background not drawn) failed it each time.
+- **`fuzz_commands` can split its input** (bits 3–7 of the first byte, unused before): the
+  ops before the split apply and resolve, then the rest, then the whole buffer twice as
+  before. Applying the same buffer twice re-applies every node's own ops, so changes to an
+  already resolved scene (a token under styled nodes, the walk) were nearly unreachable.
+  A zero split is the old behavior, so the corpus keeps its meaning; `seed15` splits after
+  80 styled nodes and changes their tokens.
+
 ### Conformance at fractional scales
 - **Every fixture is recorded at 1, 1.25 and 1.5** (`record.py`, `expected-125/`,
   `expected-150/`; the 1.0 results didn't change on re-recording) and

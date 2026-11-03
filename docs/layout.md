@@ -234,9 +234,12 @@ Text is shaped beforehand, as the workers do before a buffer applies.
 | Full layout, cold: every paragraph measured for the first time (one run) | 17–26 ms | | 22,872 computations |
 | Full layout, every node's cache dropped, text measurements kept | 9–13 ms | 8.2 ms | |
 | Incremental: one paragraph's text changes (target < 1 ms) | 0.68–1.4 ms | 0.46–0.60 ms | 34 computations, 4,419 cache hits |
-| Style resolution of all 10,005 nodes after a token change | 4.0–5.9 ms | 3.8 ms | |
+| Style resolution after a token every node reads for its background (target < 1 ms) | 0.76–0.90 ms | 0.73–0.88 ms | 10,003 computations, background only |
+| Style resolution after the root's text color changes (inherited by every node) | 1.8–2.0 ms | 1.6–1.9 ms | 10,005 computations, text only |
 
-Ranges are over three runs of the benchmark on 2026-11-02, on a Ryzen 5 3400G (4 cores, 8
+The resolution cases were measured on 2026-11-03 after M2.1's partial resolution
+([`docs/styles.md`](styles.md), "Resolution"; before it, 6.4 and 5.0 ms). The other
+ranges are over three runs of the benchmark on 2026-11-02, on a Ryzen 5 3400G (4 cores, 8
 threads) while a browser kept about three threads busy, so medians varied by up to 2×; the
 best run of each case is the steadier figure. The incremental case is dominated by the grid: the edited card's height
 changes its row, so the grid lays out its 1,429 cards again, each from its cache (about

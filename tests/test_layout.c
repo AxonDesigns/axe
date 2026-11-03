@@ -50,6 +50,7 @@ static void frame(fixture *f) {
         free(bytes);
     }
     ui_scene_resolve(&f->s, f->now);
+    CHECK(ui_scene_check_resolved(&f->s)); // as resolving every node from scratch
     ui_scene_animate(&f->s, f->now);
     for (int i = 0; i < 2; i++) ui_scene_layout(&f->s, f->surfaces[i], f->width, f->height, 1, &text, f->now);
 }

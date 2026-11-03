@@ -231,7 +231,8 @@ bool ui_style_decode(ui_styles *s, const uint8_t *p, uint32_t bytes, uint32_t co
         if (!ui_style_prop_known(prop) || !ui_style_kind_words(e[2])) continue;
         ui_value v;
         ok = read_value(e, &v) && ui_style_value_valid(prop, &v, override) && intern_value(s, &v);
-        if (ok) out[n++] = (ui_style_entry){prop, v};
+        if (ok && v.kind == UI_VALUE_COLOR) ui_color_from_wire(v.color, v.color); // linear, once
+        if (ok) out[n++] = ui_style_entry_of(prop, v);
     }
     if (!ok) {
         for (uint32_t i = 0; i < n; i++) ui_styles_release_value(s, &out[i].value);
@@ -419,6 +420,7 @@ bool ui_styles_set_token(ui_styles *s, const uint8_t *payload, uint32_t size) {
     ui_value v;
     if (!id || !ui_style_kind_words(e[2]) || !read_value(e, &v)) return false;
     if (v.kind != UI_VALUE_UNSET && !ui_style_token_value_valid(&v)) return false;
+    if (v.kind == UI_VALUE_COLOR) ui_color_from_wire(v.color, v.color); // linear, as entries
     if (!grow_tokens(s) ||
         !note_change(&s->changed_tokens, &s->changed_token_count, &s->changed_token_capacity, id) ||
         !intern_value(s, &v))
@@ -742,7 +744,12 @@ static bool entry_value(const ui_style_view *view, const ui_style_entry *e, ui_v
         *v = e->value;
         return v->kind != UI_VALUE_UNSET;
     }
-    return ui_style_view_token_value(view, &e->value, v) && ui_style_value_valid(e->prop, v, false);
+    if (!ui_style_view_token_value(view, &e->value, v)) return false;
+    // A token's color was checked when it was set; what remains is whether the property
+    // takes a color (the color families, and text color).
+    if (v->kind == UI_VALUE_COLOR)
+        return (e->family & (UI_FAMILY_BACKGROUND | UI_FAMILY_BORDER_COLOR)) || e->prop == UI_STYLE_TEXT_COLOR;
+    return ui_style_value_valid(e->prop, v, false);
 }
 
 static uint32_t apply(const ui_style_view *view, const ui_style_entry *e, const ui_computed *parent,
@@ -765,9 +772,9 @@ static uint32_t apply(const ui_style_view *view, const ui_style_entry *e, const 
         return APPLIED;
     }
     switch ((ui_style_prop)e->prop) {
-    case UI_STYLE_BACKGROUND_COLOR: ui_color_from_wire(v.color, c->background); break;
+    case UI_STYLE_BACKGROUND_COLOR: memcpy(c->background, v.color, sizeof c->background); break;
     case UI_STYLE_BORDER_COLOR:
-        for (int i = 0; i < 4; i++) ui_color_from_wire(v.color, c->border_color[i]);
+        for (int i = 0; i < 4; i++) memcpy(c->border_color[i], v.color, sizeof c->border_color[i]);
         break;
     case UI_STYLE_BORDER_WIDTH:
         for (int i = 0; i < 4; i++) c->border_width[i] = v.number;
@@ -783,7 +790,7 @@ static uint32_t apply(const ui_style_view *view, const ui_style_entry *e, const 
     case UI_STYLE_BORDER_RIGHT_COLOR:
     case UI_STYLE_BORDER_BOTTOM_COLOR:
     case UI_STYLE_BORDER_LEFT_COLOR:
-        ui_color_from_wire(v.color, c->border_color[e->prop - UI_STYLE_BORDER_TOP_COLOR]);
+        memcpy(c->border_color[e->prop - UI_STYLE_BORDER_TOP_COLOR], v.color, sizeof c->border_color[0]);
         break;
     case UI_STYLE_CORNER_RADIUS_TOP_LEFT:
     case UI_STYLE_CORNER_RADIUS_TOP_RIGHT:
@@ -791,7 +798,7 @@ static uint32_t apply(const ui_style_view *view, const ui_style_entry *e, const 
     case UI_STYLE_CORNER_RADIUS_BOTTOM_LEFT: c->corner_radius[e->prop - UI_STYLE_CORNER_RADIUS_TOP_LEFT] = v.number; break;
     case UI_STYLE_OPACITY: c->opacity = v.number; break;
     case UI_STYLE_CLIP: c->clip = v.keyword == UI_CLIP_RECT; break;
-    case UI_STYLE_TEXT_COLOR: ui_color_from_wire(v.color, c->text.color); break;
+    case UI_STYLE_TEXT_COLOR: memcpy(c->text.color, v.color, sizeof c->text.color); break;
     case UI_STYLE_LINE_HEIGHT: c->text.line_height = v.kind == UI_VALUE_AUTO ? 0 : v.number; break;
     case UI_STYLE_TEXT_ALIGN: c->text.align = (uint8_t)v.keyword; break;
     case UI_STYLE_MAX_LINES: c->max_lines = v.kind == UI_VALUE_NONE ? 0 : (uint32_t)v.number; break;
@@ -828,22 +835,15 @@ static const uint16_t GROUP_RIGHT[GROUPS] = {
 static const uint16_t GROUP_BOTH[GROUPS] = {0, 0, 0, UI_STYLE_BORDER_WIDTH, UI_STYLE_BORDER_COLOR,
                                             UI_STYLE_CORNER_RADIUS, UI_STYLE_CORNER_RADIUS};
 
-// The logical side (0 start, 1 end) of a property, and its group; -1 if not logical.
-static int logical_side(uint16_t prop, int *group) {
+ui_style_entry ui_style_entry_of(uint16_t prop, ui_value value) {
+    ui_style_entry e = {.prop = prop, .family = (uint8_t)ui_style_family(prop), .logical = -1, .value = value};
     for (int g = 0; g < GROUPS; g++) {
-        *group = g;
-        if (prop == GROUP_START[g]) return 0;
-        if (prop == GROUP_END[g]) return 1;
+        if (prop == GROUP_START[g]) e.logical = (int8_t)(g * 2);
+        if (prop == GROUP_END[g]) e.logical = (int8_t)(g * 2 + 1);
+        if (prop == GROUP_LEFT[g] || prop == GROUP_BOTH[g]) e.physical |= (uint16_t)(1u << (g * 2));
+        if (prop == GROUP_RIGHT[g] || prop == GROUP_BOTH[g]) e.physical |= (uint16_t)(1u << (g * 2 + 1));
     }
-    return -1;
-}
-
-// Marks the physical sides (0 left, 1 right) an applied property set, in every group.
-static void note_physical(uint16_t prop, uint32_t at, uint32_t physical_at[GROUPS][2]) {
-    for (int g = 0; g < GROUPS; g++) {
-        if (prop == GROUP_LEFT[g] || prop == GROUP_BOTH[g]) physical_at[g][0] = at;
-        if (prop == GROUP_RIGHT[g] || prop == GROUP_BOTH[g]) physical_at[g][1] = at;
-    }
+    return e;
 }
 
 typedef struct block_ref {
@@ -901,41 +901,103 @@ bool ui_style_cascade(const ui_style_view *v, const uint32_t *ids, uint32_t coun
     return ok;
 }
 
-uint32_t ui_style_compute(const ui_style_view *v, const ui_style_entry *const *list, uint32_t count,
-                          const ui_computed *parent, ui_computed *out, uint32_t *text_set) {
+uint32_t ui_style_family(uint16_t prop) {
+    switch (prop) {
+    case UI_STYLE_BACKGROUND_COLOR: return UI_FAMILY_BACKGROUND;
+    case UI_STYLE_BORDER_COLOR:
+    case UI_STYLE_BORDER_TOP_COLOR:
+    case UI_STYLE_BORDER_RIGHT_COLOR:
+    case UI_STYLE_BORDER_BOTTOM_COLOR:
+    case UI_STYLE_BORDER_LEFT_COLOR:
+    case UI_STYLE_BORDER_START_COLOR:
+    case UI_STYLE_BORDER_END_COLOR: return UI_FAMILY_BORDER_COLOR;
+    case UI_STYLE_CORNER_RADIUS:
+    case UI_STYLE_CORNER_RADIUS_TOP_LEFT:
+    case UI_STYLE_CORNER_RADIUS_TOP_RIGHT:
+    case UI_STYLE_CORNER_RADIUS_BOTTOM_RIGHT:
+    case UI_STYLE_CORNER_RADIUS_BOTTOM_LEFT:
+    case UI_STYLE_CORNER_RADIUS_TOP_START:
+    case UI_STYLE_CORNER_RADIUS_TOP_END:
+    case UI_STYLE_CORNER_RADIUS_BOTTOM_START:
+    case UI_STYLE_CORNER_RADIUS_BOTTOM_END: return UI_FAMILY_RADIUS;
+    case UI_STYLE_OPACITY: return UI_FAMILY_OPACITY;
+    case UI_STYLE_TEXT_COLOR:
+    case UI_STYLE_LINE_HEIGHT:
+    case UI_STYLE_TEXT_ALIGN:
+    case UI_STYLE_FONT_FAMILY:
+    case UI_STYLE_FONT_SIZE:
+    case UI_STYLE_FONT_WEIGHT:
+    case UI_STYLE_FONT_SLANT:
+    case UI_STYLE_LANGUAGE: return UI_FAMILY_TEXT;
+    default: return UI_FAMILY_OTHER; // direction, the rest, and transitions
+    }
+}
+
+static uint32_t compute(const ui_style_view *v, const ui_style_entry *const *list, uint32_t count,
+                        const ui_computed *parent, uint32_t families, ui_computed *out, uint32_t *text_set) {
     uint32_t flags = 0, set = 0;
     // Per group and side: the position of the last physical entry that set it, and the last
     // logical entry with a value (start, end). Logical ones are mapped once the node's
     // direction is known, and win where they came later.
-    uint32_t physical_at[GROUPS][2] = {{0}}, logical_at[GROUPS][2] = {{0}}; // position + 1; 0: none
-    const ui_style_entry *logical[GROUPS][2] = {{NULL}};
+    // Indexed by group * 2 + side (as ui_style_entry's logical and physical).
+    uint32_t physical_at[GROUPS * 2] = {0}, logical_at[GROUPS * 2]; // position + 1; 0: none
+    const ui_style_entry *logical[GROUPS * 2];
+    uint32_t logical_seen = 0; // bit per index: logical[] and logical_at[] hold an entry
     for (uint32_t i = 0; i < count; i++) {
         const ui_style_entry *e = list[i];
-        int group, side = logical_side(e->prop, &group);
-        if (side >= 0) {
+        if (!(e->family & families)) continue;
+        if (e->logical >= 0) {
             ui_value value;
             if (entry_value(v, e, &value)) {
-                logical[group][side] = e;
-                logical_at[group][side] = i + 1;
+                logical[e->logical] = e;
+                logical_at[e->logical] = i + 1;
+                logical_seen |= 1u << e->logical;
             }
             continue;
         }
         uint32_t r = apply(v, e, parent, out, &set);
         flags |= r & UI_STYLE_INHERITS_OTHER;
-        if (r & APPLIED) note_physical(e->prop, i + 1, physical_at);
+        for (uint32_t bits = (r & APPLIED) ? e->physical : 0; bits; bits &= bits - 1)
+            physical_at[__builtin_ctz(bits)] = i + 1;
     }
-    bool rtl = out->text.direction == UI_DIRECTION_RTL;
-    for (int g = 0; g < GROUPS; g++) {
-        for (int side = 0; side < 2; side++) {
-            if (!logical[g][side]) continue;
-            int physical = side ^ rtl; // start: left in ltr, right in rtl
-            if (logical_at[g][side] < physical_at[g][physical]) continue; // a later physical entry
-            ui_style_entry mapped = {physical ? GROUP_RIGHT[g] : GROUP_LEFT[g], logical[g][side]->value};
-            flags |= apply(v, &mapped, parent, out, &set) & UI_STYLE_INHERITS_OTHER;
-        }
+    int rtl = logical_seen && out->text.direction == UI_DIRECTION_RTL;
+    for (; logical_seen; logical_seen &= logical_seen - 1) {
+        int at = __builtin_ctz(logical_seen), g = at / 2;
+        int physical = (at % 2) ^ rtl; // start: left in ltr, right in rtl
+        if (logical_at[at] < physical_at[g * 2 + physical]) continue; // a later physical entry
+        ui_style_entry mapped = ui_style_entry_of(physical ? GROUP_RIGHT[g] : GROUP_LEFT[g], logical[at]->value);
+        flags |= apply(v, &mapped, parent, out, &set) & UI_STYLE_INHERITS_OTHER;
     }
     if (text_set) *text_set = set;
     return flags;
+}
+
+uint32_t ui_style_compute(const ui_style_view *v, const ui_style_entry *const *list, uint32_t count,
+                          const ui_computed *parent, ui_computed *out, uint32_t *text_set) {
+    return compute(v, list, count, parent, UI_FAMILY_ALL, out, text_set);
+}
+
+void ui_computed_start_families(ui_computed *out, const ui_computed *parent, uint32_t families) {
+    if (families == UI_FAMILY_ALL) {
+        ui_computed_start(out, parent);
+        return;
+    }
+    const ui_computed *init = initial_values();
+    if (families & UI_FAMILY_BACKGROUND) memcpy(out->background, init->background, sizeof out->background);
+    if (families & UI_FAMILY_BORDER_COLOR) memcpy(out->border_color, init->border_color, sizeof out->border_color);
+    if (families & UI_FAMILY_RADIUS) memcpy(out->corner_radius, init->corner_radius, sizeof out->corner_radius);
+    if (families & UI_FAMILY_OPACITY) out->opacity = init->opacity;
+    if (families & UI_FAMILY_TEXT) {
+        uint8_t direction = out->text.direction; // not in the family
+        out->text = (parent ? parent : init)->text;
+        out->text.direction = direction;
+    }
+}
+
+uint32_t ui_style_compute_families(const ui_style_view *v, const ui_style_entry *const *list, uint32_t count,
+                                   const ui_computed *parent, uint32_t families, ui_computed *out,
+                                   uint32_t *text_set) {
+    return compute(v, list, count, parent, families, out, text_set);
 }
 
 // ---- Changes -----------------------------------------------------------------------------
@@ -966,15 +1028,6 @@ bool ui_styles_take_changes(ui_styles *s, uint32_t **styles, uint32_t *style_cou
                 break;
             (*tokens)[(*token_count)++] = t->id;
             grew = true;
-        }
-    }
-    // Styles that use any of them.
-    for (uint32_t i = 0; *token_count && i < s->def_capacity; i++) {
-        const ui_style_def *d = &s->defs[i];
-        for (uint32_t k = 0; d->id && k < d->token_count; k++) {
-            if (!contains(*tokens, *token_count, d->tokens[k])) continue;
-            note_change(&s->changed_styles, &s->changed_style_count, &s->changed_style_capacity, d->id);
-            break;
         }
     }
     *styles = s->changed_styles;

@@ -9,6 +9,10 @@
 //  2. Incremental relayout after one paragraph's text changes: resolve and lay out.
 //     Target: under 1 ms.
 //  3. Style resolution of all 10,005 nodes after the token their style uses changes.
+//  4. The same, for the root's text color, which every node inherits.
+// Each case is a noinline bench_case_* function holding exactly what is timed, so
+// `bench_layout --callgrind` (each case once) can be measured per case with Callgrind's
+// --toggle-collect (tools/bench/callgrind.py).
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -52,7 +56,8 @@ static void apply(ui_scene *s, ui_cmd_writer *w) {
 
 static void set_text(ui_cmd_writer *w, ui_handle h, const char *s, float size) {
     static const char *const fam[] = {"Noto Sans"};
-    ui_text_desc t = {.set = UI_TEXT_SET_ALL, .text = s, .length = (uint32_t)strlen(s),
+    // The color comes from the node (inherited from the root), the rest is set here.
+    ui_text_desc t = {.set = UI_TEXT_SET_ALL & ~UI_TEXT_SET_COLOR, .text = s, .length = (uint32_t)strlen(s),
                       .style = {.family = 0, .weight = 400, .size = size, .color = {0, 0, 0, 1}},
                       .families = fam, .family_count = 1, .line_height = 1.25f};
     if (ui_cmd_set_text(w, h, &t) != UI_OK) abort();
@@ -85,7 +90,9 @@ static void build(ui_scene *s, ui_cmd_writer *w) {
     uint32_t slot = 1;
     ui_handle root = {slot++, 1}, grid = {slot++, 1};
     ui_cmd_create_node(w, root, surface);
-    ui_cmd_set_props(w, root, &(ui_style_decl){UI_STYLE_FLEX_GROW, ui_number(1)}, 1);
+    ui_cmd_set_token(w, 2, ui_rgba(0.1f, 0.1f, 0.12f, 1));
+    ui_cmd_set_props(w, root, (ui_style_decl[]){{UI_STYLE_FLEX_GROW, ui_number(1)},
+                                                {UI_STYLE_TEXT_COLOR, ui_token_ref(2)}}, 2);
     ui_cmd_create_node(w, grid, root);
     ui_cmd_set_props(w, grid, (ui_style_decl[]){{UI_STYLE_FLEX_WRAP, ui_keyword(UI_FLEX_WRAP)},
                                                 {UI_STYLE_ROW_GAP, ui_px(8)}, {UI_STYLE_COLUMN_GAP, ui_px(8)},
@@ -130,7 +137,26 @@ static void mark_all_dirty(ui_scene *s) {
     s->roots[0].layout_dirty = true;
 }
 
-int main(void) {
+// The timed work of each case.
+__attribute__((noinline)) static void bench_case_full_cold(ui_scene *s) {
+    ui_scene_layout(s, surface, 1600, 900, 1, &text, 0);
+}
+
+__attribute__((noinline)) static void bench_case_full_warm(ui_scene *s) {
+    ui_scene_layout(s, surface, 1600, 900, 1, &text, 0);
+}
+
+__attribute__((noinline)) static void bench_case_incremental(ui_scene *s) {
+    ui_scene_resolve(s, 0);
+    ui_scene_layout(s, surface, 1600, 900, 1, &text, 0);
+}
+
+__attribute__((noinline)) static void bench_case_token(ui_scene *s) { ui_scene_resolve(s, 0); }
+
+__attribute__((noinline)) static void bench_case_inherited(ui_scene *s) { ui_scene_resolve(s, 0); }
+
+int main(int argc, char **argv) {
+    bool callgrind = argc > 1 && !strcmp(argv[1], "--callgrind"); // each case once
     ui_font_registry_create(&(ui_font_registry_desc){.log = &quiet}, &fonts);
     ui_font_registry_add_file(fonts, FONT, 0, NULL);
     ui_text_context_init(&text, fonts);
@@ -145,29 +171,29 @@ int main(void) {
     build(&s, w);
     shape_all(&s);
     uint32_t nodes = s.handles.live;
+    enum { RUNS = 15, EDITS = 101 };
+    int runs = callgrind ? 1 : RUNS, edits = callgrind ? 1 : EDITS;
 
     // 1. Full layout.
     uint64_t t0 = ui_monotonic_ns();
-    ui_scene_layout(&s, surface, 1600, 900, 1, &text, 0);
+    bench_case_full_cold(&s);
     uint64_t cold = ui_monotonic_ns() - t0;
     uint64_t computed = s.layout_stats.computed;
-    enum { RUNS = 15 };
     uint64_t warm[RUNS];
-    for (int r = 0; r < RUNS; r++) {
+    for (int r = 0; r < runs; r++) {
         mark_all_dirty(&s);
         t0 = ui_monotonic_ns();
-        ui_scene_layout(&s, surface, 1600, 900, 1, &text, 0);
+        bench_case_full_warm(&s);
         warm[r] = ui_monotonic_ns() - t0;
     }
     printf("full layout   %u nodes: %.2f ms cold (%llu computations); with text measured %.2f ms median, "
            "%.2f ms best\n",
-           nodes, (double)cold / 1e6, (unsigned long long)computed, median_ms(warm, RUNS), best_ms(warm, RUNS));
+           nodes, (double)cold / 1e6, (unsigned long long)computed, median_ms(warm, runs), best_ms(warm, runs));
 
     // 2. One paragraph's text changes.
-    enum { EDITS = 101 };
     uint64_t inc[EDITS], inc_computed = 0, inc_hits = 0;
     char buf[160];
-    for (int r = 0; r < EDITS; r++) {
+    for (int r = 0; r < edits; r++) {
         snprintf(buf, sizeof buf, "Edited %d times: this paragraph now reads differently%s.", r,
                  r % 2 ? " and runs a little longer than before" : "");
         set_text(w, (ui_handle){paragraph_slot, 1}, buf, 13);
@@ -176,28 +202,41 @@ int main(void) {
         ui_paragraph_layout_get(s.nodes[paragraph_slot].text, &text, 1, INFINITY, &res); // shaped ahead
         uint64_t before = s.layout_stats.computed, hits = s.layout_stats.cache_hits;
         t0 = ui_monotonic_ns();
-        ui_scene_resolve(&s, 0);
-        ui_scene_layout(&s, surface, 1600, 900, 1, &text, 0);
+        bench_case_incremental(&s);
         inc[r] = ui_monotonic_ns() - t0;
         inc_computed += s.layout_stats.computed - before;
         inc_hits += s.layout_stats.cache_hits - hits;
     }
     printf("incremental   one paragraph edited: %.3f ms median, %.3f ms best (%llu computations, %llu cache "
            "hits per edit)\n",
-           median_ms(inc, EDITS), best_ms(inc, EDITS), (unsigned long long)(inc_computed / EDITS),
-           (unsigned long long)(inc_hits / EDITS));
+           median_ms(inc, edits), best_ms(inc, edits), (unsigned long long)(inc_computed / (uint64_t)edits),
+           (unsigned long long)(inc_hits / (uint64_t)edits));
 
-    // 3. A token every node's style uses changes.
-    uint64_t res_ns[RUNS];
-    for (int r = 0; r < RUNS; r++) {
-        ui_cmd_set_token(w, 1, ui_rgba(r % 2 ? 0.1f : 0.95f, 0.95f, 0.97f, 1));
+    // 3. A token every node's style uses changes (a paint property).
+    uint64_t res_ns[RUNS], computed_before = s.stats.styles_computed;
+    for (int r = 0; r < runs; r++) {
+        ui_cmd_set_token(w, 1, ui_rgba(r % 2 ? 0.95f : 0.1f, 0.95f, 0.97f, 1)); // built with 0.95
         apply(&s, w);
         t0 = ui_monotonic_ns();
-        ui_scene_resolve(&s, 0);
+        bench_case_token(&s);
         res_ns[r] = ui_monotonic_ns() - t0;
     }
-    printf("resolution    token change, %u nodes: %.3f ms median, %.3f ms best\n", nodes, median_ms(res_ns, RUNS),
-           best_ms(res_ns, RUNS));
+    printf("resolution    token change, %u nodes: %.3f ms median, %.3f ms best (%llu node computations)\n", nodes,
+           median_ms(res_ns, runs), best_ms(res_ns, runs),
+           (unsigned long long)((s.stats.styles_computed - computed_before) / (uint64_t)runs));
+
+    // 4. The root's text color changes: every node inherits it.
+    computed_before = s.stats.styles_computed;
+    for (int r = 0; r < runs; r++) {
+        ui_cmd_set_token(w, 2, ui_rgba(r % 2 ? 0.1f : 0.9f, 0.1f, 0.12f, 1));
+        apply(&s, w);
+        t0 = ui_monotonic_ns();
+        bench_case_inherited(&s);
+        res_ns[r] = ui_monotonic_ns() - t0;
+    }
+    printf("inherited     root text color, %u nodes: %.3f ms median, %.3f ms best (%llu node computations)\n",
+           nodes, median_ms(res_ns, runs), best_ms(res_ns, runs),
+           (unsigned long long)((s.stats.styles_computed - computed_before) / (uint64_t)runs));
 
     ui_cmd_writer_destroy(w);
     ui_scene_destroy(&s);

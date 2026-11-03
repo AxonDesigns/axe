@@ -60,9 +60,44 @@ bool ui_text_ctx_values(const ui_text_ctx *c, const ui_text_source *base, ui_sty
 bool ui_text_values_eq(const ui_text_values *a, const ui_text_values *b);
 
 typedef struct ui_node {
+    // Fields are grouped by when they are used, so resolving styles reads a few cache lines
+    // of each node: the tree and the style bookkeeping, then what is drawn.
     uint32_t parent;       // node slot, or UI_NO_SLOT when attached to a surface root
     uint32_t root;         // index into ui_scene.roots
     uint32_t first_child, last_child, next_sibling, prev_sibling;
+    // Styles: the node's list, overrides and state, and what they resolve to.
+    bool style_dirty;      // resolve at the next ui_scene_resolve
+    bool cascade_dirty;    // and gather its cascade again first (style.h)
+    uint8_t dirty_families; // UI_FAMILY_* to compute again then (style.h)
+    bool resolved;         // resolved before: changes may animate from now on
+    bool inherits_other;   // a non-inherited property takes `inherit`: follows every parent change
+    bool warned_children;  // reported as a text node with in-flow children (layout)
+    uint8_t state;         // ui_state bits
+    uint16_t jump;         // 1 << UI_SPRING_*: a set_* op set it (it jumps unless transitioned)
+    uint16_t text_declared; // UI_TEXT_SET_* bits of the text values its cascade decides
+    uint16_t style_count, override_count, override_capacity;
+    // What its cascade reads from tokens: a filter of their ids (token_bit, scene.c), and
+    // the families of the entries reading them. A token change skips nodes the filter rules out.
+    uint8_t token_families;
+    uint64_t token_filter;
+    uint32_t *styles;
+    ui_style_entry *overrides;
+    // The entries that apply to it, by increasing precedence (pointers into style
+    // definitions and its overrides; gathered again whenever those change).
+    const ui_style_entry **cascade;
+    uint32_t cascade_count, cascade_capacity;
+    ui_node_anim *anim;
+    ui_paragraph *text;    // NULL when the node has no text
+    // What is drawn. Each follows its resolved value in `computed`, through a spring while
+    // one runs.
+    float color[4];        // background: linear, straight alpha
+    float text_color[4];   // the text's default style (spans keep their own colors)
+    float opacity;
+    bool clip;             // text and descendants are clipped to the rect
+    ui_computed computed;  // what its styles resolve to
+    float border_color[4][4]; // per side: top, right, bottom, left
+    float border_width[4];    // logical px, per side
+    float radius[4];          // top left, top right, bottom right, bottom left
     // The presentation rect: where it is drawn, in logical px relative to the parent's
     // presentation rect. Its layout rect (layout.rect) unless a layout transition moves it.
     float rect[4];
@@ -70,36 +105,9 @@ typedef struct ui_node {
     // animates (docs/layout.md).
     float frame[4];
     bool framed;
-    ui_layout_node layout;
     bool placed;           // drawn at a layout rect before: a new one may animate
     bool rebased;          // moved under another parent: place it at the next layout
-    // What is drawn. Each follows its resolved value in `computed`, through a spring while
-    // one runs.
-    float color[4];        // background: linear, straight alpha
-    float border_color[4][4]; // per side: top, right, bottom, left
-    float border_width[4];    // logical px, per side
-    float radius[4];          // top left, top right, bottom right, bottom left
-    float opacity;
-    float text_color[4];   // the text's default style (spans keep their own colors)
-    bool clip;             // text and descendants are clipped to the rect
-    ui_node_anim *anim;
-    ui_paragraph *text;    // NULL when the node has no text
-    // Styles: the node's list, overrides and state, and what they resolve to.
-    uint32_t *styles;
-    ui_style_entry *overrides;
-    uint16_t style_count, override_count, override_capacity;
-    uint8_t state;         // ui_state bits
-    uint16_t jump;         // 1 << UI_SPRING_*: a set_* op set it (it jumps unless transitioned)
-    bool style_dirty;      // resolve at the next ui_scene_resolve
-    bool cascade_dirty;    // and gather its cascade again first (style.h)
-    bool resolved;         // resolved before: changes may animate from now on
-    bool inherits_other;   // a non-inherited property takes `inherit`: follows every parent change
-    bool warned_children;  // reported as a text node with in-flow children (layout)
-    uint16_t text_declared; // UI_TEXT_SET_* bits of the text values its cascade decides
-    // The entries that apply to it, by increasing precedence (pointers into style
-    // definitions and its overrides; gathered again whenever those change).
-    const ui_style_entry **cascade;
-    uint32_t cascade_count, cascade_capacity;
+    ui_layout_node layout;
     // set_text's family list and language (interned), which stand in for the inherited ones.
     const char *text_family, *text_language;
     // The node's set_text. Its paragraph shows it, or a source derived from it with the
@@ -107,7 +115,6 @@ typedef struct ui_node {
     ui_text_source *text_base;
     bool text_keyed;       // the paragraph's source was checked against the node's values
     uint32_t offer;        // index + 1 of shaping offered for its paragraph (ui_scene_offer); 0: none
-    ui_computed computed;
 } ui_node;
 
 typedef struct ui_scene_root {
@@ -240,6 +247,10 @@ void ui_scene_fonts_changed(ui_scene *s);
 // style or token that changed. A changed value jumps, or starts its transition at `now_ns`.
 // Call after applying, before animating.
 void ui_scene_resolve(ui_scene *s, uint64_t now_ns);
+// Whether every node's values are what computing them from scratch gives (cascades
+// gathered again, from their parents' values), and what is drawn follows them or a spring
+// heads there. For tests and fuzzing: it costs as much as resolving every node.
+bool ui_scene_check_resolved(ui_scene *s);
 
 // Advances every running spring to `now_ns`. Roots with a spring that was running are
 // marked dirty (the settling frame still changes the picture); `animating` is updated to

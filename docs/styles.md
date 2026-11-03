@@ -54,7 +54,7 @@ computed value, and a top-level node takes the surface's.
   or a style it lists is redefined. Its values are then computed from the cascade and the
   parent's values. A change computes the changed node, then only those children whose
   inherited values change, so it stops wherever descendants declare their own. Nodes are
-  computed parents first, in one pass per frame.
+  computed parents first, in one pass per frame ("Resolution" below).
 - **Moving a node** (`move_node`) computes it again under its new parent.
 - **Text shapes with the computed values.** A paragraph's family, size, weight, slant and
   language are its node's computed values, and its direction the node's unless `set_text`
@@ -70,8 +70,9 @@ computed value, and a top-level node takes the surface's.
 ### Tokens
 
 A declaration's value can be `token(id)`: the value of theme token `id`, set with
-`set_token`. Changing a token resolves every node that uses it again, through styles or
-overrides, so switching a theme is one op per token.
+`set_token`. Changing a token updates every node that uses it, through styles or
+overrides, so switching a theme is one op per token. Only the properties reading the
+token are computed again ("Resolution" below).
 
 - **A token's value** is a length, a percentage, a number, a color, a keyword, a string,
   auto, none, or another token (not `inherit`, `initial` or a spring). Chains resolve when
@@ -82,6 +83,35 @@ overrides, so switching a theme is one op per token.
   - the value is one the property can't take (a length for a color, a negative border
     width).
 - **Removing a token** (`set_token` with `unset`) is the same as never defining it.
+
+### Resolution
+
+Once per frame, after applying, the nodes whose values may have changed are computed again,
+parents first. How much of a node is computed depends on what changed:
+
+- **Property families.** Properties fall in six families: background, border colors,
+  corner radii, opacity, text (the inherited text values but direction), and everything
+  else (layout, direction, transitions, the rest). A node can be computed for some families
+  only: their values start again from their initial values (the parent's, for text), then
+  take the node's entries of those families, in cascade order. Only their effects follow
+  (a paint value moves or starts its transition; a paragraph shapes again only if its
+  family, size, weight, slant or language changed). Direction belongs to the last family,
+  which means everything: it decides how every family's logical properties map.
+- **A token change** computes, for each node with an entry reading the token (directly or
+  through a chain), only those entries' families. The cascade isn't gathered again: a
+  token never changes which entries apply. If the new value is one the property can't
+  take, the entry counts as absent while computing, and the lower one shows.
+- **An inherited change** computes the children for the text family only. A change of
+  direction, or a child that takes `inherit` on a property that doesn't inherit, computes
+  everything.
+- **Everything else** (styles, state, overrides, `set_text`, moves, a redefined or
+  destroyed style) computes the node entirely, its cascade gathered again where it may
+  differ.
+- **Order.** Short queues are sorted by depth; long ones (over 64 nodes and an eighth of
+  the scene) are resolved in one walk of the tree in order.
+- **Cost.** A token that every one of 10,005 nodes reads, for a background, takes about
+  0.8–0.9 ms to resolve; an inherited text color changed at the root, about 2 ms
+  ([`docs/layout.md`](layout.md), "Benchmarks").
 
 ### States
 
