@@ -13,6 +13,20 @@ endif()
 list(GET AXE_ESBUILD 0 AXE_ESBUILD)
 list(GET AXE_TSC 0 AXE_TSC)
 
+# Every workspace package must be in the lockfile, or `npm ci` (CI's install) refuses to run.
+# The build itself resolves packages through tsconfig paths, so it wouldn't notice.
+file(READ "${AXE_TS_DIR}/package-lock.json" _lock)
+file(GLOB _ts_packages "${AXE_TS_DIR}/packages/*/package.json")
+foreach(_pkg IN LISTS _ts_packages)
+    file(READ "${_pkg}" _json)
+    string(JSON _name GET "${_json}" name)
+    string(JSON _entry ERROR_VARIABLE _missing GET "${_lock}" packages "node_modules/${_name}")
+    if(_missing)
+        message(FATAL_ERROR "${_name} is missing from ts/package-lock.json: run "
+                            "`npm install --ignore-scripts --prefix ts` and commit the lockfile")
+    endif()
+endforeach()
+
 # What every bundle depends on: the packages' sources and the npm lockfile.
 file(GLOB_RECURSE AXE_TS_PACKAGE_SOURCES CONFIGURE_DEPENDS "${AXE_TS_DIR}/packages/*/src/*.ts")
 set(AXE_TS_DEPENDS ${AXE_TS_PACKAGE_SOURCES} "${AXE_TS_DIR}/package-lock.json")
