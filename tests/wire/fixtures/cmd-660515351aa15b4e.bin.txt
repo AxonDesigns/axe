@@ -1,0 +1,2 @@
+commands 40 bytes: valid
+op 14 size 20: node=00000001:1 count=2 id=1 id=2 -> ok

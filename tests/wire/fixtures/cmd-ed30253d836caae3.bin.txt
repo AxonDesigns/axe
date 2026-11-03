@@ -1,0 +1,2 @@
+commands 24 bytes: valid
+op 13 size 4: id=3 -> ok

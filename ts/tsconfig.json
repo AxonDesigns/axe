@@ -1,0 +1,21 @@
+{
+  "compilerOptions": {
+    "target": "es2023",
+    "lib": ["es2023"],
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "noPropertyAccessFromIndexSignature": true,
+    "exactOptionalPropertyTypes": true,
+    "verbatimModuleSyntax": true,
+    "isolatedModules": true,
+    "allowImportingTsExtensions": false,
+    "skipLibCheck": false,
+    "types": [],
+    "noEmit": true
+  },
+  "include": ["packages/*/src/**/*.ts", "packages/*/test/**/*.ts", "types/**/*.d.ts", "../examples/**/*.ts"]
+}

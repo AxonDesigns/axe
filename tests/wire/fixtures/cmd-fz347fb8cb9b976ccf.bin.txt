@@ -1,0 +1,19 @@
+commands 264 bytes: valid
+op 16 size 24: id=1
+    entry prop=0 kind=7 words=5 c=3e4ccccd c=00cccccd c=02090000 c=00000001 -> ok
+op 16 size 12: id=2600468483
+    entry prop=9 kind=8 words=2 k=4 -> ok
+op 1 size 20: node=00000003:1 parent=00000001:3
+op 3 size 24: node=3f800000:1310737 v=00000001 v=00000001 v=00000003 v=00000003 -> ok
+op 6 size 36: node=00000002:1 prop=3 count=4 stiffness=42c80000 damping=41200000 target=00000000 target=00000000 target=3f800000 target=3f800000 -> ok
+op 16 size 24: id=1
+    entry prop=0 kind=7 words=5 c=3f666666 c=ffffcccd c=ffffffff c=3f801dff -> drop
+op 13 size 4: id=11 -> ok
+op 15 size 16: node=00000002:1 count=1
+    entry prop=5 kind=1 words=1 read=1 -> ok
+op 12 size 52: id=305419896 blocks=2 -> ok
+  block bytes=36 states=0 entries=3 header=12
+    entry prop=999 kind=2 words=2 skipped
+    entry prop=1 kind=77 words=1 skipped
+    entry prop=5 kind=6 words=3 read=1 n=3f000000 -> ok
+  block bytes=8 states=0 entries=0 header=8

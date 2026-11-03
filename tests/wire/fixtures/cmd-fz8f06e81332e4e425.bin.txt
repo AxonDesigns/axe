@@ -1,0 +1,9 @@
+commands 276 bytes: valid
+op 1 size 16: node=00000001:1 parent=10000000:1
+op 3 size 24: node=00000001:1 v=00000000 v=00000000 v=42f00000 v=42200000 -> ok
+op 7 size 104: id=1 deadline=20266284222521364
+op 10 size 12: node=41000001:1092616192 flags=1092616192 -> drop
+op 7 size 16: id=3 deadline=1000000
+op 7 size 16: id=4 deadline=18446744073709551615
+op 11 size 32: id=1 path@8:21#0a573e9712053119 -> ok
+op 254 size 8: unknown

@@ -1,0 +1,27 @@
+commands 364 bytes: valid
+op 1 size 16: node=00000001:1 parent=10000000:1
+op 15 size 52: node=00000001:1 count=5
+    entry prop=16 kind=8 words=2 read=1 k=1 -> ok
+    entry prop=35 kind=8 words=2 read=1 k=1 -> ok
+    entry prop=82 kind=0 words=2 skipped
+    entry prop=56 kind=3 words=2 read=1 n=40400000 -> ok
+    entry prop=36 kind=8 words=2 read=1 k=10759 -> drop
+op 1 size 16: node=00000002:1 parent=00000001:1
+op 15 size 48: node=00fc0002:1 count=5
+    entry prop=45 kind=2 words=2 read=1 n=42200000 -> ok
+    entry prop=46 kind=2 words=2 read=1 n=41a00000 -> ok
+    entry prop=80 kind=4 words=1 read=1 -> ok
+    entry prop=81 kind=3 words=2 read=1 n=40000000 -> ok
+    entry prop=54 kind=2 words=2 read=1 n=3f800000 -> ok
+op 1 size 16: node=00000003:1 parent=00000001:1
+op 15 size 52: node=00000003:1 count=5
+    entry prop=45 kind=2 words=2 read=1 n=42a00000 -> ok
+    entry prop=46 kind=2 words=2 read=1 n=41a00000 -> ok
+    entry prop=80 kind=2 words=2 read=1 n=40800000 -> ok
+    entry prop=85 kind=3 words=2 read=1 n=40000000 -> ok
+    entry prop=14019 kind=0 words=2 skipped
+op 15 size 28: node=00000007:1 count=3
+    entry prop=16 kind=8 words=2 read=1 k=0 -> ok
+    entry prop=83 kind=63 words=1 skipped
+    entry prop=80 kind=13 words=1 read=1 -> ok
+op 14 size 88: node=00000007:1 count=14 id=4718606 id=0 id=0 id=65536 id=65536 id=0 id=987136 id=1 id=65584 id=65536 id=786432 id=2818052 id=514 id=2943904 -> drop

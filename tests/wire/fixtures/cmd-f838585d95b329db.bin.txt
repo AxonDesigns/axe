@@ -1,0 +1,3 @@
+commands 32 bytes: valid
+op 16 size 12: id=1
+    entry prop=0 kind=2 words=2 n=43160000 -> ok

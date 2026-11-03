@@ -1,0 +1,2 @@
+commands 56 bytes: valid
+op 6 size 36: node=00000001:1 prop=1 count=4 stiffness=2ea00000 damping=41100000 target=bdae3333 target=7fffff23 target=100000bf target=ff000000 -> drop

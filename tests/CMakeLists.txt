@@ -222,3 +222,17 @@ target_link_libraries(test_measure PRIVATE ui m)
 ui_target_warnings(test_measure)
 add_test(NAME measure COMMAND test_measure)
 set_tests_properties(measure PROPERTIES ENVIRONMENT "UI_GPU=software" TIMEOUT 120)
+
+# The migration proof (tests/wire/proof.md); temporary, built with UI_WIRE_PROOF.
+if(UI_WIRE_PROOF)
+    add_executable(wire_proof wire/proof.c wire/proof_dump.c)
+    target_include_directories(wire_proof PRIVATE ${PROJECT_SOURCE_DIR}/src ${CMAKE_CURRENT_SOURCE_DIR}/wire)
+    target_link_libraries(wire_proof PRIVATE ui)
+    ui_target_warnings(wire_proof)
+endif()
+
+# The wire IDL's generator (tools/idl): its own tests, and the committed output must be what
+# idl/wire.idl generates (docs/idl.md).
+find_package(Python3 3.10 REQUIRED COMPONENTS Interpreter)
+add_test(NAME idl_generator COMMAND Python3::Interpreter -I ${PROJECT_SOURCE_DIR}/tools/idl/test_axe_idl.py)
+add_test(NAME idl_up_to_date COMMAND Python3::Interpreter -I ${PROJECT_SOURCE_DIR}/tools/idl/axe_idl.py --check)

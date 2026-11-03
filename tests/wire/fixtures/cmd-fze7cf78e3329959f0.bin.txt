@@ -1,0 +1,10 @@
+commands 156 bytes: valid
+op 16 size 24: id=1
+    entry prop=0 kind=7 words=5 c=3d8f5c29 c=3da3d70a c=3dcccccd c=3f800000 -> ok
+op 16 size 24: id=2
+    entry prop=0 kind=6 words=5 n=3f3851ec -> ok
+op 16 size 24: id=6
+    entry prop=0 kind=7 words=5 c=3f0ccccd c=3f11eb85 c=50000000 c=0001dcd6 -> ok
+op 0 size 24: unknown
+op 16 size 24: id=5
+    entry prop=0 kind=6 words=5 n=3f3851ec -> ok

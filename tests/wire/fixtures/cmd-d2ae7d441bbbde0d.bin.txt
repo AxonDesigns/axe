@@ -1,0 +1,2 @@
+commands 32 bytes: valid
+op 19 size 12: node=00000001:1 id=3

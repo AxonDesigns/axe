@@ -171,6 +171,9 @@ static bool finite_n(const float *v, uint32_t n) {
 // at least its original fields and, for variable-length ops, the data its counts describe;
 // bytes past that come from a newer writer and are ignored.
 ui_result ui_scene_validate(const uint8_t *data, size_t size) {
+#ifdef UI_WIRE_PROOF
+    ui_wire_proof_record("scene", data, size);
+#endif
     ui_wire_reader r;
     ui_result res = ui_wire_reader_init(&r, UI_WIRE_MAGIC_CMD, data, size);
     if (res != UI_OK) return res;

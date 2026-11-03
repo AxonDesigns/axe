@@ -1,0 +1,7 @@
+commands 148 bytes: valid
+op 16 size 24: id=1
+    entry prop=65280 kind=5 words=5 -> ok
+op 1 size 16: node=00000001:1 parent=1000cb00:2049
+op 3 size 24: node=00000001:5111809 v=00000000 v=00000000 v=43960000 v=43480000 -> ok
+op 14 size 24: node=00000001:1 count=3 id=10 id=1133903872 id=1128792064 -> ok
+op 14 size 24: node=00000001:1 count=2 id=1 id=65548 -> ok

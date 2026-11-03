@@ -1,0 +1,3 @@
+commands 92 bytes: valid
+op 1 size 16: node=00000001:1 parent=10000004:1
+op 11 size 52: id=1 path@8:2#9a91db00c56b5ee7 -> drop

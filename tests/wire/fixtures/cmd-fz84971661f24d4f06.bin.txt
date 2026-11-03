@@ -1,0 +1,2 @@
+commands 44 bytes: valid
+op 12 size 24: id=360448 blocks=0 -> ok

@@ -181,19 +181,11 @@ ui_result ui_wire_reader_init(ui_wire_reader *r, uint32_t magic, const void *dat
 // (bad op size, overrun, op count mismatch).
 ui_result ui_wire_reader_next(ui_wire_reader *r, ui_wire_op *op);
 
-// Event writer used by the core.
-ui_result ui_wire_event_frame_committed(ui_wire_buf *b, ui_handle surface, uint64_t frame_id,
-                                        uint64_t predicted_present_ns);
-ui_result ui_wire_event_surface_resized(ui_wire_buf *b, ui_handle surface, float width,
-                                        float height, uint32_t scale_120);
-ui_result ui_wire_event_surface_close(ui_wire_buf *b, ui_handle surface);
-ui_result ui_wire_event_font_loaded(ui_wire_buf *b, uint32_t id, ui_result result);
-// rects: layout in parent, layout in surface, presentation in parent, presentation in
-// surface; each x, y, width, height.
-ui_result ui_wire_event_layout_measured(ui_wire_buf *b, uint32_t request_id, ui_handle node,
-                                        ui_handle surface, ui_result result, const float rects[4][4]);
-ui_result ui_wire_event_timer_fired(ui_wire_buf *b, uint32_t id, uint64_t deadline_ns,
-                                    uint64_t now_ns);
+#ifdef UI_WIRE_PROOF
+// The migration proof's recorder (tests/wire/proof.md): UI_WIRE_RECORD=<dir> keeps a copy of
+// every buffer.
+void ui_wire_proof_record(const char *kind, const uint8_t *bytes, size_t size);
+#endif
 
 // set_timer's deadline meaning "disarm".
 #define UI_WIRE_TIMER_CANCEL UINT64_MAX

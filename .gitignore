@@ -3,3 +3,4 @@
 *.ppm
 /third_party/chrome-headless-shell/
 __pycache__/
+ts/node_modules/

@@ -15,3 +15,12 @@ foreach(name IN ITEMS utf8 linebreak bidi set_text commands)
                      ${CMAKE_CURRENT_SOURCE_DIR}/corpus/${name})
     set_tests_properties(fuzz_${name} PROPERTIES TIMEOUT 600)
 endforeach()
+
+# The migration proof's fuzzer (tests/wire/proof.md); temporary, built with UI_WIRE_PROOF.
+if(UI_WIRE_PROOF)
+    add_executable(fuzz_wire_proof fuzz_wire_proof.c ${PROJECT_SOURCE_DIR}/tests/wire/proof_dump.c)
+    target_include_directories(fuzz_wire_proof PRIVATE ${PROJECT_SOURCE_DIR}/src ${PROJECT_SOURCE_DIR}/tests/wire)
+    target_link_libraries(fuzz_wire_proof PRIVATE ui m)
+    target_link_options(fuzz_wire_proof PRIVATE -fsanitize=fuzzer)
+    ui_target_warnings(fuzz_wire_proof)
+endif()

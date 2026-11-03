@@ -8,55 +8,11 @@
 
 #include "ui/handle.h"
 #include "ui/result.h"
+#include "ui/wire_ids.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
-
-#define UI_WIRE_VERSION 0u
-
-typedef enum ui_op {
-    UI_OP_CREATE_NODE = 1,
-    UI_OP_DESTROY_NODE = 2,
-    UI_OP_SET_RECT = 3,
-    UI_OP_SET_CORNER_RADIUS = 4,
-    UI_OP_SET_COLOR = 5,
-    UI_OP_START_SPRING = 6,
-    UI_OP_SET_TIMER = 7,
-    UI_OP_SET_TEXT = 8,
-    UI_OP_APPEND_TEXT = 9, // continues a set_text whose text is longer than one op holds
-    UI_OP_SET_CLIP = 10,
-    UI_OP_LOAD_FONT = 11,
-    UI_OP_DEFINE_STYLE = 12,
-    UI_OP_DESTROY_STYLE = 13,
-    UI_OP_SET_STYLES = 14,
-    UI_OP_SET_PROPS = 15,
-    UI_OP_SET_TOKEN = 16,
-    UI_OP_SET_STATE = 17,
-    UI_OP_MOVE_NODE = 18,
-    UI_OP_REQUEST_LAYOUT = 19,
-} ui_op;
-
-// Animatable node properties and their component counts.
-typedef enum ui_property {
-    UI_PROP_RECT = 1,          // x, y, width, height in logical pixels, relative to the parent
-    UI_PROP_CORNER_RADIUS = 2, // logical pixels
-    UI_PROP_COLOR = 3,         // sRGB, straight alpha; springs interpolate in linear light
-} ui_property;
-
-#define UI_PROP_MAX_COMPONENTS 4u
-
-// Number of float components of a property, or 0 if the property is unknown.
-uint32_t ui_property_components(ui_property property);
-
-typedef enum ui_event_type {
-    UI_EVENT_FRAME_COMMITTED = 1,
-    UI_EVENT_SURFACE_RESIZED = 2,
-    UI_EVENT_SURFACE_CLOSE_REQUESTED = 3,
-    UI_EVENT_TIMER_FIRED = 4,
-    UI_EVENT_FONT_LOADED = 5,
-    UI_EVENT_LAYOUT_MEASURED = 6,
-} ui_event_type;
 
 // A rectangle in logical pixels.
 typedef struct ui_rect {
@@ -98,6 +54,11 @@ typedef struct ui_event {
             ui_rect layout_in_parent, layout_in_surface;
             ui_rect presentation_in_parent, presentation_in_surface;
         } layout_measured;
+        // First in every event buffer: the animation clock when the core sent it, never behind
+        // a time the buffer reports. Logic keeps time from it (the language runtimes' timers).
+        struct {
+            uint64_t now_ns;
+        } clock;
     };
 } ui_event;
 
@@ -158,121 +119,6 @@ ui_result ui_cmd_load_font(ui_cmd_writer *w, uint32_t id, const char *path);
 // in list order; the state blocks that match the node's state, most specific first
 // (number of states), then list order, then declaration order; per-node overrides.
 
-typedef enum ui_style_prop {
-    UI_STYLE_BACKGROUND_COLOR = 1, // color
-    UI_STYLE_BORDER_COLOR = 2,     // color
-    UI_STYLE_BORDER_WIDTH = 3,     // px >= 0, all four sides
-    UI_STYLE_CORNER_RADIUS = 4,    // px >= 0, all four corners
-    UI_STYLE_OPACITY = 5,          // number in [0, 1]; applies to the node and its subtree
-    UI_STYLE_CLIP = 6,             // keyword ui_clip
-    UI_STYLE_TEXT_COLOR = 7,       // color: the text's default style (spans keep theirs)
-    UI_STYLE_LINE_HEIGHT = 8,      // number in (0, 100] (multiple of the size), or auto
-    UI_STYLE_TEXT_ALIGN = 9,       // keyword ui_text_align
-    UI_STYLE_MAX_LINES = 10,       // number (whole, <= 65535; 0 = unlimited), or none
-    // Inherited (docs/styles.md, "Inheritance"), with text color, line height and alignment.
-    UI_STYLE_FONT_FAMILY = 11,     // string: a CSS-style family list, e.g. "Noto Sans, sans-serif"
-    UI_STYLE_FONT_SIZE = 12,       // px in (0, 4096]
-    UI_STYLE_FONT_WEIGHT = 13,     // number, whole, in [1, 1000]
-    UI_STYLE_FONT_SLANT = 14,      // keyword ui_text_slant
-    UI_STYLE_LANGUAGE = 15,        // string: a BCP 47 tag, e.g. "sr-Cyrl"; or none
-    UI_STYLE_DIRECTION = 16,       // keyword ui_direction
-    // What the node's content does while a layout animation changes its size (not inherited).
-    UI_STYLE_CONTENT_ANIMATION = 17, // keyword ui_content_animation
-    // Layout: flexbox with CSS semantics (docs/layout.md). Every node is a flex container;
-    // sizes are border-box. Lengths are px or percent as noted.
-    UI_STYLE_DISPLAY = 32,         // keyword ui_display
-    UI_STYLE_POSITION = 33,        // keyword ui_position (absolute: relative to the parent)
-    UI_STYLE_FLEX_DIRECTION = 34,  // keyword ui_flex_direction
-    UI_STYLE_FLEX_WRAP = 35,       // keyword ui_flex_wrap
-    UI_STYLE_JUSTIFY_CONTENT = 36, // keyword ui_flex_align: normal, start, end, center, space-*
-    UI_STYLE_ALIGN_ITEMS = 37,     // keyword ui_flex_align: normal, start, end, center, baseline, stretch
-    UI_STYLE_ALIGN_SELF = 38,      // keyword ui_flex_align: auto, start, end, center, baseline, stretch
-    UI_STYLE_ALIGN_CONTENT = 39,   // keyword ui_flex_align: normal, start, end, center, stretch, space-*
-    UI_STYLE_FLEX_GROW = 40,       // number >= 0
-    UI_STYLE_FLEX_SHRINK = 41,     // number >= 0
-    UI_STYLE_FLEX_BASIS = 42,      // px >= 0, percent >= 0, or auto
-    UI_STYLE_ROW_GAP = 43,         // px or percent, >= 0
-    UI_STYLE_COLUMN_GAP = 44,      // px or percent, >= 0
-    UI_STYLE_WIDTH = 45,           // px or percent, >= 0, or auto
-    UI_STYLE_HEIGHT = 46,
-    UI_STYLE_MIN_WIDTH = 47,       // px or percent, >= 0, or auto
-    UI_STYLE_MIN_HEIGHT = 48,
-    UI_STYLE_MAX_WIDTH = 49,       // px or percent, >= 0, or none
-    UI_STYLE_MAX_HEIGHT = 50,
-    UI_STYLE_MARGIN_TOP = 51,      // px or percent, or auto
-    UI_STYLE_MARGIN_RIGHT = 52,
-    UI_STYLE_MARGIN_BOTTOM = 53,
-    UI_STYLE_MARGIN_LEFT = 54,
-    UI_STYLE_PADDING_TOP = 55,     // px or percent, >= 0
-    UI_STYLE_PADDING_RIGHT = 56,
-    UI_STYLE_PADDING_BOTTOM = 57,
-    UI_STYLE_PADDING_LEFT = 58,
-    UI_STYLE_TOP = 59,             // insets: px or percent, or auto
-    UI_STYLE_RIGHT = 60,
-    UI_STYLE_BOTTOM = 61,
-    UI_STYLE_LEFT = 62,
-    UI_STYLE_ASPECT_RATIO = 63,    // number > 0 (width / height), or auto
-    // The node's layout rect (its position and size from layout). It can't be declared, only
-    // transitioned: UI_STYLE_TRANSITION(UI_STYLE_LAYOUT) animates the node from where it is
-    // drawn to every new layout rect (layout animations, docs/layout.md).
-    UI_STYLE_LAYOUT = 64,
-    // Per side and per corner (docs/styles.md, "Borders"). border_width, border_color and
-    // corner_radius set all four at once (shorthands).
-    UI_STYLE_BORDER_TOP_WIDTH = 66,   // px >= 0
-    UI_STYLE_BORDER_RIGHT_WIDTH = 67,
-    UI_STYLE_BORDER_BOTTOM_WIDTH = 68,
-    UI_STYLE_BORDER_LEFT_WIDTH = 69,
-    UI_STYLE_BORDER_TOP_COLOR = 70,   // color
-    UI_STYLE_BORDER_RIGHT_COLOR = 71,
-    UI_STYLE_BORDER_BOTTOM_COLOR = 72,
-    UI_STYLE_BORDER_LEFT_COLOR = 73,
-    UI_STYLE_CORNER_RADIUS_TOP_LEFT = 74, // px >= 0 (circular)
-    UI_STYLE_CORNER_RADIUS_TOP_RIGHT = 75,
-    UI_STYLE_CORNER_RADIUS_BOTTOM_RIGHT = 76,
-    UI_STYLE_CORNER_RADIUS_BOTTOM_LEFT = 77,
-    // Logical sides (docs/styles.md, "Logical properties"): start is the left in a
-    // left-to-right node and the right in a right-to-left one. They set the same values as
-    // the physical properties: within a block, the later entry wins.
-    UI_STYLE_MARGIN_START = 80,    // as margins
-    UI_STYLE_MARGIN_END = 81,
-    UI_STYLE_PADDING_START = 82,   // as padding
-    UI_STYLE_PADDING_END = 83,
-    UI_STYLE_INSET_START = 84,     // as insets
-    UI_STYLE_INSET_END = 85,
-    UI_STYLE_BORDER_START_WIDTH = 86, // as border widths
-    UI_STYLE_BORDER_END_WIDTH = 87,
-    UI_STYLE_BORDER_START_COLOR = 88, // as border colors
-    UI_STYLE_BORDER_END_COLOR = 89,
-    UI_STYLE_CORNER_RADIUS_TOP_START = 90, // as corner radii
-    UI_STYLE_CORNER_RADIUS_TOP_END = 91,
-    UI_STYLE_CORNER_RADIUS_BOTTOM_START = 92,
-    UI_STYLE_CORNER_RADIUS_BOTTOM_END = 93,
-} ui_style_prop;
-
-// The transition of a property: a spring that animates the property's value whenever what
-// it resolves to changes, whatever the reason. Its value is UI_VALUE_SPRING, or
-// UI_VALUE_NONE for no transition. Transitions exist for background, border color, corner
-// radius, opacity, text color and the layout rect (UI_STYLE_LAYOUT).
-#define UI_STYLE_TRANSITION(prop) ((uint16_t)(0x8000u | (uint16_t)(prop)))
-
-typedef enum ui_value_kind {
-    UI_VALUE_UNSET = 1,   // per-node overrides only: removes the override
-    UI_VALUE_PX = 2,      // logical pixels
-    UI_VALUE_PERCENT = 3,
-    UI_VALUE_AUTO = 4,
-    UI_VALUE_NONE = 5,
-    UI_VALUE_NUMBER = 6,
-    UI_VALUE_COLOR = 7,   // sRGB, straight alpha, clamped to [0, 1]
-    UI_VALUE_KEYWORD = 8, // a property's enumerated value
-    UI_VALUE_TOKEN = 9,   // the value of theme token `token` (see ui_cmd_set_token)
-    UI_VALUE_SPRING = 10, // a transition: stiffness > 0, damping >= 0 (mass 1)
-    UI_VALUE_STRING = 11, // UTF-8, no NUL, at most UI_STYLE_STRING_MAX bytes
-    UI_VALUE_INHERIT = 12, // the parent's computed value (any property)
-    UI_VALUE_INITIAL = 13, // the property's initial value (any property)
-} ui_value_kind;
-
-#define UI_STYLE_STRING_MAX 1014u // what fits an entry of 255 words
-
 typedef struct ui_value {
     ui_value_kind kind;
     union {
@@ -314,73 +160,6 @@ static inline ui_value ui_string(const char *s) {
 static inline ui_value ui_inherit(void) { return (ui_value){.kind = UI_VALUE_INHERIT}; }
 static inline ui_value ui_initial(void) { return (ui_value){.kind = UI_VALUE_INITIAL}; }
 #endif
-
-// While a layout animation draws a node at another size than its layout (docs/layout.md,
-// "Content during layout animations"):
-typedef enum ui_content_animation {
-    UI_CONTENT_CLIP = 0,   // text and children keep their final layout, clipped to the box
-    UI_CONTENT_REFLOW = 1, // the node's own text wraps to the box as drawn; still clipped
-} ui_content_animation;
-
-// The direction of a node's content: its flex rows and its text (UI_STYLE_DIRECTION).
-typedef enum ui_direction {
-    UI_DIRECTION_LTR = 0,
-    UI_DIRECTION_RTL = 1,
-} ui_direction;
-
-typedef enum ui_display {
-    UI_DISPLAY_FLEX = 0,
-    UI_DISPLAY_NONE = 1, // neither laid out nor drawn, with its subtree
-} ui_display;
-
-typedef enum ui_position {
-    UI_POSITION_RELATIVE = 0, // in the flex flow
-    UI_POSITION_ABSOLUTE = 1, // out of it, placed by insets in the parent's padding box
-} ui_position;
-
-typedef enum ui_flex_direction {
-    UI_FLEX_ROW = 0,
-    UI_FLEX_ROW_REVERSE = 1,
-    UI_FLEX_COLUMN = 2,
-    UI_FLEX_COLUMN_REVERSE = 3,
-} ui_flex_direction;
-
-typedef enum ui_flex_wrap {
-    UI_FLEX_NOWRAP = 0,
-    UI_FLEX_WRAP = 1,
-    UI_FLEX_WRAP_REVERSE = 2,
-} ui_flex_wrap;
-
-// Values of justify-content, align-items, align-self and align-content (each takes a
-// subset). NORMAL is each property's initial value: flex-start for justify-content,
-// stretch for align-items and align-content, and "the parent's align-items" (auto) for
-// align-self.
-typedef enum ui_flex_align {
-    UI_FLEX_NORMAL = 0,
-    UI_FLEX_START = 1,
-    UI_FLEX_END = 2,
-    UI_FLEX_CENTER = 3,
-    UI_FLEX_BASELINE = 4,
-    UI_FLEX_STRETCH = 5,
-    UI_FLEX_SPACE_BETWEEN = 6,
-    UI_FLEX_SPACE_AROUND = 7,
-    UI_FLEX_SPACE_EVENLY = 8,
-} ui_flex_align;
-
-typedef enum ui_clip {
-    UI_CLIP_NONE = 0,
-    UI_CLIP_RECT = 1, // text and descendants are drawn only inside the node's rect
-} ui_clip;
-
-// Node states that select state blocks. Input sets them from milestone 4; until then
-// ui_cmd_set_state does.
-typedef enum ui_state {
-    UI_STATE_HOVER = 1,
-    UI_STATE_PRESSED = 2,
-    UI_STATE_FOCUSED = 4,
-    UI_STATE_DISABLED = 8,
-    UI_STATE_SELECTED = 16,
-} ui_state;
 
 typedef struct ui_style_decl {
     uint16_t property; // ui_style_prop, or UI_STYLE_TRANSITION(prop)
@@ -425,45 +204,6 @@ ui_result ui_cmd_set_state(ui_cmd_writer *w, ui_handle node, uint32_t mask, uint
 #define UI_TEXT_MAX_LANGUAGE 35u    // bytes per language tag
 #define UI_TEXT_MAX_ELLIPSIS 64u    // bytes
 #define UI_TEXT_MAX_BYTES (16u << 20)
-
-typedef enum ui_text_direction {
-    UI_TEXT_DIR_AUTO = 0, // each paragraph follows its first strong character
-    UI_TEXT_DIR_LTR = 1,
-    UI_TEXT_DIR_RTL = 2,
-} ui_text_direction;
-
-typedef enum ui_text_align {
-    UI_TEXT_ALIGN_START = 0, // left in LTR paragraphs, right in RTL ones
-    UI_TEXT_ALIGN_END = 1,
-    UI_TEXT_ALIGN_LEFT = 2,
-    UI_TEXT_ALIGN_RIGHT = 3,
-    UI_TEXT_ALIGN_CENTER = 4,
-    UI_TEXT_ALIGN_JUSTIFY = 5, // spaces stretch; a paragraph's last line is start-aligned
-} ui_text_align;
-
-typedef enum ui_text_slant {
-    UI_TEXT_NORMAL = 0,
-    UI_TEXT_ITALIC = 1,
-    UI_TEXT_OBLIQUE = 2,
-} ui_text_slant;
-
-// The fields of set_text a caller sets explicitly (ui_text_desc.set, ui_text_span_desc.set).
-// Every other field comes from the node: its computed (styled or inherited) value for the
-// paragraph's defaults, and the paragraph's defaults for a span (docs/styles.md,
-// "Inheritance"). Zero-initialized descriptors therefore follow the node's styles.
-typedef enum ui_text_field {
-    UI_TEXT_SET_FAMILY = 1u << 0,
-    UI_TEXT_SET_SIZE = 1u << 1,
-    UI_TEXT_SET_WEIGHT = 1u << 2,
-    UI_TEXT_SET_SLANT = 1u << 3,
-    UI_TEXT_SET_LANGUAGE = 1u << 4,
-    UI_TEXT_SET_COLOR = 1u << 5,
-    UI_TEXT_SET_LINE_HEIGHT = 1u << 6, // ui_text_desc only
-    UI_TEXT_SET_ALIGN = 1u << 7,       // ui_text_desc only
-    UI_TEXT_SET_DIRECTION = 1u << 8,   // ui_text_desc only: else the node's direction
-    UI_TEXT_SET_SPAN_ALL = 0x3Fu,      // every field a span has
-    UI_TEXT_SET_ALL = 0x1FFu,
-} ui_text_field;
 
 typedef struct ui_text_style_desc {
     uint16_t family; // index into ui_text_desc.families, or UI_TEXT_FAMILY_DEFAULT

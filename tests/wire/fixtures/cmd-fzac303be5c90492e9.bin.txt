@@ -1,0 +1,21 @@
+commands 248 bytes: valid
+op 1 size 16: node=00000001:1 parent=00000000:1
+op 15 size 64: node=00000008:1 count=7
+    entry prop=40 kind=6 words=2 read=1 n=40e00000 -> ok
+    entry prop=42 kind=2 words=2 read=1 n=41f00000 -> ok
+    entry prop=47 kind=2 words=2 read=1 n=41e00000 -> ok
+    entry prop=50 kind=3 words=2 read=1 n=ff423600 -> drop
+    entry prop=72 kind=45 words=1 skipped
+    entry prop=38 kind=8 words=2 read=1 k=4 -> ok
+    entry prop=47 kind=6 words=2 read=1 n=00c00000 -> drop
+op 1343 size 24: unknown
+op 1 size 16: node=00000008:1 parent=00000005:1
+op 15 size 64: node=00000008:1 count=7
+    entry prop=40 kind=6 words=2 read=1 n=40e00000 -> ok
+    entry prop=42 kind=2 words=2 read=1 n=41f00000 -> ok
+    entry prop=47 kind=2 words=2 read=1 n=41e00000 -> ok
+    entry prop=50 kind=3 words=2 read=1 n=ff423600 -> drop
+    entry prop=72 kind=4 words=1 read=1 -> drop
+    entry prop=38 kind=8 words=2 read=1 k=4 -> ok
+    entry prop=63 kind=6 words=2 read=1 n=3fc00000 -> ok
+op 5 size 24: node=02020000:1084227584 v=0203003c v=41200000 v=0208003d v=00000003 -> ok

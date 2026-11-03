@@ -1,0 +1,8 @@
+commands 124 bytes: valid
+op 1 size 16: node=00000001:1 parent=10000000:1
+op 15 size 84: node=00000001:1 count=5
+    entry prop=70 kind=7 words=5 read=1 c=3f800000 c=00000000 c=00000000 c=3f800000 -> ok
+    entry prop=73 kind=7 words=5 read=1 c=00000000 c=00000000 c=3f800000 c=3f800000 -> ok
+    entry prop=74 kind=2 words=2 read=1 n=41200000 -> ok
+    entry prop=32770 kind=10 words=3 read=1 s=42c80000 d=41a00000 -> ok
+    entry prop=32772 kind=10 words=3 read=1 s=42c80000 d=41a00000 -> ok

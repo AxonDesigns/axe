@@ -1,0 +1,9 @@
+commands 232 bytes: valid
+op 1 size 16: node=00000001:1 parent=10000000:55552
+op 15 size 52: node=00000001:1 count=4
+    entry prop=37 kind=8 words=2 read=1 k=1 -> ok
+    entry prop=11 kind=11 words=4 read=1 str=9#48f655f5e53a343c -> ok
+    entry prop=12 kind=2 words=2 read=1 n=41800000 -> ok
+    entry prop=8 kind=53 words=2 skipped
+op 1 size 16: node=00000002:1 parent=00000001:1
+op 9 size 116: node=00000002:1 chunk=6 text@12:6#1c3d066960c3baac

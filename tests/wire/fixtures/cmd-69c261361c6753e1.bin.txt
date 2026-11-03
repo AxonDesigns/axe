@@ -1,0 +1,5 @@
+commands 64 bytes: valid
+op 16 size 24: id=3
+    entry prop=0 kind=11 words=5 str=11#6dfcd07d39228a0c -> ok
+op 15 size 16: node=00000002:1 count=1
+    entry prop=15 kind=5 words=1 read=1 -> ok

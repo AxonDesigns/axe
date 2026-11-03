@@ -1,0 +1,11 @@
+commands 276 bytes: valid
+op 16 size 24: id=1
+    entry prop=0 kind=7 words=5 c=3e4ccccd c=3ecccccd c=c0b4cccd c=3f80feff -> ok
+op 16 size 12: id=2
+    entry prop=0 kind=9 words=2 t=1 -> ok
+op 16 size 12: id=3
+    entry prop=0 kind=9 words=2 t=524292 -> ok
+op 12 size 132: id=705299208 blocks=0 -> ok
+op 12 size 28: id=3472883723 blocks=0 -> ok
+op 12 size 8: id=655496 blocks=0 -> ok
+op 1 size 16: node=42f00001:8 parent=00000000:24117248

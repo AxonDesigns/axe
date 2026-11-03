@@ -1,0 +1,28 @@
+commands 432 bytes: valid
+op 1 size 16: node=00000000:1056964609 parent=3f59999a:1065353216
+op 15 size 72: node=00000001:33554433 count=6
+    entry prop=66 kind=2 words=2 read=1 n=40000000 -> ok
+    entry prop=67 kind=2 words=2 read=1 n=41400000 -> ok
+    entry prop=68 kind=2 words=2 read=1 n=40c00000 -> ok
+    entry prop=69 kind=2 words=2 read=1 n=41a00000 -> ok
+    entry prop=2 kind=7 words=5 read=1 c=3e19999a c=3eb33333 c=3f400000 c=3f800000 -> ok
+    entry prop=4 kind=2 words=2 read=1 n=41c00000 -> ok
+op 1 size 16: node=00000002:1 parent=00000000:1
+op 3 size 24: node=00000002:1 v=42e80000 v=41400000 v=42b40000 v=42700000 -> ok
+op 5 size 24: node=00000005:1 v=3f800000 v=3f800000 v=3f800000 v=3f800000 -> ok
+op 15 size 76: node=00000005:1 count=5
+    entry prop=69 kind=2 words=2 read=1 n=41800000 -> ok
+    entry prop=8265 kind=7 words=5 skipped
+    entry prop=66 kind=2 words=2 read=1 n=3f800000 -> ok
+    entry prop=70 kind=35 words=5 skipped
+    entry prop=74 kind=2 words=2 read=1 n=41f00000 -> ok
+op 1 size 16: node=00000006:1 parent=00000000:1
+op 3 size 24: node=00000006:1 v=435c0000 v=42b00000 v=42b40000 v=42700000 -> ok
+op 5 size 24: node=00000086:1 v=3f733333 v=3f733333 v=3f800000 v=3f800000 -> ok
+op 15 size 84: node=00000006:1 count=6
+    entry prop=16 kind=8 words=2 read=1 k=1 -> ok
+    entry prop=86 kind=2 words=2 read=1 n=41600000 -> ok
+    entry prop=4184 kind=7 words=5 skipped
+    entry prop=87 kind=2 words=2 read=1 n=40000000 -> ok
+    entry prop=69 kind=2 words=2 read=1 n=41a00000 -> ok
+    entry prop=2 kind=7 words=5 read=1 c=3e19999a c=3f800033 c=0202005a c=41b00000 -> ok

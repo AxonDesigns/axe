@@ -1,0 +1,16 @@
+{
+  "name": "axe-ts",
+  "private": true,
+  "description": "Axe's TypeScript packages. Node.js and npm are build-time tools only (docs/script.md).",
+  "type": "module",
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2",
+    "typescript": "7.0.2"
+  }
+}

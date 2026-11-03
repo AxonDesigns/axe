@@ -1,0 +1,45 @@
+commands 892 bytes: valid
+op 1 size 16: node=00000000:1 parent=10000013:1
+op 3 size 24: node=00000000:1 v=00000000 v=00000000 v=43a00000 v=43200000 -> ok
+op 5 size 24: node=00000000:1 v=3f7851ec v=3f7851ec v=3f7851ec v=3f800000 -> ok
+op 15 size 52: node=00000000:1 count=5
+    entry prop=55 kind=2 words=2 read=1 n=41200000 -> ok
+    entry prop=58 kind=2 words=2 read=1 n=41200000 -> ok
+    entry prop=56 kind=2 words=2 read=1 n=41200000 -> ok
+    entry prop=44 kind=2 words=2 read=1 n=41200000 -> ok
+    entry prop=37 kind=8 words=2 read=1 k=1 -> ok
+op 1 size 16: node=00000001:1 parent=00000000:1
+op 15 size 124: node=00000001:1 count=11
+    entry prop=45 kind=2 words=2 read=1 n=43160000 -> ok
+    entry prop=34 kind=8 words=2 read=1 k=2 -> ok
+    entry prop=55 kind=2 words=2 read=1 n=41200000 -> ok
+    entry prop=56 kind=2 words=2 read=1 n=41200000 -> ok
+    entry prop=57 kind=2 words=2 read=1 n=41200000 -> ok
+    entry prop=58 kind=2 words=2 read=1 n=41200000 -> ok
+    entry prop=43 kind=2 words=2 read=1 n=40c00000 -> ok
+    entry prop=3 kind=2 words=2 read=1 n=3f800000 -> ok
+    entry prop=2 kind=7 words=5 read=1 c=3f4ccccd c=3f51eb85 c=3f5c28f6 c=3f800000 -> ok
+    entry prop=4 kind=2 words=2 read=1 n=41000000 -> ok
+    entry prop=1 kind=7 words=5 read=1 c=3f800000 c=3f800000 c=3f800000 c=3f800000 -> ok
+op 1 size 16: node=00000002:1 parent=00000001:1
+op 15 size 20: node=00000002:1 count=1
+    entry prop=10 kind=6 words=2 read=1 n=3f800000 -> ok
+op 8 size 96: node=00000002:1 total=9 chunk=9 header=72 spans=0 strings=1 strings_bytes=12 ellipsis=0 max_lines=0 dir=0 flags=0 stride=36 family=0 weight=600 slant=0 from=0 lang=0 size=41800000 c=3dcccccd c=3dcccccd c=3df5c28f c=3f800000 line_height=00000000 align=0 from_node=0 strings@72:12#e100f905efd86c14 ellipsis@84:0#14650fb0739d0383 text@84:9#5eac2f2044ef7a72
+op 1 size 16: node=00000003:1 parent=00000001:1
+op 15 size 20: node=00000003:1 count=1
+    entry prop=8 kind=6 words=2 read=1 n=3fa66666 -> ok
+op 8 size 124: node=00000003:1 total=38 chunk=38 header=72 spans=0 strings=1 strings_bytes=12 ellipsis=0 max_lines=0 dir=0 flags=0 stride=36 family=0 weight=600 slant=0 from=0 lang=0 size=41300000 c=3dcccccd c=3dcccccd c=3df5c28f c=3f800000 line_height=00000000 align=0 from_node=0 strings@72:12#e100f905efd86c14 ellipsis@84:0#14650fb0739d0383 text@84:38#731f16aa9765705a
+op 1 size 16: node=00000004:1 parent=00000001:1
+op 15 size 28: node=00003d04:1 count=2
+    entry prop=8 kind=6 words=2 read=1 n=40000024 -> ok
+    entry prop=4 kind=2 words=2 read=1 n=40800000 -> ok
+op 1 size 16: node=0000000c:1 parent=0000000b:1
+op 15 size 56: node=0000000c:1 count=4
+    entry prop=45 kind=2 words=2 read=1 n=41200000 -> ok
+    entry prop=46 kind=2 words=2 read=1 n=41200000 -> ok
+    entry prop=4 kind=2 words=2 read=1 n=40a00000 -> ok
+    entry prop=1 kind=7 words=5 read=1 c=3e4ccccd c=3f333333 c=3ecccccd c=3f800000 -> ok
+op 1 size 16: node=0000000d:1 parent=0000000b:1
+op 15 size 20: node=0000000d:1 count=1
+    entry prop=8 kind=6 words=2 read=1 n=3f800000 -> ok
+op 8 size 100: node=0000000d:1 total=13 chunk=13 header=72 spans=0 strings=1 strings_bytes=12 ellipsis=0 max_lines=0 dir=0 flags=0 stride=36 family=0 weight=600 slant=0 from=0 lang=0 size=41400000 c=3dcccccd c=3dcccccd c=0000c28f c=4e000000 line_height=2065746f align=83 from_node=29550 strings@72:12#78ab2fe8c629125e ellipsis@84:0#14650fb0739d0383 text@84:13#4f74f6f400d223cf

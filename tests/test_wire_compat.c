@@ -10,7 +10,7 @@
 #include "core/scene.h"
 #include "test.h"
 #include "ui/ui.h"
-#include "wire/wire.h"
+#include "wire/gen/wire_gen.h"
 
 static ui_logger quiet = {UI_LOG_ERROR};
 static const ui_handle surface = {(uint32_t)UI_HANDLE_SURFACE << UI_HANDLE_SLOT_BITS, 1};
@@ -549,7 +549,7 @@ static void test_events(void) {
     p = ui_wire_put_u32(p, 0);
     p = ui_wire_put_u64(p, 5);
     ui_wire_put_u64(p, 6);
-    CHECK(ui_wire_event_surface_close(&b, surface) == UI_OK);
+    CHECK(ui_wire_surface_close_requested_put(&b, &(ui_wire_surface_close_requested){surface}) == UI_OK);
     p = emit(&b, UI_EVENT_LAYOUT_MEASURED, UI_WIRE_SIZE_LAYOUT_MEASURED + 12);
     memset(p, FILL, UI_WIRE_SIZE_LAYOUT_MEASURED + 12);
     p = ui_wire_put_u32(p, 9);

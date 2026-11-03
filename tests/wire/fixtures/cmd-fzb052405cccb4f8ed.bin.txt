@@ -1,0 +1,4 @@
+commands 96 bytes: valid
+op 1 size 24: node=00000001:237 parent=a5a50000:268439205
+op 10 size 20: node=00000001:1 flags=10855712 -> drop
+op 1 size 24: node=c0c0cccd:1287700672 parent=4ccccd3e:1288490302

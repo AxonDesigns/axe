@@ -1,0 +1,5 @@
+commands 60 bytes: valid
+op 16 size 24: id=1
+    entry prop=65280 kind=5 words=5 -> ok
+op 16 size 12: id=0
+    entry prop=2 kind=9 words=2 -> drop

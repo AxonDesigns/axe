@@ -6,7 +6,7 @@
 
 #include "core/preview.h"
 #include "render/render.h"
-#include "wire/wire.h"
+#include "wire/gen/wire_gen.h"
 
 #define MODULE "core"
 
@@ -66,7 +66,7 @@ static void load_font(void *user, uint32_t id, const char *path, uint32_t len, u
             ui_scene_fonts_changed(&c->scene);
         }
     }
-    if (ui_wire_event_font_loaded(&c->events, id, r) != UI_OK)
+    if (ui_wire_font_loaded_put(&c->events, &(ui_wire_font_loaded){id, (uint32_t)r}) != UI_OK)
         UI_ERROR(c->log, MODULE, "out of memory queueing font events");
 }
 
@@ -88,8 +88,8 @@ static void fire_timers(ui_core *c) {
     qsort(c->timers, c->timer_count, sizeof *c->timers, timer_order);
     uint32_t due = 0;
     while (due < c->timer_count && c->timers[due].deadline_ns <= now) {
-        if (ui_wire_event_timer_fired(&c->events, c->timers[due].id, c->timers[due].deadline_ns,
-                                      now) != UI_OK) {
+        ui_wire_timer_fired ev = {.id = c->timers[due].id, .deadline_ns = c->timers[due].deadline_ns, .now_ns = now};
+        if (ui_wire_timer_fired_put(&c->events, &ev) != UI_OK) {
             UI_ERROR(c->log, MODULE, "out of memory queueing timer events");
             break;
         }
@@ -236,7 +236,7 @@ static void on_frame(void *user, void *tag, uint64_t predicted_present_host_ns) 
 static void on_close(void *user, void *tag) {
     ui_core *c = user;
     ui_core_surface *s = tag;
-    if (ui_wire_event_surface_close(&c->events, s->handle) != UI_OK)
+    if (ui_wire_surface_close_requested_put(&c->events, &(ui_wire_surface_close_requested){s->handle}) != UI_OK)
         UI_ERROR(c->log, MODULE, "out of memory queueing close event");
     // v0 policy: closing the window ends the app; logic still sees the event first.
     c->quit_requested = true;
@@ -703,10 +703,11 @@ static void commit(ui_core *c, ui_core_surface *s, uint64_t now) {
 
     if (s->resized_pending) {
         s->resized_pending = false;
-        ui_wire_event_surface_resized(&c->events, s->handle, (float)s->config.logical_width,
-                                      (float)s->config.logical_height, s->config.scale_120);
+        ui_wire_surface_resized_put(&c->events, &(ui_wire_surface_resized){s->handle, (float)s->config.logical_width,
+                                                                          (float)s->config.logical_height,
+                                                                          s->config.scale_120});
     }
-    ui_wire_event_frame_committed(&c->events, s->handle, dl->frame_id, now);
+    ui_wire_frame_committed_put(&c->events, &(ui_wire_frame_committed){s->handle, dl->frame_id, now});
 }
 
 // True if the root's layout is what its surface's next frame would lay out: nothing under
@@ -740,8 +741,12 @@ static void answer_requests(ui_core *c) {
         float rects[4][4];
         ui_handle surface;
         bool live = ui_scene_measure(sc, q.node, rects, &surface);
-        if (ui_wire_event_layout_measured(&c->events, q.id, q.node, surface,
-                                          live ? UI_OK : UI_ERR_STALE_HANDLE, rects) != UI_OK) {
+        ui_wire_layout_measured ev = {.request_id = q.id, .result = (uint32_t)(live ? UI_OK : UI_ERR_STALE_HANDLE),
+                                      .node = q.node, .surface = surface};
+        ui_wire_rect *out[4] = {&ev.layout_in_parent, &ev.layout_in_surface, &ev.presentation_in_parent,
+                                &ev.presentation_in_surface};
+        for (int k = 0; k < 4; k++) *out[k] = (ui_wire_rect){rects[k][0], rects[k][1], rects[k][2], rects[k][3]};
+        if (ui_wire_layout_measured_put(&c->events, &ev) != UI_OK) {
             UI_ERROR(c->log, MODULE, "out of memory answering request_layout");
             break; // retried at the next frame, in order
         }
@@ -856,6 +861,9 @@ static void flush_events(ui_core *c) {
     size_t size;
     uint8_t *bytes = ui_wire_buf_finish(&c->events, &size);
     if (!bytes) return;
+#ifdef UI_WIRE_PROOF
+    ui_wire_proof_record("ev", bytes, size);
+#endif
     ui_msg msg = {.type = UI_MSG_EVENT_BUFFER, .ptr = bytes, .size = size};
     // Cannot be full: at most MAX_EVENTS_IN_FLIGHT buffers are ever queued.
     if (ui_queue_push(&c->logic->queue, &msg) != UI_OK) {

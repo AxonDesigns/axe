@@ -1,0 +1,2 @@
+commands 36 bytes: valid
+op 9 size 16: node=00000001:1 chunk=4 text@12:4#bc58d5ba50b57dfb

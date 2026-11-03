@@ -1,0 +1,5 @@
+commands 80 bytes: valid
+op 784 size 24: unknown
+op 16256 size 12: unknown
+op 521 size 0: unknown
+op 0 size 12: unknown

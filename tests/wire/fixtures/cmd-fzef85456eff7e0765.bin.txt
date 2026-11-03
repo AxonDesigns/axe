@@ -1,0 +1,6 @@
+commands 176 bytes: valid
+op 1 size 24: node=00000001:1 parent=10000000:1
+op 3 size 32: node=00000001:1 v=41200000 v=41200000 v=43480000 v=42c80000 -> ok
+op 5 size 32: node=00000001:1 v=3f800000 v=3f800000 v=00800000 v=00000001 -> ok
+op 3 size 32: node=00000002:1 v=43160000 v=42480000 v=42c80000 v=c800a542 -> drop
+op 4 size 20: node=cd3e4c02:1279151308 radius=3f80003e -> ok

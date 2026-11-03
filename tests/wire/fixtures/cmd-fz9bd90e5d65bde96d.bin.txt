@@ -1,0 +1,4 @@
+commands 60 bytes: valid
+op 15 size 20: node=00000000:1 count=1
+    entry prop=130 kind=8 words=2 skipped
+op 7 size 16: id=3 deadline=12000000000

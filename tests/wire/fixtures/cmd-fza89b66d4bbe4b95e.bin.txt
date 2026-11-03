@@ -1,0 +1,3 @@
+commands 44 bytes: valid
+op 16 size 24: id=3
+    entry prop=0 kind=11 words=5 str=11#fb3a28dfd50c34e2 -> drop

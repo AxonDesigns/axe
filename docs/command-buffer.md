@@ -61,6 +61,7 @@ A handle is 8 bytes: `u32 index`, `u32 generation`.
 Bytes are what this version writes. They are also each op's original size, except where
 the [op history](#op-history) lists appended fields.
 
+<!-- idl:commands -->
 | Opcode | Op | Payload | Bytes |
 | --- | --- | --- | --- |
 | 1 | `create_node` | node handle, parent handle (a node, or a surface for a root-level node) | 16 |
@@ -82,6 +83,7 @@ the [op history](#op-history) lists appended fields.
 | 17 | `set_state` | node, `u32 mask`, `u32 value` | 16 |
 | 18 | `move_node` | node, parent handle (a node, or a surface for a root-level node), `before` handle (a sibling under that parent; null appends) | 24 |
 | 19 | `request_layout` | node, `u32 request_id`: answered by `layout_measured` ([`docs/layout.md`](layout.md), "Measurement") | 12 |
+<!-- /idl:commands -->
 
 `set_color`, `set_corner_radius` and `set_clip` set the node's overrides of the matching
 style properties ([`docs/styles.md`](styles.md), "Older ops"). Styles, tokens, states and
@@ -89,11 +91,13 @@ transitions are described there.
 
 ### Properties for `start_spring`
 
+<!-- idl:spring-properties -->
 | Id | Property | Components |
 | --- | --- | --- |
-| 1 | rect | 4: x, y, width, height |
-| 2 | corner_radius | 1 |
-| 3 | color | 4: r, g, b, a in sRGB. The spring runs in linear light. |
+| 1 | rect | 4: x, y, width, height in logical pixels, relative to the parent |
+| 2 | corner_radius | 1: logical pixels |
+| 3 | color | 4: sRGB, straight alpha; springs interpolate in linear light |
+<!-- /idl:spring-properties -->
 
 Springs have mass 1 and are solved in closed form, so they don't depend on the frame
 rate.
@@ -241,6 +245,7 @@ the family list "Noto Sans", and no spans:
 
 ## Events (`UIEB`)
 
+<!-- idl:events -->
 | Opcode | Event | Payload | Bytes |
 | --- | --- | --- | --- |
 | 1 | `frame_committed` | surface handle, `u64 frame_id`, `u64 predicted_present_ns` | 24 |
@@ -249,6 +254,8 @@ the family list "Noto Sans", and no spans:
 | 4 | `timer_fired` | `u32 id`, `u32` reserved, `u64 deadline_ns`, `u64 now_ns` (both animation clock) | 24 |
 | 5 | `font_loaded` | `u32 id` (from `load_font`), `u32 result` (`ui_result`: 0 OK, `UI_ERR_IO`, `UI_ERR_INVALID_ARGUMENT`) | 8 |
 | 6 | `layout_measured` | `u32 request_id`, `u32 result` (0 OK, `UI_ERR_STALE_HANDLE`), node handle, surface handle (null when stale), then four rects of `f32 x, y, width, height` (logical px): `layout_in_parent`, `layout_in_surface`, `presentation_in_parent`, `presentation_in_surface` | 88 |
+| 7 | `clock` | `u64 now_ns`: the animation clock when the core sent the buffer; first in every event buffer | 8 |
+<!-- /idl:events -->
 
 - `predicted_present_ns` is animation-clock time: when the frame is expected on screen.
   Pausing or stepping the clock moves it, so logic that keeps time from these events is
@@ -323,11 +330,13 @@ Ops and events change without a version bump as long as each change follows thes
 Every appended field, with the change that added it. Ops and events not listed are at
 their original size.
 
+<!-- idl:history -->
 | Op | Original size | Appended |
 | --- | --- | --- |
-| `set_text` (8) | header 64, span 36 | `line_height` (f32 at 64) and `align` (u8 at 68, then 3 reserved), giving a 72-byte header: 62d0e10, "Text alignment and line height". Span `language` (u16 at 14, formerly reserved): 461c82d, "Per-span language". `header_bytes` (u16 at 14, the always-zero high half of the former u32 `chunk_bytes`) and `span_bytes` (u16 at 28, the always-zero default-style `start`): milestone 1.1, "Wire evolution rules" |
-| `append_text` (9) | header 12 | `header_bytes` (u16 at 10, the always-zero high half of the former u32 `chunk_bytes`): milestone 1.1 |
-| `load_font` (11) | header 8 | `header_bytes` (u16 at 6, the always-zero high half of the former u32 `path_bytes`): milestone 1.1 |
+| `set_text` (8) | header 64, span 36 | `line_height` (f32 at 64) and `align` (u8 at 68): 62d0e10, "Text alignment and line height". span `language` (u16 at 14, formerly reserved): 461c82d, "Per-span language". `header_bytes` (u16 at 14, formerly reserved) and `span_bytes` (u16 at 28, formerly reserved): m1.1, "Milestone 1.1, wire evolution rules". `from_node` (u16 at 70) and span `from_node` (u8 at 13, formerly reserved): ae568d4, "Shaping properties in styles, prepared on workers" |
+| `append_text` (9) | header 12 | `header_bytes` (u16 at 10, formerly reserved): m1.1, "Milestone 1.1, wire evolution rules" |
+| `load_font` (11) | header 8 | `header_bytes` (u16 at 6, formerly reserved): m1.1, "Milestone 1.1, wire evolution rules" |
+<!-- /idl:history -->
 
 ## Flow control and ordering
 

@@ -1,0 +1,8 @@
+commands 96 bytes: valid
+op 15 size 16: node=00000001:1 count=1
+    entry prop=1 kind=1 words=1 read=1 -> ok
+op 17 size 16: node=00000001:1 mask=1 value=0
+op 12 size 36: id=1 blocks=1 -> ok
+  block bytes=28 states=0 entries=2 header=8
+    entry prop=1 kind=9 words=2 read=1 t=1 -> ok
+    entry prop=32769 kind=10 words=3 read=1 s=43480000 d=41e00000 -> ok

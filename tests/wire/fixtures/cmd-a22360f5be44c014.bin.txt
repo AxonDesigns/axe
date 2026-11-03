@@ -1,0 +1,10 @@
+commands 224 bytes: valid
+op 1 size 16: node=00000001:1 parent=10000000:1
+op 15 size 36: node=00000001:1 count=3
+    entry prop=34 kind=8 words=2 read=1 k=2 -> ok
+    entry prop=45 kind=2 words=2 read=1 n=43960000 -> ok
+    entry prop=46 kind=2 words=2 read=1 n=42c80000 -> ok
+op 1 size 16: node=00000002:1 parent=00000001:1
+op 15 size 20: node=00000002:1 count=1
+    entry prop=9 kind=8 words=2 read=1 k=4 -> ok
+op 8 size 100: node=00000002:1 total=14 chunk=14 header=72 spans=0 strings=1 strings_bytes=12 ellipsis=0 max_lines=0 dir=0 flags=0 stride=36 family=0 weight=400 slant=0 from=0 lang=0 size=41800000 c=00000000 c=00000000 c=00000000 c=3f800000 line_height=3fa00000 align=0 from_node=256 strings@72:12#e100f905efd86c14 ellipsis@84:0#14650fb0739d0383 text@84:14#0e342369df93835c

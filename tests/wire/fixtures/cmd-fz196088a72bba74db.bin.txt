@@ -1,0 +1,5 @@
+commands 56 bytes: valid
+op 15 size 36: node=00000001:6094849 count=3
+    entry prop=37 kind=75 words=2 skipped
+    entry prop=45 kind=0 words=2 skipped
+    entry prop=16194 kind=6 words=2 skipped

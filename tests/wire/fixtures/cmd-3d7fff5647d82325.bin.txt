@@ -1,0 +1,4 @@
+commands 44 bytes: valid
+op 12 size 24: id=10 blocks=1 -> ok
+  block bytes=16 states=0 entries=1 header=8
+    entry prop=1 kind=9 words=2 read=1 t=4 -> ok

@@ -1,0 +1,2 @@
+commands 44 bytes: valid
+op 5 size 24: node=00000005:1 v=3f800000 v=00000000 v=00000000 v=3f800000 -> ok

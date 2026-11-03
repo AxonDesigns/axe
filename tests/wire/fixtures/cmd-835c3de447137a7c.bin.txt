@@ -1,0 +1,9 @@
+commands 364 bytes: valid
+op 1 size 16: node=00000000:1 parent=10000000:1
+op 3 size 24: node=00000000:1 v=41000000 v=41000000 v=43be0000 v=43060000 -> ok
+op 5 size 24: node=00000000:1 v=3f800000 v=3f800000 v=3f800000 v=3f800000 -> ok
+op 8 size 268: node=00000000:1 total=39 chunk=39 header=72 spans=4 strings=1 strings_bytes=12 ellipsis=0 max_lines=0 dir=0 flags=0 stride=36 family=0 weight=400 slant=0 from=0 lang=0 size=41900000 c=3da3d70a c=3da3d70a c=3dcccccd c=3f800000 line_height=00000000 align=0 from_node=0
+    span start=8 end=14 family=0 weight=400 slant=1 from=0 lang=0 size=41900000 c=3da3d70a c=3da3d70a c=3dcccccd c=3f800000
+    span start=15 end=19 family=0 weight=700 slant=0 from=0 lang=0 size=41900000 c=3da3d70a c=3da3d70a c=3dcccccd c=3f800000
+    span start=20 end=25 family=0 weight=900 slant=0 from=0 lang=0 size=41900000 c=3da3d70a c=3da3d70a c=3dcccccd c=3f800000
+    span start=27 end=38 family=0 weight=700 slant=1 from=0 lang=0 size=41900000 c=3da3d70a c=3da3d70a c=3dcccccd c=3f800000 strings@216:12#e100f905efd86c14 ellipsis@228:0#14650fb0739d0383 text@228:39#a8e296e8a3add7e8

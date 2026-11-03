@@ -1,0 +1,3 @@
+commands 80 bytes: valid
+op 1 size 16: node=00010020:0 parent=00000168:2949128
+op 81 size 40: unknown

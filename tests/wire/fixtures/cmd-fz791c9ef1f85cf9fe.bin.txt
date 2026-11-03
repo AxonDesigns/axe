@@ -1,0 +1,7 @@
+commands 104 bytes: valid
+op 15 size 84: node=00000001:1 count=5
+    entry prop=70 kind=7 words=5 read=1 c=3f800000 c=00000000 c=00000000 c=3f800000 -> ok
+    entry prop=73 kind=7 words=5 read=1 c=00000000 c=00000000 c=3f800000 c=3f004a00 -> ok
+    entry prop=32770 kind=1 words=2 read=1 -> ok
+    entry prop=32770 kind=10 words=3 read=1 s=42c80000 d=ffff0000 -> drop
+    entry prop=32770 kind=10 words=3 read=1 s=42c80000 d=41a00000 -> ok

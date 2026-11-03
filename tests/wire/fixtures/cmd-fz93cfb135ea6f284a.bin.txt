@@ -1,0 +1,3 @@
+commands 84 bytes: valid
+op 6 size 36: node=00030000:1 prop=3 count=0 stiffness=00000001 damping=41a00003 -> drop
+op 6 size 24: node=00000002:1 prop=3 count=0 stiffness=3e4cc800 damping=3e4ccccd -> drop

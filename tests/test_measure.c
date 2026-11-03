@@ -10,7 +10,7 @@
 #include "core/scene.h"
 #include "test.h"
 #include "ui/ui.h"
-#include "wire/wire.h"
+#include "wire/gen/wire_gen.h"
 
 static ui_logger quiet = {UI_LOG_ERROR};
 
@@ -115,10 +115,14 @@ static void test_wire(void) {
 
     ui_wire_buf b;
     ui_wire_buf_init(&b, UI_WIRE_MAGIC_EVENT);
-    float rects[4][4];
-    for (int i = 0; i < 16; i++) rects[i / 4][i % 4] = (float)i + 0.5f;
     ui_handle surface = {(uint32_t)UI_HANDLE_SURFACE << UI_HANDLE_SLOT_BITS, 3};
-    CHECK(ui_wire_event_layout_measured(&b, 77, node(4), surface, UI_OK, rects) == UI_OK);
+    ui_wire_layout_measured m = {.request_id = 77, .result = UI_OK, .node = node(4), .surface = surface};
+    ui_wire_rect *rects[4] = {&m.layout_in_parent, &m.layout_in_surface, &m.presentation_in_parent,
+                              &m.presentation_in_surface};
+    for (int i = 0; i < 4; i++)
+        *rects[i] = (ui_wire_rect){4.0f * (float)i + 0.5f, 4.0f * (float)i + 1.5f, 4.0f * (float)i + 2.5f,
+                                   4.0f * (float)i + 3.5f};
+    CHECK(ui_wire_layout_measured_put(&b, &m) == UI_OK);
     uint8_t *ev = ui_wire_buf_finish(&b, &size);
     ui_event_reader rd;
     ui_event e;

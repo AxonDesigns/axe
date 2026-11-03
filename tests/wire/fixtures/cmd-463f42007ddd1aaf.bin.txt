@@ -1,0 +1,2 @@
+commands 36 bytes: valid
+op 17 size 16: node=00000002:1 mask=1 value=1

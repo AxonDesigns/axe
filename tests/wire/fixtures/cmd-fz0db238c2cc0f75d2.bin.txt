@@ -1,0 +1,3 @@
+commands 152 bytes: valid
+op 49 size 68: unknown
+op 11 size 60: id=8 path@8:48#ed1a68cdabb96710 -> drop

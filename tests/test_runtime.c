@@ -9,7 +9,7 @@
 #include "runtime/handle_table.h"
 #include "runtime/queue.h"
 #include "test.h"
-#include "wire/wire.h"
+#include "wire/gen/wire_gen.h"
 
 static const ui_logger quiet = {UI_LOG_ERROR};
 
@@ -56,10 +56,10 @@ static void test_wire_roundtrip(void) {
     ui_wire_buf b;
     ui_wire_buf_init(&b, UI_WIRE_MAGIC_EVENT);
     ui_handle s = {(uint32_t)UI_HANDLE_SURFACE << UI_HANDLE_SLOT_BITS, 1};
-    CHECK(ui_wire_event_surface_resized(&b, s, 320, 200, 150) == UI_OK);
-    CHECK(ui_wire_event_frame_committed(&b, s, 42, 123456789012345ull) == UI_OK);
-    CHECK(ui_wire_event_surface_close(&b, s) == UI_OK);
-    CHECK(ui_wire_event_timer_fired(&b, 9, 2000000000ull, 2000000123ull) == UI_OK);
+    CHECK(ui_wire_surface_resized_put(&b, &(ui_wire_surface_resized){s, 320, 200, 150}) == UI_OK);
+    CHECK(ui_wire_frame_committed_put(&b, &(ui_wire_frame_committed){s, 42, 123456789012345ull}) == UI_OK);
+    CHECK(ui_wire_surface_close_requested_put(&b, &(ui_wire_surface_close_requested){s}) == UI_OK);
+    CHECK(ui_wire_timer_fired_put(&b, &(ui_wire_timer_fired){9, 2000000000ull, 2000000123ull}) == UI_OK);
     // An op from a future version must be skipped by old readers.
     uint8_t *future = ui_wire_buf_op(&b, 999, 8);
     CHECK(future != NULL);

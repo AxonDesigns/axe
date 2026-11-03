@@ -1,0 +1,467 @@
+# The command and event buffers (wire v0): every op, event, record, enum and style property.
+#
+# Grammar: docs/idl.md. The rules for changing this file: docs/command-buffer.md, "Evolving
+# the format". After editing, regenerate the code and the documentation tables:
+#
+#     python3 -I tools/idl/axe_idl.py
+#
+# CTest's idl_up_to_date fails while the committed output differs from what this file gives.
+
+wire 0
+magic commands 0x42434955 "UICB"
+magic events 0x42454955 "UIEB"
+
+# The changes that appended fields since an op first shipped (`since` on a field).
+changes
+  62d0e10  "Text alignment and line height"
+  461c82d  "Per-span language"
+  m1.1     "Milestone 1.1, wire evolution rules"
+  ae568d4  "Shaping properties in styles, prepared on workers"
+
+# ---- Enums and bitmasks -------------------------------------------------------------------
+
+enum op : u16  c ui_op UI_OP_
+  create_node = 1
+  destroy_node = 2
+  set_rect = 3
+  set_corner_radius = 4
+  set_color = 5
+  start_spring = 6
+  set_timer = 7
+  set_text = 8
+  append_text = 9  "continues a set_text whose text is longer than one op holds"
+  set_clip = 10
+  load_font = 11
+  define_style = 12
+  destroy_style = 13
+  set_styles = 14
+  set_props = 15
+  set_token = 16
+  set_state = 17
+  move_node = 18
+  request_layout = 19
+
+enum event_type : u16  c ui_event_type UI_EVENT_
+  frame_committed = 1
+  surface_resized = 2
+  surface_close_requested = 3
+  timer_fired = 4
+  font_loaded = 5
+  layout_measured = 6
+  clock = 7
+
+enum property : u16  c ui_property UI_PROP_  "Animatable node properties and their component counts."
+  rect = 1  components 4           "x, y, width, height in logical pixels, relative to the parent"
+  corner_radius = 2  components 1  min 0  "logical pixels"
+  color = 3  components 4          "sRGB, straight alpha; springs interpolate in linear light"
+
+enum content_animation : u32  c ui_content_animation UI_CONTENT_  "While a layout animation draws a node at another size than its layout (docs/layout.md, \"Content during layout animations\"):"
+  clip = 0    "text and children keep their final layout, clipped to the box"
+  reflow = 1  "the node's own text wraps to the box as drawn; still clipped"
+
+enum direction : u32  c ui_direction UI_DIRECTION_  "The direction of a node's content: its flex rows and its text (UI_STYLE_DIRECTION)."
+  ltr = 0
+  rtl = 1
+
+enum display : u32  c ui_display UI_DISPLAY_
+  flex = 0
+  none = 1  "neither laid out nor drawn, with its subtree"
+
+enum position : u32  c ui_position UI_POSITION_
+  relative = 0  "in the flex flow"
+  absolute = 1  "out of it, placed by insets in the parent's padding box"
+
+enum flex_direction : u32  c ui_flex_direction UI_FLEX_
+  row = 0
+  row_reverse = 1
+  column = 2
+  column_reverse = 3
+
+enum flex_wrap : u32  c ui_flex_wrap UI_FLEX_
+  nowrap = 0
+  wrap = 1
+  wrap_reverse = 2
+
+enum flex_align : u32  c ui_flex_align UI_FLEX_  "Values of justify-content, align-items, align-self and align-content (each takes a subset). NORMAL is each property's initial value: flex-start for justify-content, stretch for align-items and align-content, and \"the parent's align-items\" (auto) for align-self."
+  normal = 0
+  start = 1
+  end = 2
+  center = 3
+  baseline = 4
+  stretch = 5
+  space_between = 6
+  space_around = 7
+  space_evenly = 8
+
+enum clip : u32  c ui_clip UI_CLIP_
+  none = 0
+  rect = 1  "text and descendants are drawn only inside the node's rect"
+
+bitmask state : u8  c ui_state UI_STATE_  "Node states that select state blocks. Input sets them from milestone 4; until then ui_cmd_set_state does."
+  hover = 1
+  pressed = 2
+  focused = 4
+  disabled = 8
+  selected = 16
+
+enum text_direction : u8  c ui_text_direction UI_TEXT_DIR_
+  auto = 0  "each paragraph follows its first strong character"
+  ltr = 1
+  rtl = 2
+
+enum text_align : u8  c ui_text_align UI_TEXT_ALIGN_
+  start = 0    "left in LTR paragraphs, right in RTL ones"
+  end = 1
+  left = 2
+  right = 3
+  center = 4
+  justify = 5  "spaces stretch; a paragraph's last line is start-aligned"
+
+enum text_slant : u8  c ui_text_slant UI_TEXT_
+  normal = 0
+  italic = 1
+  oblique = 2
+
+bitmask text_field : u16  c ui_text_field UI_TEXT_SET_  "The fields of set_text a caller sets explicitly (ui_text_desc.set, ui_text_span_desc.set). Every other field comes from the node: its computed (styled or inherited) value for the paragraph's defaults, and the paragraph's defaults for a span (docs/styles.md, \"Inheritance\"). Zero-initialized descriptors therefore follow the node's styles. On the wire the complement is sent, as from_node."
+  family = 0x1
+  size = 0x2
+  weight = 0x4
+  slant = 0x8
+  language = 0x10
+  color = 0x20
+  line_height = 0x40  "ui_text_desc only"
+  align = 0x80        "ui_text_desc only"
+  direction = 0x100   "ui_text_desc only: else the node's direction"
+  span_all = 0x3F     "every field a span has"
+  all = 0x1FF
+
+bitmask text_flags : u8
+  custom_ellipsis = 0x1  "the ellipsis bytes replace the default U+2026 (0 bytes: none)"
+
+bitmask clip_flags : u32
+  clip = 0x1
+
+# ---- Records ------------------------------------------------------------------------------
+
+record rect  "A rectangle in logical pixels."
+  x       f32
+  y       f32
+  width   f32
+  height  f32
+
+# A text style: the default style of set_text (after its first 8 bytes) and every span.
+record text_style
+  family     u16                 "index of a family list in the string region, or 0xFFFF for the default"
+  weight     u16                 "1-1000 (400 regular, 700 bold)"
+  slant      text_slant
+  from_node  text_field : u8     since ae568d4 "the fields that come from the paragraph (a span) or the node"
+  language   u16                 since 461c82d "index of a BCP 47 tag in the string region plus one; 0: default"
+  size       f32                 "logical px, in (0, 4096]"
+  color      f32[4]              "sRGB, straight alpha, clamped to [0, 1]"
+
+record text_span
+  start  u32         "byte offset into the text"
+  end    u32         "exclusive; spans are sorted and do not overlap"
+  style  text_style
+
+# ---- Style values -------------------------------------------------------------------------
+
+enum value_kind : u8  c ui_value_kind UI_VALUE_
+  unset = 1     "per-node overrides only: removes the override"
+  px = 2        "logical pixels"
+  percent = 3
+  auto = 4
+  none = 5
+  number = 6
+  color = 7     "sRGB, straight alpha, clamped to [0, 1]"
+  keyword = 8   "a property's enumerated value"
+  token = 9     "the value of theme token `token` (see ui_cmd_set_token)"
+  spring = 10   "a transition: stiffness > 0, damping >= 0 (mass 1)"
+  string = 11   "UTF-8, no NUL, at most UI_STYLE_STRING_MAX bytes"
+  inherit = 12  "the parent's computed value (any property)"
+  initial = 13  "the property's initial value (any property)"
+
+# An entry's value, by kind: the fields after the entry's header. In C a ui_value holds it.
+union style_value  by value_kind  c ui_value
+  px       number f32
+  percent  number f32
+  number   number f32
+  color    color f32[4]
+  keyword  keyword u32
+  token    token u32
+  spring   spring.stiffness f32 finite 0<.., spring.damping f32 finite >= 0
+  string   string str16 1..1014
+
+# A style declaration: a property (or 0x8000 | property for its transition) and a value.
+record style_entry
+  property  u16
+  kind      value_kind
+  words     u8 = size/4           "the entry's size in 4-byte words, this header included"
+  tail
+  value     style_value(kind)
+
+record style_block
+  bytes         u16 = size        "the block's size, this header included"
+  states        state             "the states a node must have for the block to apply; 0: always"
+  reserved      u8
+  entry_count   u16 = count(entries)
+  header_bytes  u16 = header(0)
+  tail
+  entries       style_entry[entry_count]
+
+# ---- Style properties ---------------------------------------------------------------------
+# id, name, then the values it takes (every value property also takes token, inherit and
+# initial). Flags: inherited, transition (a transition exists for it), layout (takes part in
+# layout), shaping (reshapes text).
+
+style_properties  c ui_style_prop UI_STYLE_  "docs/styles.md. A style is a set of declarations, defined once by ID and applied to nodes by listing IDs."
+  1   background_color      color                                  transition
+  2   border_color          color                                  transition  "all four sides (shorthand)"
+  3   border_width          px >= 0                                layout  "all four sides (shorthand)"
+  4   corner_radius         px >= 0                                transition  "all four corners (shorthand)"
+  5   opacity               number 0..1                            transition  "applies to the node and its subtree"
+  6   clip                  keyword clip
+  7   text_color            color                                  inherited transition  "the text's default style (spans keep theirs)"
+  8   line_height           number 0<..100 | auto                  inherited  "a multiple of the size, or auto (from the fonts)"
+  9   text_align            keyword text_align                     inherited
+  10  max_lines             number 0..65535 whole | none           "0 = unlimited"
+  11  font_family           string                                 inherited shaping  "a CSS-style family list, e.g. \"Noto Sans, sans-serif\""
+  12  font_size             px 0<..4096                            inherited shaping
+  13  font_weight           number 1..1000 whole                   inherited shaping
+  14  font_slant            keyword text_slant                     inherited shaping
+  15  language              string <= 64 | none                     inherited shaping  "a BCP 47 tag, e.g. \"sr-Cyrl\""
+  16  direction             keyword direction                      inherited shaping
+  17  content_animation     keyword content_animation              "what the node's content does while a layout animation changes its size"
+  section "Layout: flexbox with CSS semantics (docs/layout.md). Every node is a flex container; sizes are border-box. Lengths are px or percent as noted."
+  32  display               keyword display                        layout
+  33  position              keyword position                       layout  "absolute: relative to the parent"
+  34  flex_direction        keyword flex_direction                 layout
+  35  flex_wrap             keyword flex_wrap                      layout
+  36  justify_content       keyword flex_align[normal start end center space_between space_around space_evenly]  layout
+  37  align_items           keyword flex_align[normal start end center baseline stretch]  layout
+  38  align_self            keyword flex_align[normal start end center baseline stretch]  layout  "normal is auto"
+  39  align_content         keyword flex_align[normal start end center stretch space_between space_around space_evenly]  layout
+  40  flex_grow             number >= 0                            layout
+  41  flex_shrink           number >= 0                            layout
+  42  flex_basis            px >= 0 | percent >= 0 | auto          layout
+  43  row_gap               px >= 0 | percent >= 0                 layout
+  44  column_gap            px >= 0 | percent >= 0                 layout
+  45  width                 px >= 0 | percent >= 0 | auto          layout
+  46  height                px >= 0 | percent >= 0 | auto          layout
+  47  min_width             px >= 0 | percent >= 0 | auto          layout
+  48  min_height            px >= 0 | percent >= 0 | auto          layout
+  49  max_width             px >= 0 | percent >= 0 | none          layout
+  50  max_height            px >= 0 | percent >= 0 | none          layout
+  51  margin_top            px | percent | auto                    layout
+  52  margin_right          px | percent | auto                    layout
+  53  margin_bottom         px | percent | auto                    layout
+  54  margin_left           px | percent | auto                    layout
+  55  padding_top           px >= 0 | percent >= 0                 layout
+  56  padding_right         px >= 0 | percent >= 0                 layout
+  57  padding_bottom        px >= 0 | percent >= 0                 layout
+  58  padding_left          px >= 0 | percent >= 0                 layout
+  59  top                   px | percent | auto                    layout  "insets"
+  60  right                 px | percent | auto                    layout
+  61  bottom                px | percent | auto                    layout
+  62  left                  px | percent | auto                    layout
+  63  aspect_ratio          number 0<.. | auto                     layout  "width / height"
+  64  layout                transition-only                        transition  "the layout rect: never declared, only transitioned (layout animations, docs/layout.md)"
+  section "Per side and per corner (docs/styles.md, \"Borders\"). border_width, border_color and corner_radius set all four at once (shorthands)."
+  66  border_top_width      px >= 0                                layout
+  67  border_right_width    px >= 0                                layout
+  68  border_bottom_width   px >= 0                                layout
+  69  border_left_width     px >= 0                                layout
+  70  border_top_color      color
+  71  border_right_color    color
+  72  border_bottom_color   color
+  73  border_left_color     color
+  74  corner_radius_top_left      px >= 0                          "circular"
+  75  corner_radius_top_right     px >= 0
+  76  corner_radius_bottom_right  px >= 0
+  77  corner_radius_bottom_left   px >= 0
+  section "Logical sides (docs/styles.md, \"Logical properties\"): start is the left in a left-to-right node and the right in a right-to-left one. They set the same values as the physical properties: within a block, the later entry wins."
+  80  margin_start          px | percent | auto                    layout
+  81  margin_end            px | percent | auto                    layout
+  82  padding_start         px >= 0 | percent >= 0                 layout
+  83  padding_end           px >= 0 | percent >= 0                 layout
+  84  inset_start           px | percent | auto                    layout
+  85  inset_end             px | percent | auto                    layout
+  86  border_start_width    px >= 0                                layout
+  87  border_end_width      px >= 0                                layout
+  88  border_start_color    color
+  89  border_end_color      color
+  90  corner_radius_top_start     px >= 0
+  91  corner_radius_top_end       px >= 0
+  92  corner_radius_bottom_start  px >= 0
+  93  corner_radius_bottom_end    px >= 0
+
+# What a theme token may hold, and what a transition (0x8000 | property) takes.
+token_values  px | percent | number | color | keyword any | auto | none | token | string
+transition_values  spring | none
+
+# ---- Commands (logic -> core) -------------------------------------------------------------
+
+command create_node = 1  original 16  "node handle, parent handle (a node, or a surface for a root-level node)"
+  node    node
+  parent  handle  "a node, or a surface for a root-level node"
+
+command destroy_node = 2  original 8  "node handle; destroys the whole subtree"
+  node  node
+
+command set_rect = 3  original 24  "node, `f32 x, y, width, height` (logical px; width and height ≥ 0): the node's absolute frame in its parent's padding box ([`docs/layout.md`](layout.md), \"set_rect\")"
+  node    node
+  x       f32  finite
+  y       f32  finite
+  width   f32  finite >= 0
+  height  f32  finite >= 0
+
+command set_corner_radius = 4  original 12  "node, `f32 radius` (logical px, ≥ 0)"
+  node    node
+  radius  f32  finite >= 0
+
+command set_color = 5  original 24  "node, `f32 r, g, b, a` (sRGB, straight alpha, clamped to [0, 1])"
+  node  node
+  r     f32  finite
+  g     f32  finite
+  b     f32  finite
+  a     f32  finite
+
+command start_spring = 6  original 20  "node, `u16 property`, `u16 count`, `f32 stiffness`, `f32 damping`, `f32 target[count]`"
+  node       node
+  property   property  known
+  count      u16 = count(target)  components(property)
+  stiffness  f32  finite 0<..
+  damping    f32  finite >= 0
+  tail
+  target     f32[count]  finite >= min(property)
+
+command set_timer = 7  original 16  "`u32 id`, `u32` reserved (0), `u64 deadline_ns` (animation clock; `UINT64_MAX` disarms)"
+  id           u32
+  reserved     u32
+  deadline_ns  u64 time
+
+command set_text = 8  original 64  "see [Text](#text)"
+  node            node
+  text_bytes      u32                           "total UTF-8 length (at most 16 MiB)"
+  chunk_bytes     u16 = count(text)             "text bytes carried in this op"
+  header_bytes    u16 = header                  since m1.1 "where the spans start; 0 = 64"
+  span_count      u16 = count(spans)            "at most 1024"
+  string_count    u16                           "family lists and language tags (at most 64)"
+  strings_bytes   u16 = count(strings)          "size of the string region, a multiple of 4"
+  ellipsis_bytes  u16 = count(ellipsis)         "at most 64"
+  max_lines       u16                           "0 = unlimited"
+  direction       text_direction                "0 auto (first strong character, per paragraph), 1 LTR, 2 RTL"
+  flags           text_flags
+  span_bytes      u16 = stride(spans)           since m1.1 "the size of each span record; 0 = 36"
+  reserved        u16
+  reserved        u32
+  style           text_style                    "the default style"
+  line_height     f32                           since 62d0e10 "line box height as a multiple of the default size; 0 = from font metrics"
+  align           text_align                    since 62d0e10
+  reserved        u8
+  from_node       text_field                    since ae568d4 "the fields that come from the node rather than this op; 0 = all set here"
+  tail
+  spans           text_span[span_count]
+  strings         bytes[strings_bytes] multiple 4  "string_count NUL-terminated UTF-8 strings, zero-padded"
+  ellipsis        bytes[ellipsis_bytes] pad 4
+  text            bytes[chunk_bytes] pad 4      "the first chunk_bytes of text"
+
+command append_text = 9  original 12  "node, `u16 chunk_bytes`, `u16 header_bytes` (12), chunk (padded to 4)"
+  node          node
+  chunk_bytes   u16 = count(chunk)
+  header_bytes  u16 = header  since m1.1
+  tail
+  chunk         bytes[chunk_bytes] pad 4
+
+command set_clip = 10  original 12  "node, `u32 flags` (bit 0: clip; other bits must be 0)"
+  node   node
+  flags  clip_flags  known
+
+command load_font = 11  original 8  "`u32 id`, `u16 path_bytes` (1–4096), `u16 header_bytes` (8), the path in UTF-8 (padded to 4, no NUL)"
+  id            u32
+  path_bytes    u16 = count(path)  1..4096
+  header_bytes  u16 = header  since m1.1
+  tail
+  path          bytes[path_bytes] pad 4  utf8 no_nul
+
+command define_style = 12  original 8  "`u32 id`, `u16 header_bytes` (8), `u16 block_count`, blocks (see [`docs/styles.md`](styles.md))"
+  id            u32  nonzero
+  header_bytes  u16 = header
+  block_count   u16 = count(blocks)
+  tail
+  blocks        style_block[block_count]
+
+command destroy_style = 13  original 4  "`u32 id`"
+  id  u32  nonzero
+
+command set_styles = 14  original 12  "node, `u16 count`, `u16 header_bytes` (12), `u32 ids[count]`"
+  node          node
+  count         u16 = count(ids)  <= 255
+  header_bytes  u16 = header
+  tail
+  ids           u32[count]  nonzero
+
+command set_props = 15  original 12  "node, `u16 header_bytes` (12), `u16 entry_count`, entries"
+  node          node
+  header_bytes  u16 = header
+  entry_count   u16 = count(entries)
+  tail
+  entries       style_entry[entry_count]
+
+command set_token = 16  original 4  "`u32 id`, one entry (property 0)"
+  id  u32  nonzero
+  tail
+  entry  style_entry
+
+command set_state = 17  original 16  "node, `u32 mask`, `u32 value`"
+  node   node
+  mask   u32
+  value  u32
+
+command move_node = 18  original 24  "node, parent handle (a node, or a surface for a root-level node), `before` handle (a sibling under that parent; null appends)"
+  node    node
+  parent  handle
+  before  handle
+
+command request_layout = 19  original 12  "node, `u32 request_id`: answered by `layout_measured` ([`docs/layout.md`](layout.md), \"Measurement\")"
+  node        handle
+  request_id  u32
+
+# ---- Events (core -> logic) ---------------------------------------------------------------
+
+event frame_committed = 1  original 24  "surface handle, `u64 frame_id`, `u64 predicted_present_ns`"
+  surface               handle
+  frame_id              u64
+  predicted_present_ns  u64 time
+
+event surface_resized = 2  original 20  "surface handle, `f32 width, height` (logical px), `u32 scale_120`"
+  surface    handle
+  width      f32
+  height     f32
+  scale_120  u32
+
+event surface_close_requested = 3  original 8  "surface handle"
+  surface  handle
+
+event timer_fired = 4  original 24  "`u32 id`, `u32` reserved, `u64 deadline_ns`, `u64 now_ns` (both animation clock)"
+  id           u32
+  reserved     u32
+  deadline_ns  u64 time
+  now_ns       u64 time
+
+event font_loaded = 5  original 8  "`u32 id` (from `load_font`), `u32 result` (`ui_result`: 0 OK, `UI_ERR_IO`, `UI_ERR_INVALID_ARGUMENT`)"
+  id      u32
+  result  u32
+
+event layout_measured = 6  original 88  "`u32 request_id`, `u32 result` (0 OK, `UI_ERR_STALE_HANDLE`), node handle, surface handle (null when stale), then four rects of `f32 x, y, width, height` (logical px): `layout_in_parent`, `layout_in_surface`, `presentation_in_parent`, `presentation_in_surface`"
+  request_id               u32
+  result                   u32
+  node                     handle
+  surface                  handle
+  layout_in_parent         rect
+  layout_in_surface        rect
+  presentation_in_parent   rect
+  presentation_in_surface  rect
+
+event clock = 7  original 8  "`u64 now_ns`: the animation clock when the core sent the buffer; first in every event buffer"
+  now_ns  u64 time

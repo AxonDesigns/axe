@@ -1,0 +1,4 @@
+commands 216 bytes: valid
+op 8 size 196: node=00000001:1 total=11 chunk=11 header=72 spans=2 strings=4 strings_bytes=40 ellipsis=0 max_lines=3 dir=2 flags=0 stride=36 family=0 weight=400 slant=0 from=0 lang=0 size=41800000 c=3f800000 c=3f800000 c=3f800000 c=3f800000 line_height=3fb33333 align=5 from_node=0
+    span start=0 end=5 family=1 weight=700 slant=1 from=0 lang=4 size=41a00000 c=3f800000 c=00000000 c=00000000 c=3f800000
+    span start=6 end=11 family=65535 weight=300 slant=0 from=0 lang=0 size=41400000 c=00000000 c=00000000 c=3f800000 c=3f000000 strings@144:40#f2845e588e0e2bd9 ellipsis@184:0#14650fb0739d0383 text@184:11#86dfeae555fbfa19

@@ -1,0 +1,10 @@
+{
+  "name": "@axe/wire",
+  "version": "0.0.0",
+  "private": true,
+  "description": "The command and event buffers, generated from idl/wire.idl.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  }
+}

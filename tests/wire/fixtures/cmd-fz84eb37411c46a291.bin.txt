@@ -1,0 +1,2 @@
+commands 96 bytes: valid
+op 12 size 76: id=0 blocks=0 -> drop

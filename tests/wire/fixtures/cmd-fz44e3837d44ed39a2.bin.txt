@@ -1,0 +1,10 @@
+commands 268 bytes: valid
+op 1 size 16: node=00000001:1 parent=10000000:1
+op 3 size 24: node=00000001:1 v=3f800000 v=00000000 v=00000000 v=3f800000 -> ok
+op 6 size 24: node=00000002:1 prop=258 count=0 stiffness=420000c8 damping=42002010 -> drop
+op 1 size 16: node=000000fb:1 parent=0000ffff:1
+op 1 size 16: node=00000002:1 parent=00000001:1
+op 3 size 24: node=00000002:1 v=43160000 v=42480000 v=42c80000 v=42c80000 -> ok
+op 4 size 36: node=00f9ff02:33554433 radius=00040001 -> ok
+op 6 size 36: node=00000003:1 prop=772 count=0 stiffness=030e0000 damping=7c9c2a2b -> drop
+op 6 size 24: node=00040002:1 prop=258 count=0 stiffness=420000c8 damping=42002010 -> drop
