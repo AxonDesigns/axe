@@ -109,6 +109,7 @@ void ui_paragraph_free(ui_paragraph *p) {
 
 static void forget_measures(ui_paragraph *p) {
     p->measure_count = 0;
+    p->measure_next = 0; // entries fill from 0 again: lookups scan [0, count)
     p->min_content_scale = 0;
 }
 

@@ -291,6 +291,15 @@ fx("baseline_column_ignored", 120, 220, div("flex-direction:column;align-items:b
    box(50, 20), p("Text")))
 fx("baseline_wrap", 320, 220, div("flex-wrap:wrap;align-items:baseline;width:200px;height:200px",
    p("A", "font-size:24px"), p("b"), box(100, 30), p("C", "font-size:32px")))
+# A container's baseline comes from its items: an empty first item, a first item of fixed
+# height (whose size needs no measuring, but its baseline does), in a row and a column.
+fx("baseline_first_empty", 420, 120, div("align-items:baseline;width:400px;height:100px",
+   div("", box(20, 10), div("height:30px", p("Text"))), p("Outside", "font-size:24px")))
+fx("baseline_first_fixed", 420, 120, div("align-items:baseline;width:400px;height:100px",
+   div("", div("height:30px;padding-top:5px", p("Inner")), box(20, 10)), p("Outside", "font-size:24px")))
+fx("baseline_first_fixed_column", 420, 120, div("align-items:baseline;width:400px;height:100px",
+   div("flex-direction:column", div("height:30px;padding-top:5px", p("Inner")), p("Next")),
+   p("Outside", "font-size:24px")))
 
 
 def main() -> int:

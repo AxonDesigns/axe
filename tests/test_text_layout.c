@@ -1,6 +1,6 @@
 // Paragraph layout: line breaking (opportunities, mandatory, emergency), hanging
 // whitespace, bidi line reordering and alignment, max lines with an ellipsis, whole-pixel
-// baselines, reshaping at unsafe breaks, and the two-level cache.
+// baselines, reshaping at unsafe breaks, the two-level cache and the measure memo.
 #include <math.h>
 #include <string.h>
 
@@ -374,6 +374,28 @@ static void test_cache(void) {
     ui_paragraph_free(&p);
 }
 
+// New text forgets the measurements. Regression: entries then filled from where the old
+// ones stopped while lookups scanned from the first, so a width measured before the change
+// answered with the old text's size.
+static void test_measure_memo(void) {
+    ui_paragraph p = {0}, fresh = {0};
+    ui_text_measure m, want;
+    set(&p, LOREM, 0, UI_BIDI_AUTO);
+    CHECK(ui_paragraph_measure(&p, &ctx, 1, 100, &m) == UI_OK);
+    CHECK(ui_paragraph_measure(&p, &ctx, 1, 200, &m) == UI_OK);
+    uint64_t layouts = p.layout_count;
+    CHECK(ui_paragraph_measure(&p, &ctx, 1, 100, &m) == UI_OK); // remembered
+    CHECK_EQ_INT(p.layout_count, layouts);
+    set(&p, "short", 0, UI_BIDI_AUTO);
+    CHECK(ui_paragraph_measure(&p, &ctx, 1, 300, &m) == UI_OK);
+    CHECK(ui_paragraph_measure(&p, &ctx, 1, 100, &m) == UI_OK);
+    set(&fresh, "short", 0, UI_BIDI_AUTO);
+    CHECK(ui_paragraph_measure(&fresh, &ctx, 1, 100, &want) == UI_OK);
+    CHECK(m.width == want.width && m.height == want.height && m.baseline == want.baseline);
+    ui_paragraph_free(&p);
+    ui_paragraph_free(&fresh);
+}
+
 int main(void) {
     setup();
     RUN(test_wrapping);
@@ -385,6 +407,7 @@ int main(void) {
     RUN(test_line_height);
     RUN(test_controls);
     RUN(test_cache);
+    RUN(test_measure_memo);
     ui_text_context_free(&ctx);
     ui_font_registry_destroy(fonts);
     return test_failures != 0;

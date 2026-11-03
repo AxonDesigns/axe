@@ -23,6 +23,7 @@ typedef struct ui_layout_cache {
     float baseline;   // first baseline from the border box's top; NaN: none
     bool used;
     uint8_t intrinsic; // measured ignoring the node's own size, min and max: 1 in x, 2 in y
+    bool has_baseline; // the baseline was computed (a plain measurement may skip it)
 } ui_layout_cache;
 
 #define UI_AVAIL_MIN_CONTENT (-1.f)
@@ -34,6 +35,7 @@ typedef struct ui_layout_node {
     float baseline;   // first baseline from the top of the border box; NaN: none
     bool dirty;       // its inputs changed since it was last laid out
     uint8_t next;     // measurement entry replaced next
+    bool percent;     // its sizes or padding use percentages (cache keys include the parent's)
     ui_layout_cache measured[UI_LAYOUT_CACHE];
     ui_layout_cache final; // the last full layout (children positioned)
 } ui_layout_node;

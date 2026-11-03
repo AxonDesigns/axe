@@ -18,7 +18,10 @@
 // content in one axis, ignoring its own size, min and max in that axis (intrinsic sizes and
 // the content-based sizes flex items need: §9.2.3, §4.5). Constraints in the other axis
 // still apply: a max-width decides where text wraps, and so its height.
-typedef enum run { MEASURE, PERFORM, INTRINSIC_X, INTRINSIC_Y } run;
+// A plain measurement leaves the baseline out unless it comes for free: only a parent that
+// aligns the node by baseline asks for it (MEASURE_BASELINE), which may cost measuring the
+// node's first item.
+typedef enum run { MEASURE, MEASURE_BASELINE, PERFORM, INTRINSIC_X, INTRINSIC_Y } run;
 
 static run intrinsic_in(int axis) { return axis == 0 ? INTRINSIC_X : INTRINSIC_Y; }
 
@@ -134,14 +137,13 @@ static void compute_box(ctx *c, const box *b, const float known[2], const float 
 static bool same(float a, float b) { return a == b || (isnan(a) && isnan(b)); }
 
 static bool matches(const ui_layout_cache *e, const float known[2], const float parent[2],
-                    const float avail[2], uint8_t intrinsic) {
-    return e->used && e->intrinsic == intrinsic && same(e->known[0], known[0]) && same(e->known[1], known[1]) &&
+                    const float avail[2], uint8_t intrinsic, bool baseline) {
+    return e->used && e->intrinsic == intrinsic && (!baseline || e->has_baseline) &&
+           same(e->known[0], known[0]) && same(e->known[1], known[1]) &&
            same(e->parent[0], parent[0]) && same(e->parent[1], parent[1]) &&
            same(e->avail[0], avail[0]) && same(e->avail[1], avail[1]);
 }
 
-// A node's size for these inputs, from its cache when it has them. `perform` also lays out
-// its children (and is cached separately: a measurement doesn't position anything).
 // True if a node's own sizes depend on its parent's content size: a percentage size, min,
 // max or padding. Otherwise that size is left out of its cache keys, so a parent measured
 // first with an indefinite size and then a definite one still hits the cache.
@@ -157,18 +159,27 @@ static bool uses_percent(const ui_layout_style *st) {
     return false;
 }
 
+// A node's size for these inputs, from its cache when it has them. `perform` also lays out
+// its children (and is cached separately: a measurement doesn't position anything).
 static void compute(ctx *c, uint32_t slot, const float known[2], const float parent_size[2],
-                    const float avail[2], run mode, float out[2], float *baseline) {
+                    const float avail_in[2], run mode, float out[2], float *baseline) {
     ui_layout_node *l = &c->s->nodes[slot].layout;
+    // Heights have one content size: the min-content and max-content block sizes are both
+    // the height at the width given (CSS Sizing §5.1), and nothing here reads a min-content
+    // constraint in y. So both share cache entries.
+    float avail[2] = {avail_in[0], avail_in[1] == MIN_CONTENT ? MAX_CONTENT : avail_in[1]};
     static const float none[2] = {NAN, NAN};
-    const float *parent = uses_percent(&c->s->nodes[slot].computed.layout) ? parent_size : none;
-    bool perform = mode == PERFORM;
+    // Its style changes only with the node dirty, which empties the cache: until then the
+    // answer found at the last computation holds.
+    const float *parent = l->percent ? parent_size : none;
+    bool perform = mode == PERFORM, baseline_wanted = mode == MEASURE_BASELINE || perform;
     uint8_t intrinsic = mode == INTRINSIC_X ? 1 : mode == INTRINSIC_Y ? 2 : 0;
     if (!l->dirty) {
         const ui_layout_cache *hit = NULL;
-        if (matches(&l->final, known, parent, avail, intrinsic)) hit = &l->final;
+        if (matches(&l->final, known, parent, avail, intrinsic, baseline_wanted)) hit = &l->final;
         for (uint32_t i = 0; !hit && !perform && i < UI_LAYOUT_CACHE; i++) {
-            if (matches(&l->measured[i], known, parent, avail, intrinsic)) hit = &l->measured[i];
+            if (matches(&l->measured[i], known, parent, avail, intrinsic, baseline_wanted))
+                hit = &l->measured[i];
         }
         if (hit) {
             c->stats->cache_hits++;
@@ -183,11 +194,13 @@ static void compute(ctx *c, uint32_t slot, const float known[2], const float par
         l->final.used = false;
         l->dirty = false;
     }
+    l->percent = uses_percent(&c->s->nodes[slot].computed.layout);
+    parent = l->percent ? parent_size : none;
     c->stats->computed++;
     box b = node_box(c, slot);
     compute_box(c, &b, known, parent, avail, mode, out, baseline);
     ui_layout_cache e = {{known[0], known[1]}, {parent[0], parent[1]}, {avail[0], avail[1]},
-                         {out[0], out[1]}, *baseline, true, intrinsic};
+                         {out[0], out[1]}, *baseline, true, intrinsic, baseline_wanted};
     if (perform) {
         l->final = e;
         l->baseline = *baseline;
@@ -481,6 +494,14 @@ static void compute_box(ctx *c, const box *b, const float known[2], const float 
         size[m] = clampf(content + pbs[m], self_min[m], self_max[m]);
         inner[m] = fmaxf(size[m] - pbs[m], 0);
     }
+    // Intrinsic callers read only the measured axis: in the main axis, this is it.
+    if ((m == 0 && ignore[0]) || (m == 1 && ignore[1])) {
+        out[m] = size[m];
+        out[x] = or_zero(size[x]);
+        *baseline = NAN;
+        if (items != local) free(items);
+        return;
+    }
 
     // §9.3.5: lines.
     line local_lines[LOCAL_ITEMS], *lines = local_lines;
@@ -588,7 +609,16 @@ static void compute_box(ctx *c, const box *b, const float known[2], const float 
         k[x] = it->cross; // known when specified, or stretched in a definite single line
         a[m] = it->target;
         a[x] = is_known(inner[x]) ? fmaxf(inner[x] - sum_axis(it->margin, x), 0) : inner_avail[x];
-        compute_item(c, &it->b, k, parent_inner, a, MEASURE, sz, &bl);
+        // A known cross size is the hypothetical one: measuring is needed only for a baseline
+        // (a baseline-aligned item, or the first item when this container's baseline is
+        // wanted).
+        bool wants = it->align == UI_FLEX_BASELINE || (i == 0 && mode == MEASURE_BASELINE);
+        if (is_known(k[x]) && !wants) {
+            it->cross = clampf(k[x], it->min[x], it->max[x]);
+            it->baseline = NAN;
+            continue;
+        }
+        compute_item(c, &it->b, k, parent_inner, a, wants ? MEASURE_BASELINE : MEASURE, sz, &bl);
         it->cross = clampf(sz[x], it->min[x], it->max[x]);
         it->baseline = bl;
     }
@@ -633,6 +663,15 @@ static void compute_box(ctx *c, const box *b, const float known[2], const float 
         size[x] = clampf(content + pbs[x], self_min[x], self_max[x]);
         inner[x] = fmaxf(size[x] - pbs[x], 0);
         if (single_line && line_count) lines[0].cross = inner[x];
+    }
+    // Intrinsic callers read only the measured axis: in the cross axis, this is it.
+    if (ignore[x]) {
+        out[0] = size[0];
+        out[1] = size[1];
+        *baseline = NAN;
+        if (items != local) free(items);
+        if (lines != local_lines) free(lines);
+        return;
     }
 
     // §9.4.9: align-content: stretch grows the lines into free cross space.
@@ -785,12 +824,13 @@ static void compute_box(ctx *c, const box *b, const float known[2], const float 
             memcpy(c->s->nodes[it->b.slot].rect, r, 4 * sizeof *r); // drawn where laid out
         }
         // The container's first baseline: the first baseline-aligned item of the first
-        // line, else the first item's.
-        if (is_known(it->baseline) && it->line == 0) {
-            float v = it->pos[1] + it->baseline;
-            if (it->align == UI_FLEX_BASELINE && m == 0 && !is_known(*baseline)) *baseline = v;
-            if (!is_known(first_baseline)) first_baseline = v;
-        }
+        // line, else the first item's, synthesized from its bottom border edge when it has
+        // none (§8.5).
+        if (is_known(it->baseline) && it->line == 0 && it->align == UI_FLEX_BASELINE && m == 0 &&
+            !is_known(*baseline))
+            *baseline = it->pos[1] + it->baseline;
+        if (i == 0)
+            first_baseline = it->pos[1] + (is_known(it->baseline) ? it->baseline : m == 0 ? it->cross : it->target);
     }
     if (!is_known(*baseline)) *baseline = first_baseline;
 

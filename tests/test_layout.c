@@ -271,8 +271,8 @@ static void test_incremental(void) {
     props(&f, 3, &(ui_style_decl){UI_STYLE_FLEX_GROW, ui_number(3)}, 1);
     frame(&f);
     // The changed row lays its 10 leaves out again (their sizes changed), a few measures
-    // each, then its ancestors; the other 19 rows come from their caches (about 1,060
-    // computations lay out the whole tree).
+    // each, then its ancestors; the other 19 rows come from their caches (about 840
+    // computations lay out the whole tree, 26 this change).
     uint64_t again = f.s.layout_stats.computed - full;
     CHECK(again > 0 && again < 50);
     CHECK(f.s.layout_stats.cache_hits > hits);
@@ -282,6 +282,41 @@ static void test_incremental(void) {
     ui_cmd_set_color(f.w, node(5), 1, 0, 0, 1);
     frame(&f);
     CHECK_EQ_INT(f.s.layout_stats.computed, before);
+    teardown(&f);
+}
+
+// Layout values through styles: tokens, state blocks and redefinitions lay out again.
+static void test_styles(void) {
+    fixture f;
+    setup(&f, 300, 200);
+    ui_cmd_set_token(f.w, 1, ui_px(100));
+    ui_style_decl card[] = {{UI_STYLE_WIDTH, ui_token_ref(1)}, {UI_STYLE_HEIGHT, ui_px(40)}};
+    ui_style_decl hover[] = {{UI_STYLE_PADDING_LEFT, ui_px(10)}, {UI_STYLE_PADDING_TOP, ui_percent(10)}};
+    ui_style_block_desc blocks[] = {{0, card, 2}, {UI_STATE_HOVER, hover, 2}};
+    CHECK(ui_cmd_define_style(f.w, 7, blocks, 2) == UI_OK);
+    ui_cmd_create_node(f.w, node(1), f.surfaces[0]);
+    props(&f, 1, &(ui_style_decl){UI_STYLE_ALIGN_ITEMS, ui_keyword(UI_FLEX_START)}, 1);
+    ui_cmd_create_node(f.w, node(2), node(1));
+    ui_cmd_set_styles(f.w, node(2), (uint32_t[]){7}, 1);
+    ui_cmd_create_node(f.w, node(3), node(2));
+    props(&f, 3, (ui_style_decl[]){{UI_STYLE_WIDTH, ui_px(5)}, {UI_STYLE_HEIGHT, ui_px(5)}}, 2);
+    frame(&f);
+    CHECK(rect_is(&f, 2, 0, 0, 100, 40) && rect_is(&f, 3, 0, 0, 5, 5));
+    ui_cmd_set_token(f.w, 1, ui_px(150)); // a token
+    frame(&f);
+    CHECK(rect_is(&f, 2, 0, 0, 150, 40));
+    ui_cmd_set_state(f.w, node(2), UI_STATE_HOVER, UI_STATE_HOVER); // a state block
+    frame(&f);
+    CHECK(rect_is(&f, 3, 10, 30, 5, 5)); // 10% of the containing block's width, 300
+    ui_style_decl column[] = {{UI_STYLE_WIDTH, ui_px(60)}, {UI_STYLE_FLEX_DIRECTION, ui_keyword(UI_FLEX_COLUMN)},
+                              {UI_STYLE_ALIGN_ITEMS, ui_keyword(UI_FLEX_CENTER)}};
+    CHECK(ui_cmd_define_style(f.w, 7, &(ui_style_block_desc){0, column, 3}, 1) == UI_OK); // redefined
+    frame(&f);
+    CHECK(rect_is(&f, 2, 0, 0, 60, 5) && rect_is(&f, 3, 27.5f, 0, 5, 5));
+    // Layout properties don't transition: geometry animates through layout animations.
+    CHECK(ui_cmd_set_props(f.w, node(2), &(ui_style_decl){UI_STYLE_TRANSITION(UI_STYLE_WIDTH), ui_transition(100, 10)}, 1) ==
+          UI_ERR_INVALID_ARGUMENT);
+    CHECK_EQ_INT(f.s.stats.dropped, 0);
     teardown(&f);
 }
 
@@ -296,6 +331,7 @@ int main(void) {
     RUN(test_text);
     RUN(test_rect_spring);
     RUN(test_incremental);
+    RUN(test_styles);
     ui_text_context_free(&text);
     ui_font_registry_destroy(fonts);
     return test_failures != 0;

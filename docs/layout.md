@@ -81,7 +81,9 @@ Baselines:
 - **In a column,** items have no baseline in the cross axis, so `baseline` lines up their
   start border edges.
 - **A container's first baseline** is that of its first baseline-aligned item on the
-  first line, else its first item's.
+  first line, else its first item's, synthesized from that item's bottom border edge when
+  it has none (§8.5): an empty first box gives its container its bottom edge, even when a
+  later item has text.
 
 ## Caching and invalidation
 
@@ -99,18 +101,46 @@ Baselines:
   - a rect spring moving the frame;
   - the surface's size or scale changing (a new scale re-measures every text node).
 - **Paint changes don't lay out.** Neither does a frame with nothing dirty.
-- **The automatic minimum size is computed only when it can matter:** when the line
-  shrinks, or when an explicit `flex-basis` could be below it.
+- **Work is skipped where the result can't depend on it:**
+  - The automatic minimum size is computed only when the line shrinks, or when an explicit
+    `flex-basis` could be below it.
+  - Baselines are computed only on request: a parent aligning by baseline asks for its
+    items', and a container asked for its own measures its first item for it. A
+    measurement without one is cached as such, and a later request for a baseline misses.
+  - A min-content and a max-content height constraint share cache entries: a box's
+    min-content and max-content heights are both its height at the width it gets.
+  - An intrinsic measurement stops once the measured axis is known.
 - **Layout runs as a surface draws**, after apply, styles and springs, and before the
   display list is built. `ui_layout_stats` counts computations, cache hits and passes.
 
-In `test_layout`, a tree of 221 nodes lays out with about 1,060 computations. Changing one
-leaf recomputes its row (whose items all changed size) and its ancestors, under 50
-computations; the other rows come from their caches.
+In `test_layout`, a tree of 221 nodes lays out with about 840 computations. Changing one
+leaf recomputes its row (whose items all changed size) and its ancestors, 26 computations;
+the other rows come from their caches.
+
+## Benchmarks
+
+`bench/bench_layout` (release build) lays out a wrapping grid of 1,429 cards on a
+1600×900 surface. Each card is a column of a title, a paragraph and a footer row (a label,
+a button, an icon), with padding, gaps and a border: 10,005 nodes, 4,287 of them text.
+Text is shaped beforehand, as the workers do before a buffer applies.
+
+| Case | Median | Best | Work |
+| --- | --- | --- | --- |
+| Full layout, cold: every paragraph measured for the first time (one run) | 17–26 ms | | 22,872 computations |
+| Full layout, every node's cache dropped, text measurements kept | 9–13 ms | 8.2 ms | |
+| Incremental: one paragraph's text changes (target < 1 ms) | 0.68–1.4 ms | 0.46–0.60 ms | 34 computations, 4,419 cache hits |
+| Style resolution of all 10,005 nodes after a token change | 4.0–5.9 ms | 3.8 ms | |
+
+Ranges are over three runs of the benchmark on 2026-11-02, on a Ryzen 5 3400G (4 cores, 8
+threads) while a browser kept about three threads busy, so medians varied by up to 2×; the
+best run of each case is the steadier figure. The incremental case is dominated by the grid: the edited card's height
+changes its row, so the grid lays out its 1,429 cards again, each from its cache (about
+three hits per card). Making that cheaper needs a grid that relays out only the lines
+after a change, which flexbox's algorithm doesn't offer.
 
 ## Conformance
 
-`tools/layout-fixtures` holds 162 fixtures. Each covers one property or interaction:
+`tools/layout-fixtures` holds 165 fixtures. Each covers one property or interaction:
 - direction × `justify-content`, `align-items` and `align-self`;
 - grow, shrink and basis;
 - wrap and `align-content`, gaps;
@@ -139,7 +169,7 @@ The pipeline:
 | --- | --- |
 | Tolerance, boxes without text | 1/64 px (Chrome's LayoutUnit) |
 | Tolerance, fixtures with text | 0.5 px |
-| Result (2026-11-02) | **162 of 162 match** (100%) |
+| Result (2026-11-02) | **165 of 165 match** (100%) |
 | Known deviations | none (`tools/layout-fixtures/deviations.md`) |
 
 Text matches within the tolerance because both sides shape with HarfBuzz at the same size,
