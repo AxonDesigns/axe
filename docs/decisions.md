@@ -46,10 +46,11 @@ milestone first.
   why the plan has baselines come from CI's artifact.
 - **The threshold is 2%,** as proposed. A case over its baseline by more fails the job; one
   under by more is reported as an improvement to record.
-- **The first baselines are provisional:** pushing is for the user to decide, so no CI run
-  exists yet. The first baselines were counted in the Docker image (Ubuntu 24.04, Clang 22,
-  valgrind 3.22 from apt, as CI) and marked `provisional`: reported, never failing. The
-  first CI artifact replaces them in a commit of its own.
+- **The first baselines were provisional:** no CI run existed yet, so they were counted in
+  the Docker image (Ubuntu 24.04, Clang 22, valgrind 3.22 from apt, as CI) and marked
+  `provisional`: reported, never failing. CI's first `bench-callgrind` run (41675753054, at
+  ccf3131) matched them exactly except `bench_text/shape` (+0.08%), and its counts replaced
+  them in a commit of their own. They are enforced since.
 - **Valgrind** comes from apt in CI (3.22); locally it is 3.25. Baselines are only compared
   with counts from the same CI image, so the difference doesn't matter.
 - **`bench_layout`'s token case** used to set, on its first run, the value the scene was

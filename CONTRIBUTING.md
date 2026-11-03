@@ -95,9 +95,9 @@ python3 -I tools/bench/callgrind.py --build build/release   # needs valgrind
   A regression that is worth its cost (a fix, a feature) is accepted the same way. Say why
   in the reason.
 - **Provisional baselines** (`"provisional": true`) are reported but never fail the job.
-  The first baselines are provisional because they were counted in the
-  `axe-ci-ubuntu:24.04` Docker image, not by CI itself. Replace them with the first CI
-  artifact.
+  Use them only when no CI counts exist yet, for example for a new case counted in the
+  `axe-ci-ubuntu:24.04` Docker image (which reproduced CI's counts within 0.1%). Replace
+  them with the next CI artifact.
 
 ## Wire format
 
