@@ -15,6 +15,37 @@ milestone first.
   library mapped until exit, and the suppressions match again. The cause on this machine
   wasn't pinned down (no driver or loader update; a reboot in between).
 
+### Inheritance
+- **Inherited properties, as in CSS:** text color, font family, size, weight, slant,
+  language, line height, text alignment and direction. `max_lines` doesn't inherit. New
+  properties 11–16 (`font_family`, `font_size`, `font_weight`, `font_slant`, `language`,
+  `direction`); new value kinds 11 `string`, 12 `inherit`, 13 `initial`.
+- **`inherit` and `initial` work on every property and transition** (CSS-wide keywords).
+  `inherit` on a non-inherited property copies the parent's computed value whole (a
+  percentage stays a percentage); such a node follows every change of its parent, not only
+  inherited ones. Tokens can't hold either: a token is a value, not a cascade keyword.
+- **Strings** (family lists, language tags) are interned in `ui_styles`: equal strings are
+  one object, so computed values compare by pointer. Entries, tokens and nodes (for
+  `set_text`'s family and language) hold references; computed values don't, so a string
+  whose last reference goes away waits in a garbage list until the end of the frame's
+  resolution, after every computed value that pointed at it has been replaced. At most
+  1014 bytes (what fits an entry of 255 words); languages at most 64.
+- **`set_text`'s values sit between the inherited value and the styles.** They replace the
+  inherited values for the node (and max lines' initial value), so the M2 rule that styles
+  beat `set_text` still holds, and nothing changes for existing apps. They are part of the
+  node's computed values, so they inherit to its children.
+- **Two-step resolution.** Each node keeps its cascade, the entries that apply to it in
+  order of precedence (pointers into style definitions and its overrides). It is gathered
+  again only when the node's styles, state or overrides change, or a style it lists is
+  redefined; adding or removing an override marks it too, because that moves the overrides.
+  Computing runs the cascade over starting values (initial, inherited, `set_text`'s) and
+  reads tokens then.
+- **Incremental, top-down.** The frame's dirty nodes are sorted by depth and computed
+  parents first. After a node is computed, its children are computed only if its inherited
+  values changed (or a child takes `inherit` on another property and anything changed), so
+  a change stops at descendants that declare their own values. `test_style` counts the
+  computations (`ui_scene_stats.styles_computed`).
+
 ## Milestone 2: layout and styles
 
 ### Example and goldens

@@ -1,6 +1,7 @@
 // Styles on the scene (docs/styles.md): precedence, state variants by specificity, tokens
 // (chains, cycles, wrong types), transitions started each way, set_* ops as overrides,
-// redefinition and destruction, text properties.
+// redefinition and destruction, text properties, inheritance (inherit and initial, minimal
+// recomputation, set_text's values), interned strings.
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
@@ -345,7 +346,156 @@ static void test_text_values(void) {
     teardown(&f);
 }
 
+// ---- Inheritance -------------------------------------------------------------------------
+
+static ui_handle h(uint32_t slot) { return (ui_handle){slot, 1}; }
+static const ui_computed *cv(fixture *f, uint32_t slot) { return &f->s.nodes[slot].computed; }
+
+static void props(fixture *f, uint32_t slot, const ui_style_decl *d, uint32_t n) {
+    CHECK(ui_cmd_set_props(f->w, h(slot), d, n) == UI_OK);
+}
+
+static bool green(const float *c) { return c[1] == 1 && c[0] == 0 && c[2] == 0; }
+static bool blue(const float *c) { return c[2] == 1 && c[0] == 0 && c[1] == 0; }
+
+// 1 (root) > 2 > {3, 4 > 5}; 4 declares its own text color.
+static void tree(fixture *f) {
+    setup(f);
+    ui_cmd_create_node(f->w, h(2), h(1));
+    ui_cmd_create_node(f->w, h(3), h(2));
+    ui_cmd_create_node(f->w, h(4), h(2));
+    ui_cmd_create_node(f->w, h(5), h(4));
+    props(f, 4, &(ui_style_decl){UI_STYLE_TEXT_COLOR, ui_rgba(0, 0, 1, 1)}, 1);
+}
+
+// Text values flow down to every node that doesn't declare its own; a change computes only
+// the nodes whose inherited values change, and stops where a node declares its own.
+static void test_inheritance(void) {
+    fixture f;
+    tree(&f);
+    props(&f, 1, (ui_style_decl[]){{UI_STYLE_TEXT_COLOR, ui_rgba(0, 1, 0, 1)}, {UI_STYLE_FONT_SIZE, ui_px(20)},
+                                   {UI_STYLE_FONT_FAMILY, ui_string("Noto Sans Hebrew")},
+                                   {UI_STYLE_FONT_WEIGHT, ui_number(700)},
+                                   {UI_STYLE_DIRECTION, ui_keyword(UI_DIRECTION_RTL)},
+                                   {UI_STYLE_BACKGROUND_COLOR, ui_rgba(1, 0, 0, 1)}},
+          6);
+    flush(&f);
+    CHECK(green(cv(&f, 2)->text.color) && green(cv(&f, 3)->text.color));
+    CHECK(blue(cv(&f, 4)->text.color) && blue(cv(&f, 5)->text.color));
+    CHECK(cv(&f, 5)->text.size == 20 && cv(&f, 5)->text.weight == 700);
+    CHECK(cv(&f, 5)->text.direction == UI_DIRECTION_RTL);
+    CHECK(cv(&f, 5)->text.family && !strcmp(cv(&f, 5)->text.family, "Noto Sans Hebrew"));
+    CHECK(cv(&f, 3)->text.family == cv(&f, 1)->text.family); // one interned string
+    CHECK(cv(&f, 2)->background[3] == 0); // backgrounds don't inherit
+    uint64_t before = f.s.stats.styles_computed;
+    props(&f, 1, &(ui_style_decl){UI_STYLE_TEXT_COLOR, ui_rgba(0, 0, 1, 1)}, 1);
+    flush(&f);
+    // 1, 2, 3 change; 4 is computed and found unchanged, so 5 isn't.
+    CHECK_EQ_INT(f.s.stats.styles_computed - before, 4);
+    CHECK(blue(cv(&f, 3)->text.color));
+    // A paint change on the root computes the root alone.
+    before = f.s.stats.styles_computed;
+    props(&f, 1, &(ui_style_decl){UI_STYLE_BACKGROUND_COLOR, ui_rgba(0, 1, 0, 1)}, 1);
+    flush(&f);
+    CHECK_EQ_INT(f.s.stats.styles_computed - before, 1);
+    // A moved node inherits from its new parent.
+    props(&f, 2, &(ui_style_decl){UI_STYLE_FONT_SIZE, ui_px(9)}, 1);
+    ui_cmd_create_node(f.w, h(6), f.surface);
+    ui_cmd_move_node(f.w, h(3), h(6), (ui_handle){0});
+    flush(&f);
+    CHECK(cv(&f, 5)->text.size == 9 && cv(&f, 3)->text.size == 16); // 6 is at the surface: initial
+    CHECK(cv(&f, 3)->text.direction == UI_DIRECTION_LTR);
+    teardown(&f);
+}
+
+// inherit and initial on any property: a non-inherited property that takes inherit follows
+// its parent; initial resets an inherited one for the node and its descendants.
+static void test_inherit_initial(void) {
+    fixture f;
+    tree(&f);
+    props(&f, 1, (ui_style_decl[]){{UI_STYLE_BACKGROUND_COLOR, ui_rgba(0, 1, 0, 1)},
+                                   {UI_STYLE_TEXT_COLOR, ui_rgba(0, 1, 0, 1)},
+                                   {UI_STYLE_PADDING_LEFT, ui_percent(10)}},
+          3);
+    ui_style_decl kid[] = {{UI_STYLE_BACKGROUND_COLOR, ui_inherit()}, {UI_STYLE_PADDING_LEFT, ui_inherit()},
+                           {UI_STYLE_TEXT_COLOR, ui_initial()}};
+    define(&f, 9, &(ui_style_block_desc){0, kid, 3}, 1);
+    ui_cmd_set_styles(f.w, h(2), (uint32_t[]){9}, 1);
+    flush(&f);
+    CHECK(green(cv(&f, 2)->background));
+    CHECK(cv(&f, 2)->layout.padding[3].unit == UI_LEN_PERCENT && cv(&f, 2)->layout.padding[3].value == 10);
+    const float *t = cv(&f, 3)->text.color;
+    CHECK(t[0] == 0 && t[1] == 0 && t[2] == 0 && t[3] == 1); // initial: opaque black, inherited by 3
+    // The parent's background changes: the child that inherits it follows.
+    props(&f, 1, &(ui_style_decl){UI_STYLE_BACKGROUND_COLOR, ui_rgba(0, 0, 1, 1)}, 1);
+    flush(&f);
+    CHECK(blue(cv(&f, 2)->background) && cv(&f, 3)->background[3] == 0);
+    // Transitions inherit too.
+    props(&f, 1, &(ui_style_decl){UI_STYLE_TRANSITION(UI_STYLE_OPACITY), ui_transition(50, 5)}, 1);
+    props(&f, 2, &(ui_style_decl){UI_STYLE_TRANSITION(UI_STYLE_OPACITY), ui_inherit()}, 1);
+    flush(&f);
+    CHECK(cv(&f, 2)->transition[UI_ANIM_OPACITY][0] == 50);
+    teardown(&f);
+}
+
+// set_text's values stand in for the inherited ones; the node's styles still override them.
+static void test_text_inheritance(void) {
+    fixture f;
+    tree(&f);
+    props(&f, 1, (ui_style_decl[]){{UI_STYLE_TEXT_COLOR, ui_rgba(0, 1, 0, 1)}, {UI_STYLE_LINE_HEIGHT, ui_number(2)}},
+          2);
+    static const char *const fam[] = {"Noto Sans"};
+    ui_text_desc t = {.text = "Hi", .length = 2, .families = fam, .family_count = 1,
+                      .style = {.family = 0, .weight = 300, .size = 11, .color = {0, 0, 1, 1}}};
+    ui_cmd_set_text(f.w, h(3), &t);
+    flush(&f);
+    const ui_computed *c = cv(&f, 3);
+    CHECK(blue(c->text.color) && c->text.size == 11 && c->text.weight == 300);
+    CHECK(c->text.line_height == 0); // set_text's (0: from the fonts) replaces the inherited 2
+    CHECK(c->text.family && !strcmp(c->text.family, "Noto Sans"));
+    CHECK(blue(f.s.nodes[3].text_color));
+    props(&f, 3, &(ui_style_decl){UI_STYLE_TEXT_COLOR, ui_inherit()}, 1); // the parent's again
+    flush(&f);
+    CHECK(green(cv(&f, 3)->text.color) && green(f.s.nodes[3].text_color));
+    teardown(&f);
+}
+
+// Strings are interned and freed once nothing refers to them; tokens can hold them.
+static void test_strings(void) {
+    fixture f;
+    tree(&f);
+    uint32_t base = f.s.styles.string_live;
+    ui_cmd_set_token(f.w, 3, ui_string("Serif Family"));
+    props(&f, 1, &(ui_style_decl){UI_STYLE_FONT_FAMILY, ui_token_ref(3)}, 1);
+    props(&f, 2, &(ui_style_decl){UI_STYLE_LANGUAGE, ui_string("sr-Cyrl")}, 1);
+    flush(&f);
+    CHECK(!strcmp(cv(&f, 5)->text.family, "Serif Family") && !strcmp(cv(&f, 5)->text.language, "sr-Cyrl"));
+    CHECK_EQ_INT(f.s.styles.string_live, base + 2);
+    ui_cmd_set_token(f.w, 3, ui_string("Sans Family"));
+    props(&f, 2, &(ui_style_decl){UI_STYLE_LANGUAGE, ui_none()}, 1);
+    flush(&f);
+    CHECK(!strcmp(cv(&f, 5)->text.family, "Sans Family") && !cv(&f, 5)->text.language);
+    CHECK_EQ_INT(f.s.styles.string_live, base + 1); // the old family and the language are gone
+    // The writer refuses what the reader would drop.
+    ui_cmd_writer *w = f.w;
+    CHECK(ui_cmd_set_props(w, h(1), &(ui_style_decl){UI_STYLE_FONT_FAMILY, ui_string("")}, 1) ==
+          UI_ERR_INVALID_ARGUMENT);
+    CHECK(ui_cmd_set_props(w, h(1), &(ui_style_decl){UI_STYLE_FONT_FAMILY, {UI_VALUE_STRING, .string = {"a\0b", 3}}},
+                           1) == UI_ERR_INVALID_ARGUMENT);
+    CHECK(ui_cmd_set_props(w, h(1), &(ui_style_decl){UI_STYLE_FONT_FAMILY, {UI_VALUE_STRING, .string = {"\xff", 1}}},
+                           1) == UI_ERR_INVALID_ARGUMENT);
+    CHECK(ui_cmd_set_props(w, h(1), &(ui_style_decl){UI_STYLE_FONT_SIZE, ui_string("12")}, 1) ==
+          UI_ERR_INVALID_ARGUMENT);
+    CHECK(ui_cmd_set_props(w, h(1), &(ui_style_decl){UI_STYLE_LAYOUT, ui_inherit()}, 1) == UI_ERR_INVALID_ARGUMENT);
+    CHECK(ui_cmd_set_token(w, 4, ui_inherit()) == UI_ERR_INVALID_ARGUMENT);
+    teardown(&f);
+}
+
 int main(void) {
+    RUN(test_inheritance);
+    RUN(test_inherit_initial);
+    RUN(test_text_inheritance);
+    RUN(test_strings);
     RUN(test_precedence);
     RUN(test_state_specificity);
     RUN(test_tokens);

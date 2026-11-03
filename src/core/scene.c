@@ -31,23 +31,29 @@ void ui_scene_init(ui_scene *s, const ui_logger *log) {
     ui_styles_init(&s->styles);
 }
 
-static void free_node(ui_node *n) {
+static void free_node(ui_scene *s, ui_node *n) {
     if (n->text) {
         ui_paragraph_free(n->text);
         free(n->text);
     }
+    for (uint32_t i = 0; i < n->override_count; i++) ui_styles_release_value(&s->styles, &n->overrides[i].value);
+    ui_styles_release(&s->styles, n->text_family);
+    ui_styles_release(&s->styles, n->text_language);
     free(n->anim);
     free(n->styles);
     free(n->overrides);
+    free(n->cascade);
     n->text = NULL;
     n->anim = NULL;
     n->styles = NULL;
     n->overrides = NULL;
+    n->cascade = NULL;
+    n->text_family = n->text_language = NULL;
 }
 
 void ui_scene_destroy(ui_scene *s) {
     for (uint32_t slot = 0; slot < s->handles.used; slot++) {
-        if (s->handles.alive[slot]) free_node(&s->nodes[slot]);
+        if (s->handles.alive[slot]) free_node(s, &s->nodes[slot]);
     }
     ui_handle_table_destroy(&s->handles);
     ui_styles_free(&s->styles);
@@ -72,6 +78,7 @@ ui_result ui_scene_add_root(ui_scene *s, ui_handle surface) {
         if (ui_handle_is_null(s->roots[i].surface)) {
             s->roots[i] = (ui_scene_root){.surface = surface, .first_child = UI_NO_SLOT,
                                           .last_child = UI_NO_SLOT, .scale = 1.f, .layout_dirty = true};
+            ui_computed_init(&s->roots[i].computed);
             return UI_OK;
         }
     }
@@ -121,7 +128,7 @@ static bool destroy_subtree(ui_scene *s, uint32_t slot) {
         uint32_t cur = s->scratch[--count];
         for (uint32_t c = s->nodes[cur].first_child; c != UI_NO_SLOT; c = s->nodes[c].next_sibling)
             s->scratch[count++] = c;
-        free_node(&s->nodes[cur]);
+        free_node(s, &s->nodes[cur]);
         ui_handle_table_release(&s->handles, handle_of(s, cur));
     }
     return true;
@@ -240,9 +247,11 @@ static bool drop(ui_scene *s, const char *what, ui_handle h) {
     return false;
 }
 
-// Queues a node for style resolution.
-static void mark_style_dirty(ui_scene *s, uint32_t slot) {
+// Queues a node for style resolution; with `cascade`, what applies to it changed too (its
+// styles, state or overrides), not only the values its entries read.
+static void mark_style_dirty(ui_scene *s, uint32_t slot, bool cascade) {
     ui_node *n = &s->nodes[slot];
+    n->cascade_dirty |= cascade;
     if (n->style_dirty) return;
     if (ui_grow((void **)&s->style_dirty, &s->style_dirty_capacity, s->style_dirty_count + 1,
                 sizeof *s->style_dirty) != UI_OK) {
@@ -276,20 +285,30 @@ static ui_node_anim *anim_of(ui_node *n) {
     return n->anim;
 }
 
-// Sets (or with UI_VALUE_UNSET removes) the node's override of one property.
-static bool set_override(ui_node *n, uint16_t prop, const ui_value *v) {
+// Sets (or with UI_VALUE_UNSET removes) the node's override of one property. It takes over
+// the value's string reference. Adding or removing one moves the others: the node's
+// cascade, which points at them, is then gathered again before it is read.
+static bool set_override(ui_scene *s, ui_node *n, uint16_t prop, const ui_value *v) {
     for (uint32_t i = 0; i < n->override_count; i++) {
         if (n->overrides[i].prop != prop) continue;
-        if (v->kind == UI_VALUE_UNSET) n->overrides[i] = n->overrides[--n->override_count];
-        else n->overrides[i].value = *v;
+        ui_styles_release_value(&s->styles, &n->overrides[i].value);
+        if (v->kind == UI_VALUE_UNSET) {
+            n->overrides[i] = n->overrides[--n->override_count];
+            n->cascade_dirty = true;
+        } else {
+            n->overrides[i].value = *v;
+        }
         return true;
     }
     if (v->kind == UI_VALUE_UNSET) return true;
     uint32_t cap = n->override_capacity;
-    if (ui_grow((void **)&n->overrides, &cap, n->override_count + 1u, sizeof *n->overrides) != UI_OK)
+    if (ui_grow((void **)&n->overrides, &cap, n->override_count + 1u, sizeof *n->overrides) != UI_OK) {
+        ui_styles_release_value(&s->styles, v);
         return false;
+    }
     n->override_capacity = (uint16_t)(cap > UINT16_MAX ? UINT16_MAX : cap);
     n->overrides[n->override_count++] = (ui_style_entry){prop, *v};
+    n->cascade_dirty = true;
     return true;
 }
 
@@ -338,7 +357,7 @@ static bool apply_create(ui_scene *s, const uint8_t *p) {
     else *first = slot;
     *last = slot;
     s->roots[n->root].dirty = true;
-    mark_style_dirty(s, slot);
+    mark_style_dirty(s, slot, true);
     layout_dirty(s, slot);
     return true;
 }
@@ -436,9 +455,9 @@ static bool apply_op(ui_scene *s, const ui_wire_op *op, uint64_t now_ns) {
 // so a spring moving the frame needs no resolution every frame.
 static bool apply_frame(ui_scene *s, ui_node *n) {
     static const uint16_t props[4] = {UI_STYLE_LEFT, UI_STYLE_TOP, UI_STYLE_WIDTH, UI_STYLE_HEIGHT};
-    bool ok = set_override(n, UI_STYLE_POSITION, &(ui_value){.kind = UI_VALUE_KEYWORD, .keyword = UI_POSITION_ABSOLUTE});
+    bool ok = set_override(s, n, UI_STYLE_POSITION, &(ui_value){.kind = UI_VALUE_KEYWORD, .keyword = UI_POSITION_ABSOLUTE});
     for (int i = 0; ok && i < 4; i++)
-        ok = set_override(n, props[i], &(ui_value){.kind = UI_VALUE_PX, .number = n->frame[i]});
+        ok = set_override(s, n, props[i], &(ui_value){.kind = UI_VALUE_PX, .number = n->frame[i]});
     ui_layout_style *l = &n->computed.layout;
     l->position = UI_POSITION_ABSOLUTE;
     l->inset[3] = (ui_length){n->frame[0], UI_LEN_PX};
@@ -452,9 +471,9 @@ static bool apply_frame(ui_scene *s, ui_node *n) {
 // A set_* op on a paint property: the override changes, and the value jumps unless the
 // styles declare a transition for it.
 static bool set_paint(ui_scene *s, ui_node *n, uint16_t prop, ui_value v, int spring) {
-    if (!set_override(n, prop, &v)) return false;
+    if (!set_override(s, n, prop, &v)) return false;
     if (spring >= 0) n->jump |= (uint8_t)(1u << spring);
-    mark_style_dirty(s, (uint32_t)(n - s->nodes));
+    mark_style_dirty(s, (uint32_t)(n - s->nodes), true);
     return true;
 }
 
@@ -473,7 +492,7 @@ static bool apply_set_styles(ui_scene *s, ui_node *n, const uint8_t *p) {
     free(n->styles);
     n->styles = list;
     n->style_count = (uint16_t)count;
-    mark_style_dirty(s, (uint32_t)(n - s->nodes));
+    mark_style_dirty(s, (uint32_t)(n - s->nodes), true);
     return true;
 }
 
@@ -481,10 +500,12 @@ static bool apply_set_props(ui_scene *s, ui_node *n, const uint8_t *p, uint32_t 
     uint32_t header = ui_wire_set_props_header(p), count = ui_wire_get_u16(p + 10), decoded;
     ui_style_entry local[16], *e = count <= 16 ? local : malloc(count * sizeof *e);
     if (!e) return false;
-    bool ok = ui_style_decode(p + header, size - header, count, true, e, &decoded);
-    for (uint32_t i = 0; ok && i < decoded; i++) ok = set_override(n, e[i].prop, &e[i].value);
+    bool ok = ui_style_decode(&s->styles, p + header, size - header, count, true, e, &decoded);
+    uint32_t i = 0;
+    for (; ok && i < decoded; i++) ok = set_override(s, n, e[i].prop, &e[i].value);
+    for (; i < decoded; i++) ui_styles_release_value(&s->styles, &e[i].value); // not taken over
     if (e != local) free(e);
-    if (ok) mark_style_dirty(s, (uint32_t)(n - s->nodes));
+    mark_style_dirty(s, (uint32_t)(n - s->nodes), true); // even partly applied
     return ok;
 }
 
@@ -577,6 +598,7 @@ static bool apply_move(ui_scene *s, ui_node *n, const uint8_t *p) {
     rebase(s, n, from, old_root);
     s->roots[root_index].dirty = true;
     layout_dirty(s, slot);
+    mark_style_dirty(s, slot, false); // it inherits from its new parent
     return true;
 }
 
@@ -601,7 +623,7 @@ static bool apply_node_op(ui_scene *s, const ui_wire_op *op, uint64_t now_ns) {
         n->framed = true;
         if (n->anim) n->anim->springs[UI_SPRING_RECT].active = false;
         if (!apply_frame(s, n)) return drop(s, "set_rect (out of memory)", h);
-        mark_style_dirty(s, (uint32_t)(n - s->nodes));
+        mark_style_dirty(s, (uint32_t)(n - s->nodes), true);
         return true;
     case UI_OP_SET_CORNER_RADIUS:
         if (!n) return drop(s, "set_corner_radius", h);
@@ -650,15 +672,15 @@ static bool apply_node_op(ui_scene *s, const ui_wire_op *op, uint64_t now_ns) {
         // Paint properties: the override becomes the target, and the spring starts toward
         // whatever that resolves to, with these parameters.
         bool ok = prop == UI_PROP_COLOR
-                      ? set_override(n, UI_STYLE_BACKGROUND_COLOR, &(ui_value){.kind = UI_VALUE_COLOR, .color = {v[0], v[1], v[2], v[3]}})
-                      : set_override(n, UI_STYLE_CORNER_RADIUS, &(ui_value){.kind = UI_VALUE_PX, .number = v[0]});
+                      ? set_override(s, n, UI_STYLE_BACKGROUND_COLOR, &(ui_value){.kind = UI_VALUE_COLOR, .color = {v[0], v[1], v[2], v[3]}})
+                      : set_override(s, n, UI_STYLE_CORNER_RADIUS, &(ui_value){.kind = UI_VALUE_PX, .number = v[0]});
         if (!ok) return drop(s, "start_spring (out of memory)", h);
         int i = prop == UI_PROP_COLOR ? UI_SPRING_COLOR : UI_SPRING_RADIUS;
         a->requested[i] = true;
         a->requested_params[i][0] = stiffness;
         a->requested_params[i][1] = damping;
         n->jump &= (uint8_t)~(1u << i);
-        mark_style_dirty(s, (uint32_t)(n - s->nodes));
+        mark_style_dirty(s, (uint32_t)(n - s->nodes), true);
         return true;
     }
     case UI_OP_SET_STYLES:
@@ -684,7 +706,7 @@ static bool apply_node_op(ui_scene *s, const ui_wire_op *op, uint64_t now_ns) {
         if (!n) return drop(s, "set_state", h);
         uint32_t mask = ui_wire_get_u32(p + 8), value = ui_wire_get_u32(p + 12);
         uint8_t state = (uint8_t)((n->state & ~mask) | (value & mask));
-        if (state != n->state) mark_style_dirty(s, (uint32_t)(n - s->nodes));
+        if (state != n->state) mark_style_dirty(s, (uint32_t)(n - s->nodes), true);
         n->state = state;
         return true;
     }
@@ -721,6 +743,17 @@ static bool apply_set_text(ui_scene *s, const ui_wire_op *op, ui_wire_reader *r,
         return drop(s, why, h);
     }
     ui_paragraph_set_source(n->text, t->source);
+    // Its family and language stand in for the inherited ones (style.h): kept interned.
+    const char *family, *language;
+    uint32_t family_len, language_len;
+    ui_text_input in = ui_text_source_input(t->source);
+    ui_text_input_family(&in, &in.base, &family, &family_len);
+    ui_text_input_language(&in, &in.base, &language, &language_len);
+    const char *old_family = n->text_family, *old_language = n->text_language;
+    n->text_family = family_len ? ui_styles_intern(&s->styles, family, family_len) : NULL;
+    n->text_language = language && language_len ? ui_styles_intern(&s->styles, language, language_len) : NULL;
+    ui_styles_release(&s->styles, old_family);
+    ui_styles_release(&s->styles, old_language);
     for (uint32_t i = 0; prep && i < prep->scale_count; i++) {
         if (prep->scales[i] != s->roots[n->root].scale) continue;
         ui_paragraph_adopt_shaped(n->text, &prep->shaped[i]);
@@ -731,7 +764,7 @@ static bool apply_set_text(ui_scene *s, const ui_wire_op *op, ui_wire_reader *r,
         UI_DEBUG_REPORT(s->log, MODULE, "set_text: replaced %u ill-formed UTF-8 sequence(s)", t->replaced);
     ui_text_op_free(t);
     s->roots[n->root].dirty = true;
-    mark_style_dirty(s, (uint32_t)(n - s->nodes)); // text color and paragraph values follow styles
+    mark_style_dirty(s, (uint32_t)(n - s->nodes), false); // set_text's values stand in for inherited ones
     layout_dirty(s, (uint32_t)(n - s->nodes));
     return true;
 }
@@ -838,28 +871,55 @@ static bool update_paint(ui_node *n, int i, const float *target, const float tra
     return true;
 }
 
-static void resolve_node(ui_scene *s, ui_node *n, uint64_t now_ns) {
-    ui_computed *c = &n->computed;
-    ui_layout_style before = c->layout;
-    float border_before = c->border_width;
-    ui_style_resolve(&s->styles, n->styles, n->style_count, n->state, n->overrides,
-                     n->override_count, c);
+// set_text's values: they replace the inherited ones (and max_lines' initial value), so
+// the node's styles still override them (docs/styles.md, "Inheritance").
+static void text_start(const ui_node *n, ui_computed *c) {
+    const ui_text_source *src = n->text ? n->text->source : NULL;
+    if (!src) return;
+    memcpy(c->text.color, src->base.color, sizeof c->text.color);
+    c->text.family = n->text_family;
+    c->text.language = n->text_language;
+    c->text.size = src->base.size;
+    c->text.weight = src->base.weight;
+    c->text.slant = src->base.style;
+    c->text.line_height = src->line_height;
+    c->text.align = (uint8_t)src->align;
+    c->max_lines = src->max_lines;
+}
+
+static const ui_computed *parent_values(const ui_scene *s, const ui_node *n) {
+    return n->parent != UI_NO_SLOT ? &s->nodes[n->parent].computed : &s->roots[n->root].computed;
+}
+
+// Computes a node's values from its cascade and its parent's, and makes what is drawn and
+// laid out follow. Returns what its children must react to: 2 if its inherited values
+// changed, 1 if only others did, 0 if nothing did.
+static int resolve_node(ui_scene *s, ui_node *n, uint64_t now_ns) {
+    if (n->cascade_dirty) {
+        if (!ui_style_cascade(&s->styles, n->styles, n->style_count, n->state, n->overrides,
+                              n->override_count, &n->cascade, &n->cascade_count, &n->cascade_capacity)) {
+            UI_ERROR(s->log, MODULE, "out of memory resolving styles");
+            n->cascade_count = 0; // initial and inherited values only
+        }
+        n->cascade_dirty = false;
+    }
+    s->stats.styles_computed++;
+    const ui_computed *parent = parent_values(s, n);
+    ui_computed old = n->computed, *c = &n->computed;
+    ui_computed_start(c, parent);
+    text_start(n, c);
+    n->inherits_other = ui_style_compute(&s->styles, n->cascade, n->cascade_count, parent, c) &
+                        UI_STYLE_INHERITS_OTHER;
     // What layout reads: the layout values and the border.
-    if (memcmp(&before, &c->layout, sizeof before) || border_before != c->border_width)
+    if (memcmp(&old.layout, &c->layout, sizeof old.layout) || old.border_width != c->border_width)
         layout_dirty(s, (uint32_t)(n - s->nodes));
-    // The text color follows the styles when they set one, else the text's own.
-    float text_target[4];
-    const float *text_src = c->text_set & UI_TEXT_SET_COLOR ? c->text_color
-                            : n->text                       ? n->text->base.color
-                                                            : n->text_color;
-    memcpy(text_target, text_src, sizeof text_target);
     bool changed = false;
     changed |= update_paint(n, UI_SPRING_COLOR, c->background, c->transition[UI_ANIM_BACKGROUND], now_ns);
     changed |= update_paint(n, UI_SPRING_BORDER_COLOR, c->border_color,
                             c->transition[UI_ANIM_BORDER_COLOR], now_ns);
     changed |= update_paint(n, UI_SPRING_RADIUS, &c->corner_radius, c->transition[UI_ANIM_RADIUS], now_ns);
     changed |= update_paint(n, UI_SPRING_OPACITY, &c->opacity, c->transition[UI_ANIM_OPACITY], now_ns);
-    changed |= update_paint(n, UI_SPRING_TEXT_COLOR, text_target, c->transition[UI_ANIM_TEXT_COLOR], now_ns);
+    changed |= update_paint(n, UI_SPRING_TEXT_COLOR, c->text.color, c->transition[UI_ANIM_TEXT_COLOR], now_ns);
     // A layout animation whose transition went away ends at the layout rect.
     if (!(c->transition[UI_ANIM_LAYOUT][0] > 0) && n->anim && n->anim->springs[UI_SPRING_LAYOUT].active) {
         n->anim->springs[UI_SPRING_LAYOUT].active = false;
@@ -870,14 +930,8 @@ static void resolve_node(ui_scene *s, ui_node *n, uint64_t now_ns) {
     n->clip = c->clip;
     n->border_width = c->border_width;
     if (n->text) {
-        const ui_text_source *src = n->text->source;
-        uint32_t lines = c->text_set & UI_TEXT_SET_MAX_LINES ? c->max_lines : src ? src->max_lines : 0;
-        ui_align align = c->text_set & UI_TEXT_SET_ALIGN ? (ui_align)c->text_align
-                         : src                           ? src->align
-                                                         : UI_ALIGN_START;
-        float lh = c->text_set & UI_TEXT_SET_LINE_HEIGHT ? c->line_height : src ? src->line_height : 0;
         bool valid = n->text->layout_valid;
-        ui_paragraph_set_params(n->text, lines, align, lh);
+        ui_paragraph_set_params(n->text, c->max_lines, (ui_align)c->text.align, c->text.line_height);
         if (valid != n->text->layout_valid) {
             changed = true;
             layout_dirty(s, (uint32_t)(n - s->nodes)); // line height and max lines change heights
@@ -886,6 +940,36 @@ static void resolve_node(ui_scene *s, ui_node *n, uint64_t now_ns) {
     n->jump = 0;
     n->resolved = true;
     if (changed) s->roots[n->root].dirty = true;
+    if (memcmp(&old.text, &c->text, sizeof old.text)) return 2;
+    return memcmp(&old, c, sizeof old) ? 1 : 0;
+}
+
+static int cmp_u64(const void *a, const void *b) {
+    uint64_t x = *(const uint64_t *)a, y = *(const uint64_t *)b;
+    return x < y ? -1 : x > y;
+}
+
+// Computes `slot`, then, depth first, every descendant reached through a change it inherits.
+// Uses s->scratch as the stack.
+static void resolve_subtree(ui_scene *s, uint32_t top, uint64_t now_ns) {
+    uint32_t count = 0;
+    if (ui_grow((void **)&s->scratch, &s->scratch_capacity, s->handles.live + 1, sizeof *s->scratch) != UI_OK) {
+        UI_ERROR(s->log, MODULE, "out of memory resolving styles");
+        s->nodes[top].style_dirty = false;
+        resolve_node(s, &s->nodes[top], now_ns);
+        return;
+    }
+    s->scratch[count++] = top;
+    while (count) {
+        uint32_t slot = s->scratch[--count];
+        ui_node *n = &s->nodes[slot];
+        n->style_dirty = false;
+        int change = resolve_node(s, n, now_ns);
+        // A child queued itself but not reached here gets its own turn later (it is deeper).
+        for (uint32_t c = n->first_child; change && c != UI_NO_SLOT; c = s->nodes[c].next_sibling) {
+            if (change == 2 || s->nodes[c].inherits_other) s->scratch[count++] = c;
+        }
+    }
 }
 
 static bool contains_id(const uint32_t *list, uint32_t n, uint32_t id) {
@@ -909,18 +993,37 @@ void ui_scene_resolve(ui_scene *s, uint64_t now_ns) {
             for (uint32_t k = 0; k < n->override_count && !uses; k++)
                 uses = n->overrides[k].value.kind == UI_VALUE_TOKEN &&
                        contains_id(tokens, token_count, n->overrides[k].value.token);
-            if (uses) mark_style_dirty(s, slot);
+            if (uses) mark_style_dirty(s, slot, true); // a definition may have moved its entries
         }
     }
     free(styles);
     free(tokens);
+    // Parents first, so every node computes from its parent's new values: the queue sorted
+    // by depth. Each node's children are computed again only when what they inherit changed,
+    // so a change stops where descendants declare their own values.
+    uint32_t live = 0;
     for (uint32_t i = 0; i < s->style_dirty_count; i++) {
         uint32_t slot = s->style_dirty[i];
-        if (slot >= s->handles.used || !s->handles.alive[slot] || !s->nodes[slot].style_dirty) continue;
-        s->nodes[slot].style_dirty = false;
-        resolve_node(s, &s->nodes[slot], now_ns);
+        if (slot < s->handles.used && s->handles.alive[slot] && s->nodes[slot].style_dirty)
+            s->style_dirty[live++] = slot;
     }
+    s->style_dirty_count = live;
+    uint64_t *order = live ? malloc(live * sizeof *order) : NULL;
+    for (uint32_t i = 0; order && i < live; i++) {
+        uint32_t depth = 0;
+        for (uint32_t up = s->nodes[s->style_dirty[i]].parent; up != UI_NO_SLOT; up = s->nodes[up].parent) depth++;
+        order[i] = (uint64_t)depth << 32 | s->style_dirty[i];
+    }
+    if (order) qsort(order, live, sizeof *order, cmp_u64);
+    else if (live) UI_ERROR(s->log, MODULE, "out of memory ordering style resolution");
+    for (uint32_t i = 0; i < live; i++) {
+        uint32_t slot = order ? (uint32_t)order[i] : s->style_dirty[i];
+        if (!s->nodes[slot].style_dirty) continue; // computed already, under a dirty ancestor
+        resolve_subtree(s, slot, now_ns);
+    }
+    free(order);
     s->style_dirty_count = 0;
+    ui_styles_collect(&s->styles); // no computed value points at an unreferenced string now
 }
 
 void ui_scene_animate(ui_scene *s, uint64_t now_ns) {

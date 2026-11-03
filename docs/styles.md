@@ -13,9 +13,13 @@ state the block requires; the first block usually requires none (the base block)
 
 Every node resolves its values from, lowest precedence first:
 
-1. **Initial values:** transparent background, no border, radius 0, opacity 1, no clip.
-2. **`set_text`'s paragraph values:** the text's color, line height, alignment and max lines,
-   for a node with text.
+1. **Starting values:**
+   - inherited properties: the parent's computed value ([Inheritance](#inheritance));
+   - every other property: its initial value (transparent background, no border, radius 0,
+     opacity 1, no clip, the layout initials in [`docs/layout.md`](layout.md)).
+2. **`set_text`'s values**, for a node with text: its color, family, size, weight, slant,
+   language, line height and alignment replace the inherited ones, and its max lines the
+   initial one.
 3. **The matching blocks of its styles**, ordered by:
    1. specificity: the number of states a block requires, so base blocks come first;
    2. the style's position in the node's list, so later styles win;
@@ -28,9 +32,33 @@ Every node resolves its values from, lowest precedence first:
    (see [Older ops](#older-ops)).
 
 A style ID that isn't defined (yet, or any more) contributes nothing. Redefining a style
-resolves every node that lists it again, which is what hot reload needs. Nothing inherits:
-a parent's text color doesn't reach its children's text. Tokens carry theming;
-inheritance of text properties is planned for M2.1.
+resolves every node that lists it again, which is what hot reload needs.
+
+### Inheritance
+
+As in CSS, some properties inherit: a node that doesn't declare one takes its parent's
+computed value, and a top-level node takes the surface's.
+
+- **Inherited:** text color, font family, size, weight and slant, language, line height,
+  text alignment and direction. Nothing else.
+- **At a surface:** initial values. Family: the default (the first registered font's
+  family); size 16 px; weight 400; normal slant; no language; line height from the fonts;
+  start alignment; opaque black; left to right.
+- **`inherit`** works on every property and transition: the parent's computed value, also
+  for a property that doesn't inherit (a percentage stays a percentage). A node with such a
+  declaration follows every change of its parent.
+- **`initial`** works on every property: its initial value, which also resets an inherited
+  property for the node's descendants.
+- **Minimal work.** A node's values are computed in two steps. Its *cascade* (the entries
+  that apply, in order) is gathered again only when its styles, state or overrides change,
+  or a style it lists is redefined. Its values are then computed from the cascade and the
+  parent's values. A change computes the changed node, then only those children whose
+  inherited values change, so it stops wherever descendants declare their own. Nodes are
+  computed parents first, in one pass per frame.
+- **Moving a node** (`move_node`) computes it again under its new parent.
+- **Not yet shaped with.** The font properties are computed and inherited, but text is
+  still shaped with `set_text`'s family, size, weight, slant and language. Shaping follows
+  the computed values once style changes go through preparation (the next M2.1 step).
 
 ### Tokens
 
@@ -38,8 +66,9 @@ A declaration's value can be `token(id)`: the value of theme token `id`, set wit
 `set_token`. Changing a token resolves every node that uses it again, through styles or
 overrides, so switching a theme is one op per token.
 
-- **A token's value** is a length, a percentage, a number, a color, a keyword, auto, none,
-  or another token. Chains resolve when used.
+- **A token's value** is a length, a percentage, a number, a color, a keyword, a string,
+  auto, none, or another token (not `inherit`, `initial` or a spring). Chains resolve when
+  used. A string token can theme the font family or language.
 - **A declaration counts as absent**, and the next lower declaration shows through, when:
   - its token is missing;
   - the chain loops (Floyd's cycle detection, so a cycle of any length is found);
@@ -79,11 +108,20 @@ token, a state, an override, a redefined style, or new text with another color.
 | 4 | `corner_radius` | px ≥ 0, all four corners | 0 |
 | 5 | `opacity` | number in [0, 1]: the node and its subtree, as one group | 1 |
 | 6 | `clip` | keyword: 0 none, 1 rect (text and descendants inside the node's rect) | 0 |
-| 7 | `text_color` | color: the text's default style; spans keep their own colors | `set_text`'s |
-| 8 | `line_height` | number in (0, 100] (× the font size), or auto (from the fonts) | `set_text`'s |
-| 9 | `text_align` | keyword: start, end, left, right, center, justify (0–5) | `set_text`'s |
-| 10 | `max_lines` | whole number ≤ 65535 (0 = unlimited), or none | `set_text`'s |
+| 7 | `text_color` (inherited) | color: the text's default style; spans keep their own colors | opaque black |
+| 8 | `line_height` (inherited) | number in (0, 100] (× the font size), or auto (from the fonts) | auto |
+| 9 | `text_align` (inherited) | keyword: start, end, left, right, center, justify (0–5) | start |
+| 10 | `max_lines` | whole number ≤ 65535 (0 = unlimited), or none | none |
+| 11 | `font_family` (inherited) | string: a CSS-style family list, e.g. `"Noto Sans, sans-serif"` | the default |
+| 12 | `font_size` (inherited) | px in (0, 4096] | 16 |
+| 13 | `font_weight` (inherited) | whole number in [1, 1000] | 400 |
+| 14 | `font_slant` (inherited) | keyword: normal, italic, oblique (0–2) | normal |
+| 15 | `language` (inherited) | string: a BCP 47 tag of at most 64 bytes, or none | none |
+| 16 | `direction` (inherited) | keyword: ltr, rtl (0–1) | ltr |
 | 0x8000 \| P | transition of P | spring, or none | none |
+
+Every property also takes `inherit` and `initial`. `set_text`'s values sit between the
+inherited (or initial) value and the styles ([Model](#model)).
 
 Layout properties ([`docs/layout.md`](layout.md)); keywords are the `ui_flex_*`,
 `ui_display` and `ui_position` values in `include/ui/wire.h`:
@@ -162,6 +200,8 @@ included), then the value:
 | 7 `color` | `f32 r, g, b, a`: sRGB, straight alpha, clamped to [0, 1] | 5 |
 | 8 `keyword`, 9 `token` | `u32` | 2 |
 | 10 `spring` | `f32 stiffness` (> 0), `f32 damping` (≥ 0) | 3 |
+| 11 `string` | `u16 length` (1–1014), the UTF-8 bytes (no NUL), zero-padded to the word | 1 + ⌈(2 + length) / 4⌉ |
+| 12 `inherit`, 13 `initial` | none | 1 |
 
 - **Newer writers.** A reader skips an entry whose property or kind it doesn't know, using
   `words`, and reads the fields it knows from a longer entry. Blocks and the op headers
@@ -170,8 +210,11 @@ included), then the value:
   block, a block shorter than its header or past the payload, ids or entries past the
   payload.
 - **Invalid values** drop the op: a known property with a kind it doesn't take, a value out
-  of range, `unset` in a style, a 0 id. The writer refuses these too
-  (`UI_ERR_INVALID_ARGUMENT`).
+  of range, `unset` in a style, a 0 id, a string longer than its entry, empty, with a NUL,
+  or not UTF-8. The writer refuses these too (`UI_ERR_INVALID_ARGUMENT`).
+- **Strings are interned:** equal strings share one copy, referenced by the entries,
+  tokens and nodes that use them, and freed after the frame in which the last reference
+  went away.
 
 ## Older ops
 
@@ -187,4 +230,4 @@ this step (the layout step redefines them).
 - One border width and color for all four sides, and one radius for all four corners.
 - Clipping is rectangular; rounded clips need masks in the layers.
 - Layers are drawn again every frame. Caching them comes with damage tracking.
-- No inheritance (planned for M2.1), and no z-index: paint order is tree order.
+- No z-index: paint order is tree order.

@@ -385,12 +385,19 @@ static uint8_t *put_value(uint8_t *p, const ui_value *v) {
     case UI_VALUE_COLOR:
         for (int i = 0; i < 4; i++) p = ui_wire_put_f32(p, v->color[i]);
         return p;
+    case UI_VALUE_STRING: {
+        p = ui_wire_put_u16(p, (uint16_t)v->string.length);
+        memcpy(p, v->string.bytes, v->string.length);
+        uint32_t padded = (2 + v->string.length + 3) / 4 * 4 - 2;
+        memset(p + v->string.length, 0, padded - v->string.length);
+        return p + padded;
+    }
     default: return p;
     }
 }
 
 static uint8_t *put_entry(uint8_t *p, uint16_t prop, const ui_value *v) {
-    uint32_t words = ui_style_kind_words((uint8_t)v->kind);
+    uint32_t words = ui_style_value_words(v);
     p = ui_wire_put_u16(p, prop);
     *p++ = (uint8_t)v->kind;
     *p++ = (uint8_t)words;
@@ -402,7 +409,7 @@ static uint64_t decl_bytes(const ui_style_decl *decls, uint32_t count, bool over
     uint64_t bytes = 0;
     for (uint32_t i = 0; i < count; i++) {
         if (!ui_style_value_valid(decls[i].property, &decls[i].value, override)) return 0;
-        bytes += 4u * ui_style_kind_words((uint8_t)decls[i].value.kind);
+        bytes += 4u * ui_style_value_words(&decls[i].value);
     }
     return count ? bytes : 1; // 1: valid and empty (no bytes are written)
 }
@@ -429,7 +436,7 @@ ui_result ui_cmd_define_style(ui_cmd_writer *w, uint32_t id, const ui_style_bloc
     for (uint32_t b = 0; b < block_count; b++) {
         uint32_t bytes = UI_WIRE_SIZE_STYLE_BLOCK_HEADER;
         for (uint32_t i = 0; i < blocks[b].count; i++)
-            bytes += 4u * ui_style_kind_words((uint8_t)blocks[b].decls[i].value.kind);
+            bytes += 4u * ui_style_value_words(&blocks[b].decls[i].value);
         p = ui_wire_put_u16(p, (uint16_t)bytes);
         *p++ = blocks[b].states;
         *p++ = 0;
@@ -484,7 +491,7 @@ ui_result ui_cmd_set_props(ui_cmd_writer *w, ui_handle node, const ui_style_decl
 ui_result ui_cmd_set_token(ui_cmd_writer *w, uint32_t id, ui_value value) {
     if (!id || (value.kind != UI_VALUE_UNSET && !ui_style_token_value_valid(&value)))
         return UI_ERR_INVALID_ARGUMENT;
-    uint32_t words = ui_style_kind_words((uint8_t)value.kind);
+    uint32_t words = ui_style_value_words(&value);
     uint8_t *p = ui_wire_buf_op(&w->buf, UI_OP_SET_TOKEN, UI_WIRE_SIZE_SET_TOKEN_HEADER + 4 * words);
     if (!p) return UI_ERR_OUT_OF_MEMORY;
     p = ui_wire_put_u32(p, id);

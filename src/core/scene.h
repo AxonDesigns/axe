@@ -74,7 +74,15 @@ typedef struct ui_node {
     uint8_t state;         // ui_state bits
     uint8_t jump;          // 1 << UI_SPRING_*: a set_* op set it (it jumps unless transitioned)
     bool style_dirty;      // resolve at the next ui_scene_resolve
+    bool cascade_dirty;    // and gather its cascade again first (style.h)
     bool resolved;         // resolved before: changes may animate from now on
+    bool inherits_other;   // a non-inherited property takes `inherit`: follows every parent change
+    // The entries that apply to it, by increasing precedence (pointers into style
+    // definitions and its overrides; gathered again whenever those change).
+    const ui_style_entry **cascade;
+    uint32_t cascade_count, cascade_capacity;
+    // set_text's family list and language (interned), which stand in for the inherited ones.
+    const char *text_family, *text_language;
     ui_computed computed;
 } ui_node;
 
@@ -84,6 +92,7 @@ typedef struct ui_scene_root {
     bool dirty;            // something under this root changed since the core last drew it
     bool animating;        // a spring under this root is still running
     float scale;           // the surface's scale (the core keeps it current); text shapes at it
+    ui_computed computed;  // what its top-level nodes inherit from (the surface's direction)
     bool layout_dirty;     // a node under it changed what layout depends on
     float layout_size[2];  // the surface size it was last laid out for
     float layout_scale;
@@ -114,6 +123,7 @@ typedef struct ui_scene_prepared {
 
 typedef struct ui_scene_stats {
     uint64_t applied, dropped, rejected;
+    uint64_t styles_computed; // node computations by ui_scene_resolve (tests count them)
     uint64_t text_invalid; // ill-formed UTF-8 subparts replaced in set_text
 } ui_scene_stats;
 

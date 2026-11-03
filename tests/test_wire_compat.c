@@ -469,6 +469,34 @@ static void test_styles(void) {
     negative[7] = 2;
     ui_wire_put_f32(negative + 8, -1); // a token may hold any length; a border ignores it
     CHECK_EQ_INT(apply_patched(UI_OP_SET_TOKEN, negative, 12), UI_OK);
+    // A string longer than its entry drops the op (it is never read past the entry).
+    uint8_t string[20] = {0};
+    ui_wire_put_handle(string, node);
+    ui_wire_put_u16(string + 8, 12);
+    ui_wire_put_u16(string + 10, 1);
+    ui_wire_put_u16(string + 12, UI_STYLE_FONT_FAMILY);
+    string[14] = UI_VALUE_STRING;
+    string[15] = 2;
+    ui_wire_put_u16(string + 16, 3); // 3 bytes, room for 2
+    string[18] = 'a';
+    string[19] = 'b';
+    ui_scene sc;
+    captured cs = {0};
+    scene_init(&sc, &cs);
+    ui_wire_buf_init(&b, UI_WIRE_MAGIC_CMD);
+    p = emit(&b, UI_OP_CREATE_NODE, UI_WIRE_SIZE_CREATE_NODE);
+    ui_wire_put_handle(ui_wire_put_handle(p, node), surface);
+    memcpy(emit(&b, UI_OP_SET_PROPS, sizeof string), string, sizeof string);
+    string[16] = 2; // now it fits: applied
+    memcpy(emit(&b, UI_OP_SET_PROPS, sizeof string), string, sizeof string);
+    bytes = ui_wire_buf_finish(&b, &n);
+    CHECK(ui_scene_apply(&sc, bytes, n, 0) == UI_OK);
+    CHECK_EQ_INT(sc.stats.dropped, 1);
+    ui_scene_resolve(&sc, 0);
+    const char *fam = sc.nodes[ui_handle_slot(node)].computed.text.family;
+    CHECK(fam && !strcmp(fam, "ab"));
+    free(bytes);
+    ui_scene_destroy(&sc);
 }
 
 static void test_events(void) {

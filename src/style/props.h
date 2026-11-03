@@ -8,9 +8,16 @@
 
 #include "ui/wire.h"
 
-// Size of an entry with this kind, in 4-byte words including its 4-byte header; 0 for a
-// kind this version doesn't know (a reader skips such entries by their own word count).
+// Size of an entry with this kind, in 4-byte words including its 4-byte header (the
+// smallest, for strings); 0 for a kind this version doesn't know (a reader skips such
+// entries by their own word count).
 uint32_t ui_style_kind_words(uint8_t kind);
+
+// Size of an entry carrying this value (strings vary), in words including the header.
+uint32_t ui_style_value_words(const ui_value *v);
+
+// A string value: 1 to UI_STYLE_STRING_MAX bytes of UTF-8 without NUL.
+bool ui_style_string_valid(const ui_value *v);
 
 // True if `prop` is a property (or a transition of one) this version knows.
 bool ui_style_prop_known(uint16_t prop);

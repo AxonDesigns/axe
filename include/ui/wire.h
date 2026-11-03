@@ -169,6 +169,13 @@ typedef enum ui_style_prop {
     UI_STYLE_LINE_HEIGHT = 8,      // number in (0, 100] (multiple of the size), or auto
     UI_STYLE_TEXT_ALIGN = 9,       // keyword ui_text_align
     UI_STYLE_MAX_LINES = 10,       // number (whole, <= 65535; 0 = unlimited), or none
+    // Inherited (docs/styles.md, "Inheritance"), with text color, line height and alignment.
+    UI_STYLE_FONT_FAMILY = 11,     // string: a CSS-style family list, e.g. "Noto Sans, sans-serif"
+    UI_STYLE_FONT_SIZE = 12,       // px in (0, 4096]
+    UI_STYLE_FONT_WEIGHT = 13,     // number, whole, in [1, 1000]
+    UI_STYLE_FONT_SLANT = 14,      // keyword ui_text_slant
+    UI_STYLE_LANGUAGE = 15,        // string: a BCP 47 tag, e.g. "sr-Cyrl"; or none
+    UI_STYLE_DIRECTION = 16,       // keyword ui_direction
     // Layout: flexbox with CSS semantics (docs/layout.md). Every node is a flex container;
     // sizes are border-box. Lengths are px or percent as noted.
     UI_STYLE_DISPLAY = 32,         // keyword ui_display
@@ -226,7 +233,12 @@ typedef enum ui_value_kind {
     UI_VALUE_KEYWORD = 8, // a property's enumerated value
     UI_VALUE_TOKEN = 9,   // the value of theme token `token` (see ui_cmd_set_token)
     UI_VALUE_SPRING = 10, // a transition: stiffness > 0, damping >= 0 (mass 1)
+    UI_VALUE_STRING = 11, // UTF-8, no NUL, at most UI_STYLE_STRING_MAX bytes
+    UI_VALUE_INHERIT = 12, // the parent's computed value (any property)
+    UI_VALUE_INITIAL = 13, // the property's initial value (any property)
 } ui_value_kind;
+
+#define UI_STYLE_STRING_MAX 1014u // what fits an entry of 255 words
 
 typedef struct ui_value {
     ui_value_kind kind;
@@ -238,6 +250,10 @@ typedef struct ui_value {
         struct {
             float stiffness, damping;
         } spring;
+        struct {
+            const char *bytes; // the writer copies them
+            uint32_t length;
+        } string;
     };
 } ui_value;
 
@@ -257,7 +273,20 @@ static inline ui_value ui_rgba(float r, float g, float b, float a) {
 static inline ui_value ui_transition(float stiffness, float damping) {
     return (ui_value){.kind = UI_VALUE_SPRING, .spring = {stiffness, damping}};
 }
+static inline ui_value ui_string(const char *s) {
+    uint32_t n = 0;
+    while (s && s[n]) n++;
+    return (ui_value){.kind = UI_VALUE_STRING, .string = {s, n}};
+}
+static inline ui_value ui_inherit(void) { return (ui_value){.kind = UI_VALUE_INHERIT}; }
+static inline ui_value ui_initial(void) { return (ui_value){.kind = UI_VALUE_INITIAL}; }
 #endif
+
+// The direction of a node's content: its flex rows and its text (UI_STYLE_DIRECTION).
+typedef enum ui_direction {
+    UI_DIRECTION_LTR = 0,
+    UI_DIRECTION_RTL = 1,
+} ui_direction;
 
 typedef enum ui_display {
     UI_DISPLAY_FLEX = 0,
