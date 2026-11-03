@@ -109,6 +109,13 @@ target_link_libraries(test_text_wire PRIVATE ui m)
 ui_target_warnings(test_text_wire)
 add_test(NAME text_wire COMMAND test_text_wire)
 
+# Wire evolution: buffers from older and newer writers apply like this writer's own.
+add_executable(test_wire_compat test_wire_compat.c)
+target_include_directories(test_wire_compat PRIVATE ${PROJECT_SOURCE_DIR}/src)
+target_link_libraries(test_wire_compat PRIVATE ui m)
+ui_target_warnings(test_wire_compat)
+add_test(NAME wire_compat COMMAND test_wire_compat)
+
 # Hit testing.
 add_executable(test_text_hittest test_text_hittest.c)
 target_include_directories(test_text_hittest PRIVATE ${PROJECT_SOURCE_DIR}/src)

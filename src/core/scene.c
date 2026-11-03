@@ -119,14 +119,16 @@ static bool finite_n(const float *v, uint32_t n) {
     return true;
 }
 
-// Checks the framing of every op without applying anything.
+// Checks the framing of every op without applying anything. A known op's payload must hold
+// at least its original fields and, for variable-length ops, the data its counts describe;
+// bytes past that come from a newer writer and are ignored.
 static ui_result validate(const uint8_t *data, size_t size) {
     ui_wire_reader r;
     ui_result res = ui_wire_reader_init(&r, UI_WIRE_MAGIC_CMD, data, size);
     if (res != UI_OK) return res;
     ui_wire_op op;
     while ((res = ui_wire_reader_next(&r, &op)) == UI_OK) {
-        uint32_t expected;
+        uint64_t expected;
         switch (op.opcode) {
         case UI_OP_CREATE_NODE: expected = UI_WIRE_SIZE_CREATE_NODE; break;
         case UI_OP_DESTROY_NODE: expected = UI_WIRE_SIZE_DESTROY_NODE; break;
@@ -137,9 +139,9 @@ static ui_result validate(const uint8_t *data, size_t size) {
         case UI_OP_SET_CLIP: expected = UI_WIRE_SIZE_SET_CLIP; break;
         case UI_OP_LOAD_FONT: {
             if (op.payload_size < UI_WIRE_SIZE_LOAD_FONT_HEADER) return UI_ERR_MALFORMED;
-            uint32_t n = ui_wire_get_u32(op.payload + 4);
-            if (n > UI_WIRE_MAX_PAYLOAD) return UI_ERR_MALFORMED;
-            expected = UI_WIRE_SIZE_LOAD_FONT_HEADER + ui_wire_pad4(n);
+            uint32_t header = ui_wire_load_font_header(op.payload);
+            if (header < UI_WIRE_SIZE_LOAD_FONT_HEADER || header % 4) return UI_ERR_MALFORMED;
+            expected = header + ui_wire_pad4(ui_wire_get_u16(op.payload + 4));
             break;
         }
         case UI_OP_START_SPRING:
@@ -147,25 +149,28 @@ static ui_result validate(const uint8_t *data, size_t size) {
             expected = UI_WIRE_SIZE_START_SPRING_BASE + 4u * ui_wire_get_u16(op.payload + 10);
             break;
         case UI_OP_SET_TEXT: {
-            if (op.payload_size < UI_WIRE_SIZE_SET_TEXT_HEADER) return UI_ERR_MALFORMED;
+            if (op.payload_size < UI_WIRE_MIN_SET_TEXT_HEADER) return UI_ERR_MALFORMED;
             const uint8_t *p = op.payload;
-            uint32_t chunk = ui_wire_get_u32(p + 12), spans = ui_wire_get_u16(p + 16);
+            uint32_t header = ui_wire_set_text_header(p), stride = ui_wire_set_text_span(p);
+            uint32_t chunk = ui_wire_get_u16(p + 12), spans = ui_wire_get_u16(p + 16);
             uint32_t fam = ui_wire_get_u16(p + 20), ell = ui_wire_get_u16(p + 22);
-            if (fam % 4 || chunk > UI_WIRE_MAX_PAYLOAD) return UI_ERR_MALFORMED;
-            expected = UI_WIRE_SIZE_SET_TEXT_HEADER + spans * UI_WIRE_SIZE_TEXT_SPAN + fam +
-                       ui_wire_pad4(ell) + ui_wire_pad4(chunk);
+            if (header < UI_WIRE_MIN_SET_TEXT_HEADER || header % 4 ||
+                stride < UI_WIRE_SIZE_TEXT_SPAN || stride % 4 || fam % 4)
+                return UI_ERR_MALFORMED;
+            expected = header + (uint64_t)spans * stride + fam + ui_wire_pad4(ell) +
+                       ui_wire_pad4(chunk);
             break;
         }
         case UI_OP_APPEND_TEXT: {
             if (op.payload_size < UI_WIRE_SIZE_APPEND_TEXT_HEADER) return UI_ERR_MALFORMED;
-            uint32_t chunk = ui_wire_get_u32(op.payload + 8);
-            if (chunk > UI_WIRE_MAX_PAYLOAD) return UI_ERR_MALFORMED;
-            expected = UI_WIRE_SIZE_APPEND_TEXT_HEADER + ui_wire_pad4(chunk);
+            uint32_t header = ui_wire_append_text_header(op.payload);
+            if (header < UI_WIRE_SIZE_APPEND_TEXT_HEADER || header % 4) return UI_ERR_MALFORMED;
+            expected = header + ui_wire_pad4(ui_wire_get_u16(op.payload + 8));
             break;
         }
         default: continue; // unknown ops are skipped when applying
         }
-        if (op.payload_size != expected) return UI_ERR_MALFORMED;
+        if (op.payload_size < expected) return UI_ERR_MALFORMED;
     }
     return res == UI_ERR_END ? UI_OK : res;
 }
@@ -235,8 +240,8 @@ static bool apply_op(ui_scene *s, const ui_wire_op *op, uint64_t now_ns) {
         return true;
     }
     if (op->opcode == UI_OP_LOAD_FONT) {
-        uint32_t len = ui_wire_get_u32(p + 4);
-        const char *path = (const char *)p + UI_WIRE_SIZE_LOAD_FONT_HEADER;
+        uint32_t len = ui_wire_get_u16(p + 4);
+        const char *path = (const char *)p + ui_wire_load_font_header(p);
         if (!len || len > UI_FONT_PATH_MAX || memchr(path, 0, len) ||
             !ui_utf8_valid((const uint8_t *)path, len)) {
             s->stats.dropped++;
@@ -398,17 +403,22 @@ static void free_parts(text_parts *t) {
 // Applies one set_text, consuming the append_text ops that continue it from `r`. Every
 // check that fails drops the op (and its continuations) without touching the node.
 static bool apply_set_text(ui_scene *s, const ui_wire_op *op, ui_wire_reader *r) {
-    const uint8_t *p = op->payload;
+    // Fields past the header an older writer sent read as 0: line height from the fonts,
+    // start alignment.
+    uint32_t header = ui_wire_set_text_header(op->payload);
+    uint32_t stride = ui_wire_set_text_span(op->payload);
+    uint8_t p[UI_WIRE_SIZE_SET_TEXT_HEADER];
+    ui_wire_read_fields(p, sizeof p, op->payload, header);
     ui_handle h = ui_wire_get_handle(p);
-    uint32_t total = ui_wire_get_u32(p + 8), chunk = ui_wire_get_u32(p + 12);
+    uint32_t total = ui_wire_get_u32(p + 8), chunk = ui_wire_get_u16(p + 12);
     uint32_t span_count = ui_wire_get_u16(p + 16), family_count = ui_wire_get_u16(p + 18);
     uint32_t fam_bytes = ui_wire_get_u16(p + 20), ell_len = ui_wire_get_u16(p + 22);
     uint32_t max_lines = ui_wire_get_u16(p + 24);
     uint8_t dir = p[26], flags = p[27];
     float line_height = ui_wire_get_f32(p + 64);
     uint8_t align = p[68];
-    const uint8_t *spans_p = p + UI_WIRE_SIZE_SET_TEXT_HEADER;
-    const uint8_t *fam_p = spans_p + span_count * UI_WIRE_SIZE_TEXT_SPAN;
+    const uint8_t *spans_p = op->payload + header;
+    const uint8_t *fam_p = spans_p + span_count * stride;
     const uint8_t *ell_p = fam_p + fam_bytes;
     const uint8_t *chunk_p = ell_p + ui_wire_pad4(ell_len);
 
@@ -428,9 +438,9 @@ static bool apply_set_text(ui_scene *s, const ui_wire_op *op, ui_wire_reader *r)
             if (ui_wire_reader_next(&look, &next) != UI_OK || next.opcode != UI_OP_APPEND_TEXT ||
                 !ui_handle_eq(ui_wire_get_handle(next.payload), h))
                 break;
-            uint32_t n = ui_wire_get_u32(next.payload + 8);
+            uint32_t n = ui_wire_get_u16(next.payload + 8);
             if (n > total - have) break;
-            memcpy(t.text + have, next.payload + UI_WIRE_SIZE_APPEND_TEXT_HEADER, n);
+            memcpy(t.text + have, next.payload + ui_wire_append_text_header(next.payload), n);
             have += n;
             *r = look; // the continuation belongs to this set_text
         }
@@ -455,7 +465,7 @@ static bool apply_set_text(ui_scene *s, const ui_wire_op *op, ui_wire_reader *r)
     }
     uint32_t prev_end = 0;
     for (uint32_t i = 0; !why && i < span_count; i++) {
-        if (!read_style(spans_p + i * UI_WIRE_SIZE_TEXT_SPAN, family_count, &t.spans[i].style,
+        if (!read_style(spans_p + i * stride, family_count, &t.spans[i].style,
                         &t.spans[i].start, &t.spans[i].end) ||
             t.spans[i].start >= t.spans[i].end || t.spans[i].end > total ||
             t.spans[i].start < prev_end)

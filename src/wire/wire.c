@@ -289,7 +289,8 @@ ui_result ui_cmd_set_text(ui_cmd_writer *w, ui_handle node, const ui_text_desc *
     if (!p) return UI_ERR_OUT_OF_MEMORY;
     p = ui_wire_put_handle(p, node);
     p = ui_wire_put_u32(p, d->length);
-    p = ui_wire_put_u32(p, chunk);
+    p = ui_wire_put_u16(p, (uint16_t)chunk);
+    p = ui_wire_put_u16(p, UI_WIRE_SIZE_SET_TEXT_HEADER);
     p = ui_wire_put_u16(p, (uint16_t)d->span_count);
     p = ui_wire_put_u16(p, (uint16_t)strings);
     p = ui_wire_put_u16(p, (uint16_t)ui_wire_pad4(fam_bytes));
@@ -297,7 +298,8 @@ ui_result ui_cmd_set_text(ui_cmd_writer *w, ui_handle node, const ui_text_desc *
     p = ui_wire_put_u16(p, d->max_lines);
     *p++ = (uint8_t)d->direction;
     *p++ = d->ellipsis ? UI_WIRE_TEXT_CUSTOM_ELLIPSIS : 0;
-    p = put_style(p, 0, 0, &d->style, d->family_count);
+    // The default style's start and end are unused; the first two bytes carry span_bytes.
+    p = put_style(p, UI_WIRE_SIZE_TEXT_SPAN, 0, &d->style, d->family_count);
     p = ui_wire_put_f32(p, d->line_height);
     *p++ = (uint8_t)d->align;
     *p++ = 0;
@@ -328,7 +330,8 @@ ui_result ui_cmd_set_text(ui_cmd_writer *w, ui_handle node, const ui_text_desc *
             return UI_ERR_OUT_OF_MEMORY;
         }
         p = ui_wire_put_handle(p, node);
-        p = ui_wire_put_u32(p, n);
+        p = ui_wire_put_u16(p, (uint16_t)n);
+        p = ui_wire_put_u16(p, UI_WIRE_SIZE_APPEND_TEXT_HEADER);
         put_bytes(p, d->text + sent, n);
         sent += n;
     }
@@ -342,7 +345,8 @@ ui_result ui_cmd_load_font(ui_cmd_writer *w, uint32_t id, const char *path) {
                                 UI_WIRE_SIZE_LOAD_FONT_HEADER + ui_wire_pad4((uint32_t)n));
     if (!p) return UI_ERR_OUT_OF_MEMORY;
     p = ui_wire_put_u32(p, id);
-    p = ui_wire_put_u32(p, (uint32_t)n);
+    p = ui_wire_put_u16(p, (uint16_t)n);
+    p = ui_wire_put_u16(p, UI_WIRE_SIZE_LOAD_FONT_HEADER);
     put_bytes(p, path, (uint32_t)n);
     return UI_OK;
 }
@@ -424,32 +428,34 @@ ui_result ui_event_next(ui_event_reader *reader, ui_event *out) {
         reader->remaining--;
         memset(out, 0, sizeof *out);
         out->type = (ui_event_type)op.opcode;
+        // A known event may be longer than this reader expects: a newer core appended
+        // fields, and they are ignored. Shorter than its original size is malformed.
         switch (op.opcode) {
         case UI_EVENT_FRAME_COMMITTED:
-            if (op.payload_size != UI_WIRE_SIZE_FRAME_COMMITTED) return UI_ERR_MALFORMED;
+            if (op.payload_size < UI_WIRE_SIZE_FRAME_COMMITTED) return UI_ERR_MALFORMED;
             out->surface = ui_wire_get_handle(op.payload);
             out->frame_committed.frame_id = ui_wire_get_u64(op.payload + 8);
             out->frame_committed.predicted_present_ns = ui_wire_get_u64(op.payload + 16);
             return UI_OK;
         case UI_EVENT_SURFACE_RESIZED:
-            if (op.payload_size != UI_WIRE_SIZE_SURFACE_RESIZED) return UI_ERR_MALFORMED;
+            if (op.payload_size < UI_WIRE_SIZE_SURFACE_RESIZED) return UI_ERR_MALFORMED;
             out->surface = ui_wire_get_handle(op.payload);
             out->surface_resized.width = ui_wire_get_f32(op.payload + 8);
             out->surface_resized.height = ui_wire_get_f32(op.payload + 12);
             out->surface_resized.scale_120 = ui_wire_get_u32(op.payload + 16);
             return UI_OK;
         case UI_EVENT_SURFACE_CLOSE_REQUESTED:
-            if (op.payload_size != UI_WIRE_SIZE_SURFACE_CLOSE) return UI_ERR_MALFORMED;
+            if (op.payload_size < UI_WIRE_SIZE_SURFACE_CLOSE) return UI_ERR_MALFORMED;
             out->surface = ui_wire_get_handle(op.payload);
             return UI_OK;
         case UI_EVENT_TIMER_FIRED:
-            if (op.payload_size != UI_WIRE_SIZE_TIMER_FIRED) return UI_ERR_MALFORMED;
+            if (op.payload_size < UI_WIRE_SIZE_TIMER_FIRED) return UI_ERR_MALFORMED;
             out->timer_fired.id = ui_wire_get_u32(op.payload);
             out->timer_fired.deadline_ns = ui_wire_get_u64(op.payload + 8);
             out->timer_fired.now_ns = ui_wire_get_u64(op.payload + 16);
             return UI_OK;
         case UI_EVENT_FONT_LOADED:
-            if (op.payload_size != UI_WIRE_SIZE_FONT_LOADED) return UI_ERR_MALFORMED;
+            if (op.payload_size < UI_WIRE_SIZE_FONT_LOADED) return UI_ERR_MALFORMED;
             out->font_loaded.id = ui_wire_get_u32(op.payload);
             out->font_loaded.result = (ui_result)ui_wire_get_u32(op.payload + 4);
             return UI_OK;

@@ -16,7 +16,9 @@ static_assert(__BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__, "wire format assumes li
 #define UI_WIRE_MAX_OP_SIZE 0xFFFCu
 #define UI_WIRE_MAX_BUFFER_SIZE (64u << 20)
 
-// Payload sizes (bytes after the 4-byte op header).
+// Payload sizes (bytes after the 4-byte op header). Each is the op's original size, the
+// smallest payload a reader accepts: newer writers may append fields, which older readers
+// ignore (docs/command-buffer.md, "Evolving the format").
 #define UI_WIRE_HANDLE_SIZE 8u
 enum {
     UI_WIRE_SIZE_CREATE_NODE = 16,       // node, parent
@@ -31,15 +33,18 @@ enum {
     UI_WIRE_SIZE_SET_TIMER = 16,         // id u32, reserved u32, deadline_ns u64
     UI_WIRE_SIZE_TIMER_FIRED = 24,       // id u32, reserved u32, deadline_ns u64, now_ns u64
     UI_WIRE_SIZE_SET_CLIP = 12,          // node, flags u32 (bit 0: clip)
-    UI_WIRE_SIZE_LOAD_FONT_HEADER = 8,   // id u32, path_bytes u32; then the path (padded)
+    UI_WIRE_SIZE_LOAD_FONT_HEADER = 8,   // id u32, path_bytes u16, header_bytes u16; path
     UI_WIRE_SIZE_FONT_LOADED = 8,        // id u32, result u32
 };
 
 // set_text: fixed header, then spans, the family-name region (NUL-terminated names,
 // zero-padded to a multiple of 4), the ellipsis (padded), the first text chunk (padded).
-#define UI_WIRE_SIZE_SET_TEXT_HEADER 72u
+// The header grew from 64 bytes (line_height, align); readers find the spans at the
+// header size the op carries, and each span at the span size it carries.
+#define UI_WIRE_SIZE_SET_TEXT_HEADER 72u    // what this writer sends
+#define UI_WIRE_MIN_SET_TEXT_HEADER 64u     // the original header
 #define UI_WIRE_SIZE_TEXT_SPAN 36u
-#define UI_WIRE_SIZE_APPEND_TEXT_HEADER 12u // node, chunk_bytes; then the chunk (padded)
+#define UI_WIRE_SIZE_APPEND_TEXT_HEADER 12u // node, chunk_bytes u16, header_bytes u16; chunk
 #define UI_WIRE_TEXT_CUSTOM_ELLIPSIS 1u     // set_text flags: the ellipsis bytes replace U+2026
 #define UI_WIRE_MAX_PAYLOAD (UI_WIRE_MAX_OP_SIZE - UI_WIRE_OP_HEADER_SIZE)
 
@@ -104,6 +109,34 @@ static inline float ui_wire_get_f32(const uint8_t *p) {
 }
 static inline ui_handle ui_wire_get_handle(const uint8_t *p) {
     return (ui_handle){ui_wire_get_u32(p), ui_wire_get_u32(p + 4)};
+}
+
+// Header and record sizes that variable-length ops carry. Writers from before a size field
+// existed left its bytes 0, which stands for the original size.
+static inline uint32_t ui_wire_size_or(const uint8_t *p, uint32_t original) {
+    uint32_t n = ui_wire_get_u16(p);
+    return n ? n : original;
+}
+static inline uint32_t ui_wire_set_text_header(const uint8_t *payload) {
+    return ui_wire_size_or(payload + 14, UI_WIRE_MIN_SET_TEXT_HEADER);
+}
+static inline uint32_t ui_wire_set_text_span(const uint8_t *payload) {
+    return ui_wire_size_or(payload + 28, UI_WIRE_SIZE_TEXT_SPAN);
+}
+static inline uint32_t ui_wire_append_text_header(const uint8_t *payload) {
+    return ui_wire_size_or(payload + 10, UI_WIRE_SIZE_APPEND_TEXT_HEADER);
+}
+static inline uint32_t ui_wire_load_font_header(const uint8_t *payload) {
+    return ui_wire_size_or(payload + 6, UI_WIRE_SIZE_LOAD_FONT_HEADER);
+}
+
+// Copies the first `sent` bytes of a fixed region into `out` (`known` bytes, what this
+// reader understands): fields an older writer did not send read as 0, which every
+// appended field's default must be encoded as, and fields a newer writer added are skipped.
+static inline void ui_wire_read_fields(void *out, size_t known, const uint8_t *p, size_t sent) {
+    size_t n = sent < known ? sent : known;
+    __builtin_memcpy(out, p, n);
+    __builtin_memset((uint8_t *)out + n, 0, known - n);
 }
 
 // Validating op iterator over a buffer with the given magic.

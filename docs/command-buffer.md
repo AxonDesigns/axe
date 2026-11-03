@@ -9,6 +9,8 @@ The language runtime and the core talk only through two binary buffers:
 
 Both share one framing. The C encoder and decoder live in `src/wire/`; the public API is
 `include/ui/wire.h`. Later milestones will generate encoders and decoders from the IDL.
+Writers and readers of different ages interoperate: see
+[Evolving the format](#evolving-the-format).
 
 ## Encoding rules
 
@@ -56,6 +58,9 @@ A handle is 8 bytes: `u32 index`, `u32 generation`.
 
 ## Commands (`UICB`)
 
+Bytes are what this version writes. They are also each op's original size, except where
+the [op history](#op-history) lists appended fields.
+
 | Opcode | Op | Payload | Bytes |
 | --- | --- | --- | --- |
 | 1 | `create_node` | node handle, parent handle (a node, or a surface for a root-level node) | 16 |
@@ -66,9 +71,9 @@ A handle is 8 bytes: `u32 index`, `u32 generation`.
 | 6 | `start_spring` | node, `u16 property`, `u16 count`, `f32 stiffness`, `f32 damping`, `f32 target[count]` | 20 + 4·count |
 | 7 | `set_timer` | `u32 id`, `u32` reserved (0), `u64 deadline_ns` (animation clock; `UINT64_MAX` disarms) | 16 |
 | 8 | `set_text` | see [Text](#text) | 72 + variable |
-| 9 | `append_text` | node, `u32 chunk_bytes`, chunk (padded to 4) | 12 + chunk |
+| 9 | `append_text` | node, `u16 chunk_bytes`, `u16 header_bytes` (12), chunk (padded to 4) | 12 + chunk |
 | 10 | `set_clip` | node, `u32 flags` (bit 0: clip; other bits must be 0) | 12 |
-| 11 | `load_font` | `u32 id`, `u32 path_bytes` (1–4096), the path in UTF-8 (padded to 4, no NUL) | 8 + path |
+| 11 | `load_font` | `u32 id`, `u16 path_bytes` (1–4096), `u16 header_bytes` (8), the path in UTF-8 (padded to 4, no NUL) | 8 + path |
 
 ### Properties for `start_spring`
 
@@ -122,7 +127,8 @@ whenever the width or the surface scale changes.
 | --- | --- | --- |
 | 0 | handle | node |
 | 8 | u32 | `text_bytes`: total UTF-8 length (≤ 16 MiB) |
-| 12 | u32 | `chunk_bytes`: text bytes carried in this op |
+| 12 | u16 | `chunk_bytes`: text bytes carried in this op |
+| 14 | u16 | `header_bytes`: where the spans start, 72 in this version; 0 = 64 |
 | 16 | u16 | `span_count` (≤ 1024) |
 | 18 | u16 | `string_count`: family lists and language tags (≤ 64) |
 | 20 | u16 | `strings_bytes`: size of the string region, a multiple of 4 |
@@ -130,11 +136,11 @@ whenever the width or the surface scale changes.
 | 24 | u16 | `max_lines` (0 = unlimited) |
 | 26 | u8 | direction: 0 auto (first strong character, per paragraph), 1 LTR, 2 RTL |
 | 27 | u8 | flags: bit 0 = the ellipsis bytes replace the default U+2026 (0 bytes = none) |
-| 28 | style | the default style (36 bytes, below; `start` and `end` are 0) |
+| 28 | style | the default style (36 bytes, below). Its `start` and `end` are unused: the first 2 bytes are `u16 span_bytes`, the size of each span record (36 in this version; 0 = 36), and the other 6 are 0 |
 | 64 | f32 | `line_height`: line box height as a multiple of the default size; 0 = from font metrics; ≤ 100 |
 | 68 | u8 | align: 0 start, 1 end, 2 left, 3 right, 4 center, 5 justify |
 | 69 | u8[3] | reserved (0) |
-| 72 | style[] | `span_count` spans |
+| `header_bytes` | style[] | `span_count` spans, each `span_bytes` long |
 | … | bytes | string region: `string_count` NUL-terminated UTF-8 strings, zero-padded |
 | … | bytes | ellipsis, padded to 4 |
 | … | bytes | the first `chunk_bytes` of text, padded to 4 |
@@ -165,6 +171,10 @@ A style or span is 36 bytes:
 - Each family entry is a CSS-style list (`"Noto Sans, sans-serif"`), tried in order
   against registered fonts and then the system's. Bytes no span covers use the default
   style.
+- **Fields from other versions:** a reader takes the fields it knows from the first
+  `header_bytes` (and from each span's first `span_bytes`) and ignores the rest. A header
+  from before `line_height` and `align` existed (64 bytes) gets line height 0 and start
+  alignment.
 - **Long text** continues in `append_text` ops for the same node. They must follow the
   `set_text` directly, in the same buffer, until `text_bytes` have arrived. Otherwise the
   `set_text` is dropped, together with the continuations it consumed, and the node keeps its
@@ -175,8 +185,9 @@ A style or span is 36 bytes:
   `ui_app_stats.text_invalid_sequences`. Span offsets are moved with their characters, and
   offsets inside a sequence snap to its start. Offsets reported back for this text refer to
   the stored, sanitized text.
-- **Framing errors** reject the whole buffer: a payload smaller than the fixed header, a
-  `families_bytes` that is not a multiple of 4, or sizes that don't add up to the op size.
+- **Framing errors** reject the whole buffer: a payload smaller than the original 64-byte
+  header, a `header_bytes` below 64 or `span_bytes` below 36, either of them or
+  `strings_bytes` not a multiple of 4, or regions that add up to more than the op holds.
 - **Drops** (counted, and the node is unchanged): a stale node, out-of-range values,
   unsorted or overlapping spans, spans past the end, a family or language index past the
   string region, strings or a custom ellipsis that are not valid UTF-8, or a missing
@@ -188,11 +199,13 @@ the family list "Noto Sans", and no spans:
 ```
 55 49 43 42  00 00 00 00  6C 00 00 00  01 00 00 00   header: UICB v0, 108 bytes, 1 op
 08 00 5C 00  01 00 00 00  01 00 00 00                set_text, 92 bytes, node {1,1}
-02 00 00 00  02 00 00 00                             text_bytes 2, chunk_bytes 2
+02 00 00 00  02 00 48 00                             text_bytes 2, chunk_bytes 2,
+                                                     header_bytes 72
 00 00 01 00  0C 00 00 00  00 00 00 00                0 spans, 1 string, 12-byte region,
                                                      no ellipsis, max_lines 0, auto, flags 0
-00 00 00 00  00 00 00 00  00 00 90 01  00 00 00 00   style: start 0, end 0, family 0,
-                                                     weight 400, normal, no language
+24 00 00 00  00 00 00 00  00 00 90 01  00 00 00 00   default style: span_bytes 36, unused,
+                                                     family 0, weight 400, normal,
+                                                     no language
 00 00 80 41  00 00 80 3F  00 00 80 3F  00 00 80 3F   size 16, r 1, g 1, b 1
 00 00 80 3F                                          a 1
 00 00 00 00  00 00 00 00                             line_height 0, align start, reserved
@@ -231,7 +244,8 @@ The core validates a whole command buffer before applying any op. The following 
 - `total_bytes` that differs from the received size;
 - an op size that is not a multiple of 4, is below 4, or runs past the end;
 - an op count that does not match;
-- a known opcode whose payload size is wrong.
+- a known opcode whose payload is smaller than its original size, or smaller than the
+  variable data its own counts describe (a longer one is fine: see below).
 
 If the buffer is well-framed, every op is applied in order. Individual ops are
 **dropped** (counted in `ui_app_stats.commands_dropped` and logged in debug builds,
@@ -241,8 +255,49 @@ never undefined behavior) when:
 - they carry a non-finite or out-of-range value;
 - the opcode is unknown (it came from a newer writer).
 
-Readers of event buffers skip unknown event types by their size. Bump the version only
-for changes old readers cannot skip.
+Readers of event buffers skip unknown event types by their size, and read known events
+under the same rules as commands.
+
+## Evolving the format
+
+Ops and events change without a version bump as long as each change follows these rules.
+
+- **Fields are only appended**, never inserted, removed or reordered, and an existing field
+  never changes meaning. A fixed-size op appends to its payload. A variable-length op
+  appends to its fixed header, or to a record inside it such as a `set_text` span.
+- **Every op has an original size**, that of its payload, header or record as first
+  shipped. A reader accepts a known opcode whose payload is at least that large:
+  - bytes past the fields it knows come from a newer writer and are ignored;
+  - fields the writer didn't send, because it predates them, take their default. Every
+    appended field's default is encoded as zero bytes, so a reader fills missing fields
+    with zeros;
+  - only a payload smaller than the original size is a framing error, which rejects the
+    buffer.
+- **Variable-length ops carry their header size** (`set_text`, `append_text`,
+  `load_font`), and `set_text` also carries its span size. Readers find the variable data
+  from these sizes, never from their own idea of the layout. A size of 0 stands for the
+  original size: writers from before the size fields existed left those bytes 0. Data
+  appended after the variable data is ignored like any trailing field. `start_spring`'s
+  targets are counted, so its appended fields follow `target[count]`.
+- **Reserved bytes** are written as 0 and ignored. A new field may take them over only if
+  0 is its default; that is how span `language` arrived.
+- **Behavior an old reader must not silently skip** needs a new opcode, which old readers
+  drop and count, or a flag bit that readers check. `set_clip`, for example, drops the op
+  when a flag it doesn't know is set.
+- **Bump the version** only for changes these rules can't express: a field that changes
+  meaning or encoding, a removed field, or a framing change. Readers reject buffers with a
+  version they don't know.
+
+### Op history
+
+Every appended field, with the change that added it. Ops and events not listed are at
+their original size.
+
+| Op | Original size | Appended |
+| --- | --- | --- |
+| `set_text` (8) | header 64, span 36 | `line_height` (f32 at 64) and `align` (u8 at 68, then 3 reserved), giving a 72-byte header: 62d0e10, "Text alignment and line height". Span `language` (u16 at 14, formerly reserved): 461c82d, "Per-span language". `header_bytes` (u16 at 14, the always-zero high half of the former u32 `chunk_bytes`) and `span_bytes` (u16 at 28, the always-zero default-style `start`): milestone 1.1, "Wire evolution rules" |
+| `append_text` (9) | header 12 | `header_bytes` (u16 at 10, the always-zero high half of the former u32 `chunk_bytes`): milestone 1.1 |
+| `load_font` (11) | header 8 | `header_bytes` (u16 at 6, the always-zero high half of the former u32 `path_bytes`): milestone 1.1 |
 
 ## Flow control and ordering
 
