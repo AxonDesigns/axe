@@ -1,0 +1,84 @@
+# Shared setup for the ci and fuzz workflows: Clang from apt.llvm.org, the system packages,
+# lavapipe as the only Vulkan driver, Rust, and the cached wgpu-native build for a preset.
+# Restore only: the calling job saves the caches (with `if: always()`, so a failing test
+# still saves them) from the keys this action outputs.
+name: setup
+description: Install the toolchain and restore the wgpu-native caches for a preset
+
+inputs:
+  preset:
+    description: CMake preset whose Cargo build to restore
+    required: true
+  llvm-version:
+    description: Clang major version (#embed needs 19 or newer)
+    default: "22"
+  rust-version:
+    description: Rust toolchain for wgpu-native
+    default: "1.93"
+
+outputs:
+  vendor-hit:
+    value: ${{ steps.vendor.outputs.cache-hit }}
+  vendor-key:
+    value: ${{ steps.vendor.outputs.cache-primary-key }}
+  cargo-hit:
+    value: ${{ steps.cargo.outputs.cache-hit }}
+  cargo-key:
+    value: ${{ steps.cargo.outputs.cache-primary-key }}
+
+runs:
+  using: composite
+  steps:
+    - name: Install system packages
+      shell: bash
+      env:
+        LLVM_VERSION: ${{ inputs.llvm-version }}
+      run: |
+        wget -qO llvm.sh https://apt.llvm.org/llvm.sh
+        sudo bash llvm.sh "$LLVM_VERSION"
+        sudo apt-get install -y --no-install-recommends \
+          "libclang-rt-$LLVM_VERSION-dev" ninja-build \
+          libwayland-dev wayland-protocols libxkbcommon-dev libfontconfig-dev \
+          mesa-vulkan-drivers libvulkan1 vulkan-tools
+        echo "/usr/lib/llvm-$LLVM_VERSION/bin" >> "$GITHUB_PATH"
+        # Only the CPU driver, so a test can never pick up a GPU. The ICD file name differs
+        # between distributions (lvp_icd.json here, lvp_icd.x86_64.json on Arch).
+        icd=$(ls /usr/share/vulkan/icd.d/lvp_icd*.json | head -1)
+        echo "VK_DRIVER_FILES=$icd" >> "$GITHUB_ENV"
+        echo "VK_ICD_FILENAMES=$icd" >> "$GITHUB_ENV"
+
+    - name: Install Rust
+      shell: bash
+      run: rustup toolchain install "${{ inputs.rust-version }}" --profile minimal
+
+    - name: Cache key
+      id: key
+      shell: bash
+      run: echo "wgpu=$(git rev-parse HEAD:third_party/wgpu-native)" >> "$GITHUB_OUTPUT"
+
+    - name: Restore vendored crates
+      id: vendor
+      uses: actions/cache/restore@v4
+      with:
+        path: third_party/wgpu-native-vendor
+        key: wgpu-vendor-${{ steps.key.outputs.wgpu }}
+
+    - name: Vendor crates
+      if: steps.vendor.outputs.cache-hit != 'true'
+      shell: bash
+      run: tools/vendor-rust.sh
+
+    - name: Restore wgpu-native build
+      id: cargo
+      uses: actions/cache/restore@v4
+      with:
+        path: build/${{ inputs.preset }}/cargo
+        key: wgpu-build-${{ inputs.preset }}-${{ steps.key.outputs.wgpu }}-rust${{ inputs.rust-version }}-llvm${{ inputs.llvm-version }}
+
+    - name: Tool versions
+      shell: bash
+      run: |
+        clang --version | head -1
+        cmake --version | head -1
+        cargo +"${{ inputs.rust-version }}" --version
+        vulkaninfo --summary | grep -E 'deviceName|driverName'

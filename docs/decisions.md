@@ -3,6 +3,84 @@
 Choices the architecture document leaves open, recorded as they are made. Newest
 milestone first.
 
+## Milestone 1.1: wire compatibility and fuzzing
+
+### Wire evolution
+- **Ops grow by appending; most changes need no version bump.** The rules are in
+  `docs/command-buffer.md` ("Evolving the format"), along with each op's original size and
+  every appended field. A reader accepts a known op whose payload is at least its
+  original size and ignores bytes past the fields it knows. Only a smaller payload
+  rejects the buffer. Events follow the same rules (`ui_event_next`).
+- **Appended fields default to zero bytes.** A reader copies the fields the writer sent
+  into a buffer of the size it knows and zero-fills the rest (`ui_wire_read_fields`), so
+  "missing" needs no code per field. A field whose natural default isn't 0 has to be
+  encoded so that 0 means the default.
+- **Size fields went into bytes every earlier writer left 0**, so adding them needed no
+  bump either:
+  - `set_text` `header_bytes` takes the high half of the old u32 `chunk_bytes` (a chunk is
+    at most 65 532 bytes), and `span_bytes` takes the default style's `start`, which was
+    always 0 and never read;
+  - `append_text` and `load_font` `header_bytes` take the high halves of their u32 lengths.
+
+  A size of 0 means the op's original size. That makes buffers from the original 64-byte
+  `set_text` writer decode correctly, and `tests/test_wire_compat.c` checks it.
+- **Buffers from the writers between 62d0e10 and this change don't decode.** They sent the
+  72-byte header without `header_bytes`, which is now read as 64. Inferring 72 from the op
+  size would be possible, but none of these buffers exist: writer and core ship in one
+  library and buffers are never stored.
+- **`set_text` spans carry their size too**, which the brief didn't ask for. Styles are the
+  record most likely to grow (decorations, letter spacing, features), and without a
+  stride, growing them would have needed a bump. A field appended to styles is appended to
+  each span, and to the header for the default style.
+- **Flags stay strict.** `set_clip` still drops an op with a flag bit it doesn't know: a
+  newer writer asking for, say, rounded clipping must not get a rectangular clip without
+  noticing. Behavior an old reader must not skip goes behind a new opcode or a checked
+  flag.
+- **The old `set_text` fuzz seeds were 72-byte-era buffers** and were patched to carry
+  `header_bytes = 72`. Patching them showed that `regress-raster-negative-x` had silently
+  stopped reproducing at 62d0e10. It was a 64-byte-era input, the 72-byte reader rejected
+  its sizes, so it never reached the rasterizer. The fuzzer had also mutated the unused
+  default-style `start`, which now reads as `span_bytes`; with those bytes zeroed it
+  decodes as an older-writer buffer again. With the rasterizer's x clamp removed, it
+  crashes ASan again, so it guards the bug once more.
+
+### Continuous fuzzing
+- **A nightly workflow** (`.github/workflows/fuzz.yml`, 03:17 UTC, also run by hand with a
+  time per target) runs every target for 10 minutes. Targets run as parallel matrix jobs,
+  each building only its own fuzzer, with `-max_len=8192` like the CTest smoke tests,
+  `-timeout=30` and `-rss_limit_mb=4096`. Scheduled runs only start from the default
+  branch, so it begins once this reaches `master`.
+- **Corpus cache:** each target restores the newest `fuzz-corpus-<target>-*` cache, fuzzes
+  with it plus the committed seeds, then shrinks it with `-merge=1` and saves it under a
+  new key (cache keys are immutable). The committed corpus is only read, never written.
+- **Crash, leak, timeout and OOM inputs** are written to `crashes/` and uploaded as the
+  `fuzz-crashes-<target>` artifact of the failed job. CONTRIBUTING.md says how to replay
+  one and commit it as a `regress-*` seed.
+- **Shared setup:** the toolchain, packages, lavapipe and wgpu-native cache restore moved
+  into a composite action (`.github/actions/setup`) used by both workflows. Saving the
+  caches stays in each job, so a failing step still saves them.
+- **New target `fuzz_commands`:** arbitrary op streams through `ui_scene_apply`, then
+  springs and display-list building on two surfaces. The harness writes the buffer header
+  and op count so inputs don't have to guess them. `fuzz_set_text` only ever built
+  `set_text` and `append_text` ops, so the framing checks that this change loosened (every
+  op now accepts longer payloads) had no fuzzer. Its seeds are scenes encoded by this
+  writer, by an older writer and by a newer one.
+- **It found two bugs within seconds**, both fixed with a regression seed and a unit test:
+  - **Unknown short ops were read past their end** (from M0). `apply_op` read a node
+    handle from every op not handled before it, unknown opcodes included, before
+    dropping those. A newer writer's op with a payload under 8 bytes at the end of a
+    buffer made an older reader read past it, which is exactly the forward-compatibility
+    case. Unknown opcodes are now dropped before anything is read
+    (`regress-unknown-short-op`, `test_wire_compat`).
+  - **Huge clip rects overflowed the scissor** (from M1's `set_clip`). A clip at
+    x = 3e21, from a large but finite rect, was converted to `int32_t`. Scissor
+    coordinates are now clamped to [0, 2³⁰], NaN included, before the conversion
+    (`regress-scissor-huge-rect`, `test_clip`).
+- **Fuzz before committing:** a change to code a target covers is fuzzed locally for a few
+  minutes first (CONTRIBUTING.md has the target-to-code table). The CTest smoke test's
+  10,000 runs are too few. The language change in M1 went in while its fuzz smoke run was
+  failing, which is what prompted the rule.
+
 ## Milestone 1: text pipeline
 
 ### CI

@@ -1,5 +1,6 @@
 # Linux CI: builds the debug and asan presets and runs every test headless on lavapipe, and
-# runs each libFuzzer target from its seed corpus (the fuzz preset's tests).
+# runs each libFuzzer target from its seed corpus (the fuzz preset's tests). Longer fuzzing
+# runs nightly in fuzz.yml.
 # The wgpu-native build (vendored crates + Cargo target dir) is cached per preset, keyed on
 # the pinned submodule commit and the Rust toolchain, so a warm run only builds our C code.
 name: ci
@@ -14,10 +15,6 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
-env:
-  LLVM_VERSION: "22"
-  RUST_VERSION: "1.93"
-
 jobs:
   linux:
     name: linux (${{ matrix.preset }})
@@ -31,53 +28,11 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Install system packages
-        run: |
-          wget -qO llvm.sh https://apt.llvm.org/llvm.sh
-          sudo bash llvm.sh "$LLVM_VERSION"
-          sudo apt-get install -y --no-install-recommends \
-            "libclang-rt-$LLVM_VERSION-dev" ninja-build \
-            libwayland-dev wayland-protocols libxkbcommon-dev libfontconfig-dev \
-            mesa-vulkan-drivers libvulkan1 vulkan-tools
-          echo "/usr/lib/llvm-$LLVM_VERSION/bin" >> "$GITHUB_PATH"
-          # Only the CPU driver, so a test can never pick up a GPU. The ICD file name differs
-          # between distributions (lvp_icd.json here, lvp_icd.x86_64.json on Arch).
-          icd=$(ls /usr/share/vulkan/icd.d/lvp_icd*.json | head -1)
-          echo "VK_DRIVER_FILES=$icd" >> "$GITHUB_ENV"
-          echo "VK_ICD_FILENAMES=$icd" >> "$GITHUB_ENV"
-
-      - name: Install Rust
-        run: rustup toolchain install "$RUST_VERSION" --profile minimal
-
-      - name: Cache key
-        id: key
-        run: echo "wgpu=$(git rev-parse HEAD:third_party/wgpu-native)" >> "$GITHUB_OUTPUT"
-
-      # Restore and save are separate steps so a failing test still saves the caches.
-      - name: Restore vendored crates
-        id: vendor
-        uses: actions/cache/restore@v4
+      - name: Set up
+        id: setup
+        uses: ./.github/actions/setup
         with:
-          path: third_party/wgpu-native-vendor
-          key: wgpu-vendor-${{ steps.key.outputs.wgpu }}
-
-      - name: Vendor crates
-        if: steps.vendor.outputs.cache-hit != 'true'
-        run: tools/vendor-rust.sh
-
-      - name: Restore wgpu-native build
-        id: cargo
-        uses: actions/cache/restore@v4
-        with:
-          path: build/${{ matrix.preset }}/cargo
-          key: wgpu-build-${{ matrix.preset }}-${{ steps.key.outputs.wgpu }}-rust${{ env.RUST_VERSION }}-llvm${{ env.LLVM_VERSION }}
-
-      - name: Tool versions
-        run: |
-          clang --version | head -1
-          cmake --version | head -1
-          cargo +"$RUST_VERSION" --version
-          vulkaninfo --summary | grep -E 'deviceName|driverName'
+          preset: ${{ matrix.preset }}
 
       - name: Configure
         run: cmake --preset ${{ matrix.preset }}
@@ -85,19 +40,20 @@ jobs:
       - name: Build
         run: cmake --build --preset ${{ matrix.preset }}
 
+      # Saved separately from the restore so a failing test still saves the caches.
       - name: Save vendored crates
-        if: always() && steps.vendor.outputs.cache-hit != 'true'
+        if: always() && steps.setup.outputs.vendor-key != '' && steps.setup.outputs.vendor-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: third_party/wgpu-native-vendor
-          key: ${{ steps.vendor.outputs.cache-primary-key }}
+          key: ${{ steps.setup.outputs.vendor-key }}
 
       - name: Save wgpu-native build
-        if: always() && steps.cargo.outputs.cache-hit != 'true'
+        if: always() && steps.setup.outputs.cargo-key != '' && steps.setup.outputs.cargo-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: build/${{ matrix.preset }}/cargo
-          key: ${{ steps.cargo.outputs.cache-primary-key }}
+          key: ${{ steps.setup.outputs.cargo-key }}
 
       - name: Test
         run: ctest --preset ${{ matrix.preset }}
