@@ -1,8 +1,15 @@
 {
   "threshold_percent": 2,
-  "provisional": false,
-  "reason": "Replace the provisional baselines with CI's own counts (first bench-callgrind run); they matched the Docker image's except bench_text/shape, +0.08%",
-  "source": "CI run 41675753054 (ci, push to master at ccf3131), artifact bench-callgrind",
+  "reason": "Baselines from the guard's first run on master in its final form (M2.2); counts unchanged from CI run 41675753054, now stamped with their run",
+  "source": {
+    "run_id": 41687697393,
+    "run_attempt": 1,
+    "workflow": "ci",
+    "event": "push",
+    "ref": "master",
+    "commit": "2927f9ecd171003084adf83b771cbb902251d99f",
+    "url": "https://github.com/AxonDesigns/axe/actions/runs/41687697393"
+  },
   "counts": {
     "bench_layout/full_cold": 95100610,
     "bench_layout/full_warm": 41165845,
