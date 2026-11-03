@@ -17,6 +17,7 @@ add_library(ui STATIC
     runtime/queue.c
     runtime/sched_single.c
     runtime/sched_threaded.c
+    script/quickjs/engine_quickjs.c
     wire/wire.c
     wire/gen/wire_gen.c
     core/clock.c
@@ -56,6 +57,8 @@ target_include_directories(ui
 # POSIX 2008 + BSD interfaces (clock_gettime, poll) under strict -std=c23.
 target_compile_definitions(ui PRIVATE UI_HOOKS_ENABLED=$<BOOL:${UI_HOOKS}> _DEFAULT_SOURCE)
 target_link_libraries(ui PRIVATE m PkgConfig::WAYLAND PkgConfig::XKBCOMMON)
+# The JS engine: only src/script/quickjs/ includes its header (docs/script.md).
+target_link_libraries(ui PRIVATE quickjs)
 ui_target_warnings(ui)
 
 # One internal module per dependency: only text/hb includes hb.h and only text/fontconfig

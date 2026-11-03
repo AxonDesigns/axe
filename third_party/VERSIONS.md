@@ -9,6 +9,7 @@
 | Rust crates for wgpu-native | pinned by its `Cargo.lock` | `tools/vendor-rust.sh` -> `third_party/wgpu-native-vendor/` (gitignored) | permissive (see `cargo deny` config upstream) |
 | Corrosion | v0.6.1 (`1499b14`) | copied into `third_party/corrosion` | MIT |
 | HarfBuzz | 15.0.0 (`35f656a`) | git submodule `third_party/harfbuzz`, built by `third_party/harfbuzz.cmake` | Old MIT |
+| QuickJS-ng | v0.18.0 (`d7215b0`) | git submodule `third_party/quickjs-ng`, built by `third_party/quickjs.cmake` (engine only: no `quickjs-libc`, no `qjs`/`qjsc`) | MIT |
 
 wgpu-native is built with `--no-default-features --features wgsl,vulkan` (Linux needs only
 Vulkan and WGSL) and always in the `release` profile.

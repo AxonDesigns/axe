@@ -236,3 +236,10 @@ set_tests_properties(measure PROPERTIES ENVIRONMENT "UI_GPU=software" TIMEOUT 12
 find_package(Python3 3.10 REQUIRED COMPONENTS Interpreter)
 add_test(NAME idl_generator COMMAND Python3::Interpreter -I ${PROJECT_SOURCE_DIR}/tools/idl/test_axe_idl.py)
 add_test(NAME idl_up_to_date COMMAND Python3::Interpreter -I ${PROJECT_SOURCE_DIR}/tools/idl/axe_idl.py --check)
+
+# The JS engine interface on QuickJS-ng (src/script/engine.h).
+add_executable(test_js_engine test_js_engine.c)
+target_include_directories(test_js_engine PRIVATE ${PROJECT_SOURCE_DIR}/src)
+target_link_libraries(test_js_engine PRIVATE ui m)
+ui_target_warnings(test_js_engine)
+add_test(NAME js_engine COMMAND test_js_engine)
