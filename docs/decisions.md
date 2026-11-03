@@ -15,6 +15,18 @@ milestone first.
   library mapped until exit, and the suppressions match again. The cause on this machine
   wasn't pinned down (no driver or loader update; a reboot in between).
 
+### Example
+- **`examples/layout_cards` turns right-to-left** every 6 s (`--rtl` to start so,
+  `--no-direction` to stay). The page's `direction` changes, and the cards slide to their
+  mirrored places through their layout transitions. There are no input events yet, so a
+  timer stands in for a toggle key, as it does for the theme.
+- **Cards have a 4 px inline-start border** in the accent color, and **buttons rounder start
+  corners** (logical properties), so both visibly follow the direction. Paragraphs take
+  their direction from the node (`set_text` leaves it out of `.set`).
+- **Checked** headless (captures in both directions) and in a nested headless sway at 1.25
+  under both schedulers: 9 s each, through shuffles, a theme switch and a direction flip.
+  Frames presented on refresh (about 6.2 ms), none late, no warnings.
+
 ### Benchmark reliability
 - **Every case prints median and best.** `bench_text` now does too. On this desktop,
   medians move 10–20% between runs; the best run is steadier.

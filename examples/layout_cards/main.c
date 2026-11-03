@@ -1,10 +1,13 @@
 // layout_cards: a wrapping grid of cards laid out by flexbox. Every 2.5 s a card is inserted,
 // moved or removed, and the cards slide to their new places (layout animations); every 4 s
 // the theme switches between light and dark, and every color springs to its new value
-// (theme tokens with color transitions). Resizing the window reflows the grid, animated too.
+// (theme tokens with color transitions); every 6 s the page turns between left-to-right and
+// right-to-left, and the cards slide to their mirrored places. Cards have a thicker border
+// on their inline-start side and buttons rounder start corners (logical properties), so
+// both follow the direction. Resizing the window reflows the grid, animated too.
 //
-//   layout_cards [--no-shuffle] [--no-theme]   window
-//   layout_cards --headless [--out f.ppm] [--scale N] [--at S] [--dark]
+//   layout_cards [--no-shuffle] [--no-theme] [--no-direction] [--rtl]   window
+//   layout_cards --headless [--out f.ppm] [--scale N] [--at S] [--dark] [--rtl]
 //                                               offscreen at scale N/120: steps a paused
 //                                               clock to S seconds, then writes a PPM
 //
@@ -19,8 +22,10 @@
 #define MAX_CARDS 24
 #define SHUFFLE_TIMER 1
 #define THEME_TIMER 2
+#define DIRECTION_TIMER 3
 #define SHUFFLE_NS 2500000000ull
 #define THEME_NS 4000000000ull
+#define DIRECTION_NS 6000000000ull
 
 static const char *const font_files[] = {FONT("NotoSans-VF.ttf")};
 static const char *const families[] = {"Noto Sans, sans-serif"};
@@ -60,7 +65,7 @@ typedef struct demo {
     card cards[MAX_CARDS]; // in display order
     uint32_t count, next_id, step;
     uint32_t seed;
-    bool dark, shuffle, theme, armed;
+    bool dark, rtl, shuffle, theme, direction, armed;
 } demo;
 
 static uint32_t next_random(demo *d) {
@@ -75,6 +80,12 @@ static ui_result set_theme(demo *d, ui_cmd_writer *w) {
         r = ui_cmd_set_token(w, (uint32_t)t, ui_rgba(c[0], c[1], c[2], c[3]));
     }
     return r;
+}
+
+// The page's direction, which every card, paragraph and logical property follows.
+static ui_result set_direction(demo *d, ui_cmd_writer *w) {
+    ui_style_decl dir = {UI_STYLE_DIRECTION, ui_keyword(d->rtl ? UI_DIRECTION_RTL : UI_DIRECTION_LTR)};
+    return ui_cmd_set_props(w, d->page, &dir, 1);
 }
 
 #define DECLS(...) ((ui_style_decl[]){__VA_ARGS__}), (sizeof((ui_style_decl[]){__VA_ARGS__}) / sizeof(ui_style_decl))
@@ -103,6 +114,8 @@ static ui_result define_styles(ui_cmd_writer *w) {
                                     {UI_STYLE_CORNER_RADIUS, ui_px(10)},
                                     {UI_STYLE_BACKGROUND_COLOR, ui_token_ref(T_CARD)},
                                     {UI_STYLE_BORDER_COLOR, ui_token_ref(T_BORDER)},
+                                    {UI_STYLE_BORDER_START_WIDTH, ui_px(4)},
+                                    {UI_STYLE_BORDER_START_COLOR, ui_token_ref(T_ACCENT)},
                                     {UI_STYLE_TRANSITION(UI_STYLE_BACKGROUND_COLOR), color_spring},
                                     {UI_STYLE_TRANSITION(UI_STYLE_BORDER_COLOR), color_spring},
                                     {UI_STYLE_TRANSITION(UI_STYLE_LAYOUT), ui_transition(170, 24)}));
@@ -122,7 +135,9 @@ static ui_result define_styles(ui_cmd_writer *w) {
     if (r == UI_OK)
         r = define(w, S_BUTTON, DECLS({UI_STYLE_PADDING_TOP, ui_px(4)}, {UI_STYLE_PADDING_RIGHT, ui_px(12)},
                                       {UI_STYLE_PADDING_BOTTOM, ui_px(4)}, {UI_STYLE_PADDING_LEFT, ui_px(12)},
-                                      {UI_STYLE_CORNER_RADIUS, ui_px(6)},
+                                      {UI_STYLE_CORNER_RADIUS, ui_px(3)},
+                                      {UI_STYLE_CORNER_RADIUS_TOP_START, ui_px(11)},
+                                      {UI_STYLE_CORNER_RADIUS_BOTTOM_START, ui_px(11)},
                                       {UI_STYLE_BACKGROUND_COLOR, ui_token_ref(T_ACCENT)},
                                       {UI_STYLE_TEXT_COLOR, ui_token_ref(T_ACCENT_TEXT)},
                                       {UI_STYLE_TRANSITION(UI_STYLE_BACKGROUND_COLOR), color_spring},
@@ -131,7 +146,8 @@ static ui_result define_styles(ui_cmd_writer *w) {
 }
 
 static ui_result text(ui_cmd_writer *w, ui_handle node, const char *s, float size, uint16_t weight) {
-    ui_text_desc t = {.set = UI_TEXT_SET_ALL, .text = s, .length = (uint32_t)strlen(s),
+    // Everything but the color (from the styles) and the direction (from the page).
+    ui_text_desc t = {.set = UI_TEXT_SET_ALL & ~(UI_TEXT_SET_COLOR | UI_TEXT_SET_DIRECTION), .text = s, .length = (uint32_t)strlen(s),
                       .style = {.family = 0, .weight = weight, .size = size, .color = {0, 0, 0, 1}},
                       .families = families, .family_count = 1};
     return ui_cmd_set_text(w, node, &t);
@@ -204,6 +220,7 @@ static ui_result create(demo *d, ui_cmd_writer *w) {
     ui_result r = set_theme(d, w);
     if (r == UI_OK) r = define_styles(w);
     if (r == UI_OK) r = node(d, w, &d->page, d->surface, S_PAGE);
+    if (r == UI_OK) r = set_direction(d, w);
     for (uint32_t i = 0; i < 10 && r == UI_OK; i++) r = add_card(d, w, d->count);
     return r;
 }
@@ -229,16 +246,22 @@ static ui_result on_events(void *user, const void *events, size_t size, ui_cmd_w
                 uint64_t now = ev.frame_committed.predicted_present_ns;
                 if (d->shuffle && (r = ui_cmd_set_timer(w, SHUFFLE_TIMER, now + SHUFFLE_NS)) != UI_OK) return r;
                 if (d->theme && (r = ui_cmd_set_timer(w, THEME_TIMER, now + THEME_NS)) != UI_OK) return r;
+                if (d->direction && (r = ui_cmd_set_timer(w, DIRECTION_TIMER, now + DIRECTION_NS)) != UI_OK)
+                    return r;
             }
             break;
         case UI_EVENT_TIMER_FIRED:
             if (ev.timer_fired.id == SHUFFLE_TIMER) {
                 r = shuffle(d, w);
                 if (r == UI_OK) r = ui_cmd_set_timer(w, SHUFFLE_TIMER, ev.timer_fired.deadline_ns + SHUFFLE_NS);
-            } else {
+            } else if (ev.timer_fired.id == THEME_TIMER) {
                 d->dark = !d->dark;
                 r = set_theme(d, w);
                 if (r == UI_OK) r = ui_cmd_set_timer(w, THEME_TIMER, ev.timer_fired.deadline_ns + THEME_NS);
+            } else {
+                d->rtl = !d->rtl;
+                r = set_direction(d, w);
+                if (r == UI_OK) r = ui_cmd_set_timer(w, DIRECTION_TIMER, ev.timer_fired.deadline_ns + DIRECTION_NS);
             }
             if (r != UI_OK) return r;
             break;
@@ -254,18 +277,20 @@ int main(int argc, char **argv) {
     double at = 0;
     uint32_t scale = 150;
     const char *out = "layout_cards.ppm";
-    demo d = {.seed = 7, .shuffle = true, .theme = true};
+    demo d = {.seed = 7, .shuffle = true, .theme = true, .direction = true};
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--headless")) headless = true;
         else if (!strcmp(argv[i], "--no-shuffle")) d.shuffle = false;
         else if (!strcmp(argv[i], "--no-theme")) d.theme = false;
+        else if (!strcmp(argv[i], "--no-direction")) d.direction = false;
         else if (!strcmp(argv[i], "--dark")) d.dark = true;
+        else if (!strcmp(argv[i], "--rtl")) d.rtl = true;
         else if (!strcmp(argv[i], "--at") && i + 1 < argc) at = atof(argv[++i]);
         else if (!strcmp(argv[i], "--out") && i + 1 < argc) out = argv[++i];
         else if (!strcmp(argv[i], "--scale") && i + 1 < argc) scale = (uint32_t)atoi(argv[++i]);
         else {
             fprintf(stderr,
-                    "usage: %s [--no-shuffle] [--no-theme] [--dark]\n"
+                    "usage: %s [--no-shuffle] [--no-theme] [--no-direction] [--dark] [--rtl]\n"
                     "       [--headless [--out f.ppm] [--scale N] [--at S]]\n",
                     argv[0]);
             return 2;
