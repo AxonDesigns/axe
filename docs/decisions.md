@@ -15,6 +15,18 @@ milestone first.
   library mapped until exit, and the suppressions match again. The cause on this machine
   wasn't pinned down (no driver or loader update; a reboot in between).
 
+### Content during layout animations
+- **Clip by default** (as planned): while a node's presentation size differs from its
+  layout size, its text and children are clipped to its padding box as drawn. The clip is
+  rectangular (rounded clipping is out of scope), and nothing is clipped at rest.
+- **`content_animation: reflow`** (property 17, not inherited; decided in review: the
+  node's own text only, still clipped) wraps the paragraph to the presentation's content
+  width each frame. It only breaks lines again, never shapes. Children keep their final
+  layout in both modes, so measurement and layout never see an intermediate size.
+- **Tests:** `test_layout_anim`'s `test_content_clip` (the child's batch is clipped while
+  the box shrinks, unclipped at rest) and the golden `anim_content_mid_shrink@125` (both
+  modes mid-shrink, identical under both schedulers).
+
 ### Per-side borders and per-corner radii
 - **Longhands** 66–77 (side widths and colors, corner radii) and logical ones 86–93; the
   existing `border_width`, `border_color` and `corner_radius` are shorthands that set all

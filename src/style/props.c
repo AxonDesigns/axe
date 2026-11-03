@@ -37,7 +37,7 @@ static bool transitionable(uint16_t p) {
 
 bool ui_style_prop_known(uint16_t prop) {
     if (prop & 0x8000u) return transitionable(prop & 0x7FFFu);
-    return (prop >= UI_STYLE_BACKGROUND_COLOR && prop <= UI_STYLE_DIRECTION) ||
+    return (prop >= UI_STYLE_BACKGROUND_COLOR && prop <= UI_STYLE_CONTENT_ANIMATION) ||
            (prop >= UI_STYLE_DISPLAY && prop <= UI_STYLE_ASPECT_RATIO) ||
            (prop >= UI_STYLE_BORDER_TOP_WIDTH && prop <= UI_STYLE_CORNER_RADIUS_BOTTOM_LEFT) ||
            (prop >= UI_STYLE_MARGIN_START && prop <= UI_STYLE_CORNER_RADIUS_BOTTOM_END);
@@ -117,6 +117,7 @@ bool ui_style_value_valid(uint16_t prop, const ui_value *v, bool override) {
     case UI_STYLE_LANGUAGE:
         return v->kind == UI_VALUE_NONE || (ui_style_string_valid(v) && v->string.length <= 64);
     case UI_STYLE_DIRECTION: return v->kind == UI_VALUE_KEYWORD && v->keyword <= UI_DIRECTION_RTL;
+    case UI_STYLE_CONTENT_ANIMATION: return v->kind == UI_VALUE_KEYWORD && v->keyword <= UI_CONTENT_REFLOW;
     case UI_STYLE_DISPLAY: return keyword_in(v, 0x3);
     case UI_STYLE_POSITION: return keyword_in(v, 0x3);
     case UI_STYLE_FLEX_DIRECTION: return keyword_in(v, 0xF);

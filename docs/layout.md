@@ -72,9 +72,34 @@ exactly what `set_rect` always did, so code written before layout keeps working.
   another surface appears at its new layout rect.
 - **A moving node and its subtree draw unsnapped**, and snap again on the frame the spring
   settles (`docs/styles.md`).
+- **Content during the animation:** see below.
 - **Layout itself never waits for an animation.** The layout rect is final at once: the
   next layout, and the measurement op, see it. A spring starts at the animation time of the
   frame whose layout changed the rect, and later frames advance it.
+
+## Content during layout animations
+
+While a layout animation draws a node at another size than its layout (its presentation
+rect is still growing or shrinking), its content already has its final layout. What it
+does meanwhile is the node's `content_animation` (not inherited):
+
+| Mode | Text | Children | Fits |
+| --- | --- | --- | --- |
+| `clip` (default) | final wrapping, clipped to the box as drawn | final layout, clipped | containers with mixed content; anything where words moving between lines would read as jitter |
+| `reflow` | wraps to the content box as drawn, every frame; clipped | final layout, clipped | boxes that are mostly text, such as labels, chips and message bubbles, where a cut word looks wrong |
+
+- **The clip is the padding box as drawn** (inside the border), like CSS `overflow:
+  hidden`, intersected with any clip above. It is rectangular: rounded corners don't clip
+  (rounded clipping is out of scope), so content can show in a corner's curve.
+- **Nothing is clipped at rest**, unless the node clips anyway (`clip`).
+- **Reflow only breaks lines again**, from the paragraph's cached shaping; it never shapes,
+  and costs one line layout per frame for each animating text node. Its height can exceed
+  the box as drawn; the clip cuts it.
+- **Measurement and layout are unaffected:** `layout_measured` reports the final layout
+  and the presentation rect as before.
+
+`test_layout_anim` checks the clip in the display list, and its golden
+`anim_content_mid_shrink@125` shows both modes mid-shrink.
 
 ## Measurement
 
@@ -274,8 +299,6 @@ one fixture next to Chrome's.
   fixtures pin Chrome's behavior.
 - Fixtures run at scale 1; at other scales layout is the same in logical px, and only text
   measures in physical pixels.
-- While a node's size animates, its text and children already have their final layout:
-  text wrapped for a wider box can overflow a box that is still narrow, until it settles.
 - Moving text steps vertically by whole pixels, since baselines always snap
   (`docs/styles.md`, "Snapping").
 - A node moved to another surface, and a node shown again, appear in place rather than

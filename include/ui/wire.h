@@ -176,6 +176,8 @@ typedef enum ui_style_prop {
     UI_STYLE_FONT_SLANT = 14,      // keyword ui_text_slant
     UI_STYLE_LANGUAGE = 15,        // string: a BCP 47 tag, e.g. "sr-Cyrl"; or none
     UI_STYLE_DIRECTION = 16,       // keyword ui_direction
+    // What the node's content does while a layout animation changes its size (not inherited).
+    UI_STYLE_CONTENT_ANIMATION = 17, // keyword ui_content_animation
     // Layout: flexbox with CSS semantics (docs/layout.md). Every node is a flex container;
     // sizes are border-box. Lengths are px or percent as noted.
     UI_STYLE_DISPLAY = 32,         // keyword ui_display
@@ -312,6 +314,13 @@ static inline ui_value ui_string(const char *s) {
 static inline ui_value ui_inherit(void) { return (ui_value){.kind = UI_VALUE_INHERIT}; }
 static inline ui_value ui_initial(void) { return (ui_value){.kind = UI_VALUE_INITIAL}; }
 #endif
+
+// While a layout animation draws a node at another size than its layout (docs/layout.md,
+// "Content during layout animations"):
+typedef enum ui_content_animation {
+    UI_CONTENT_CLIP = 0,   // text and children keep their final layout, clipped to the box
+    UI_CONTENT_REFLOW = 1, // the node's own text wraps to the box as drawn; still clipped
+} ui_content_animation;
 
 // The direction of a node's content: its flex rows and its text (UI_STYLE_DIRECTION).
 typedef enum ui_direction {

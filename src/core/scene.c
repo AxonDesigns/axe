@@ -1528,6 +1528,16 @@ ui_result ui_scene_build(ui_scene *s, ui_handle surface, ui_display_list *dl,
         // What the node's text and children see.
         float inner[4] = {clip[0], clip[1], clip[2], clip[3]};
         if (n->clip) intersect(inner, clip, px0, py0, px1, py1);
+        // While a layout animation draws the node at another size than its layout, its
+        // content is clipped to its padding box as drawn, so nothing spills out of a box
+        // that is still shrinking (docs/layout.md, "Content during layout animations").
+        bool resizing = n->anim && n->anim->springs[UI_SPRING_LAYOUT].active &&
+                        (n->rect[2] != n->layout.rect[2] || n->rect[3] != n->layout.rect[3]);
+        if (resizing) {
+            float box[4];
+            intersect(box, inner, px0 + bw[3], py0 + bw[0], px1 - bw[1], py1 - bw[2]);
+            memcpy(inner, box, sizeof inner);
+        }
         if (n->text && text) {
             // At the anonymous text item's place in the node (layout/layout.h).
             const float *t = n->layout.text;
@@ -1536,8 +1546,13 @@ ui_result ui_scene_build(ui_scene *s, ui_handle surface, ui_display_list *dl,
                 tx = roundf(tx);
                 ty = roundf(ty);
             }
+            // reflow: the text wraps to the content box as drawn (lines break again; nothing
+            // is shaped again). Otherwise it keeps its final layout.
+            float width = t[2];
+            if (resizing && n->computed.content_animation == UI_CONTENT_REFLOW)
+                width = fmaxf(t[2] + n->rect[2] - n->layout.rect[2], 0);
             dl->clip = scissor_of(inner);
-            res = build_text(n->text, n->text_color, tx, ty, t[2] * scale, scale, inner, dl, text);
+            res = build_text(n->text, n->text_color, tx, ty, width * scale, scale, inner, dl, text);
             if (res != UI_OK) return res;
         }
         if (has_children) {

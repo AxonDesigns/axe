@@ -136,6 +136,7 @@ typedef struct ui_computed {
     float corner_radius[4];   // logical px: top left, top right, bottom right, bottom left
     float opacity;
     bool clip;
+    uint8_t content_animation; // ui_content_animation
     ui_text_values text;   // inherited
     uint32_t max_lines;    // 0: unlimited
     float transition[UI_ANIM_COUNT][2]; // stiffness, damping; stiffness 0: none

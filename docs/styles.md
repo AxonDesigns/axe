@@ -125,6 +125,7 @@ token, a state, an override, a redefined style, or new text with another color.
 | 14 | `font_slant` (inherited) | keyword: normal, italic, oblique (0–2) | normal |
 | 15 | `language` (inherited) | string: a BCP 47 tag of at most 64 bytes, or none | none |
 | 16 | `direction` (inherited) | keyword: ltr, rtl (0–1) | ltr |
+| 17 | `content_animation` | keyword: clip, reflow (0–1): content while a layout animation resizes the node ([`docs/layout.md`](layout.md)) | clip |
 | 0x8000 \| P | transition of P | spring, or none | none |
 
 Every property also takes `inherit` and `initial`. `set_text`'s values sit between the

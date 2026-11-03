@@ -647,6 +647,7 @@ static bool slot_of(uint16_t prop, size_t *off, size_t *size) {
     case UI_STYLE_FONT_SLANT: return AT(text.slant);
     case UI_STYLE_LANGUAGE: return AT(text.language);
     case UI_STYLE_DIRECTION: return AT(text.direction);
+    case UI_STYLE_CONTENT_ANIMATION: return AT(content_animation);
     case UI_STYLE_DISPLAY: return AT(layout.display);
     case UI_STYLE_POSITION: return AT(layout.position);
     case UI_STYLE_FLEX_DIRECTION: return AT(layout.direction);
@@ -800,6 +801,7 @@ static uint32_t apply(const ui_style_view *view, const ui_style_entry *e, const 
     case UI_STYLE_FONT_SLANT: c->text.slant = (uint8_t)v.keyword; break;
     case UI_STYLE_LANGUAGE: c->text.language = v.kind == UI_VALUE_NONE ? NULL : v.string.bytes; break;
     case UI_STYLE_DIRECTION: c->text.direction = (uint8_t)v.keyword; break;
+    case UI_STYLE_CONTENT_ANIMATION: c->content_animation = (uint8_t)v.keyword; break;
     default: apply_layout(&c->layout, e->prop, &v); break;
     }
     return APPLIED;

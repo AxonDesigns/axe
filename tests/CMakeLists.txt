@@ -205,7 +205,10 @@ add_test(NAME layout COMMAND test_layout)
 # Layout animations: the presentation rect, retargeting, reparenting, both schedulers.
 add_executable(test_layout_anim test_layout_anim.c)
 target_include_directories(test_layout_anim PRIVATE ${PROJECT_SOURCE_DIR}/src)
-target_compile_definitions(test_layout_anim PRIVATE _DEFAULT_SOURCE)
+target_compile_definitions(test_layout_anim PRIVATE _DEFAULT_SOURCE
+    UI_TEST_FONTS="${CMAKE_CURRENT_SOURCE_DIR}/fonts"
+    UI_TEST_GOLDENS="${CMAKE_CURRENT_SOURCE_DIR}/goldens"
+    UI_TEST_OUT="${CMAKE_CURRENT_BINARY_DIR}")
 target_link_libraries(test_layout_anim PRIVATE ui m)
 ui_target_warnings(test_layout_anim)
 add_test(NAME layout_anim COMMAND test_layout_anim)

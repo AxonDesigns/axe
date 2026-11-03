@@ -2,14 +2,14 @@
 // presentation rect) to each new layout rect, keeping its velocity when the target moves
 // again. Children follow their parent's presentation; move_node keeps a node where it is
 // drawn; new and re-shown nodes appear in place. The scene-level tests drive the clock by
-// hand; the app-level one checks both schedulers draw the same frames mid-animation.
+// hand; the app-level ones check both schedulers draw the same frames mid-animation, and
+// golden images show content clipped or reflowed in a box that is still shrinking.
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "core/scene.h"
-#include "test.h"
-#include "ui/ui.h"
+#include "golden.h"
 
 static ui_logger quiet = {UI_LOG_ERROR};
 
@@ -271,6 +271,40 @@ static void test_wire(void) {
     ui_cmd_writer_destroy(w);
 }
 
+// While a box's drawn size differs from its layout size, its children (and text) are
+// clipped to its padding box as drawn; at rest, nothing is.
+static void test_content_clip(void) {
+    fixture f;
+    setup(&f); // B (3) animates; give it a border and a child wider than it ends up
+    props(&f, 3, &(ui_style_decl){UI_STYLE_BORDER_WIDTH, ui_px(2)}, 1);
+    ui_cmd_create_node(f.w, node(4), node(3));
+    props(&f, 4, (ui_style_decl[]){{UI_STYLE_WIDTH, ui_px(40)}, {UI_STYLE_HEIGHT, ui_px(10)},
+                                   {UI_STYLE_FLEX_SHRINK, ui_number(0)}}, 3);
+    ui_cmd_set_color(f.w, node(4), 1, 0, 0, 1);
+    frame(&f);
+    size(&f, 3, 20, 20); // shrinks
+    frame(&f);
+    f.now += 120 * MS;
+    frame(&f);
+    float w = shown(&f, 3)[2];
+    CHECK(moving(&f, 3) && w > 20 && w < 40); // the child (40 wide) now overflows the padding box
+    ui_display_list dl = {.scale_120 = 120, .width = 400, .height = 300};
+    ui_display_list_reset(&dl);
+    CHECK(ui_scene_build(&f.s, f.surface, &dl, NULL) == UI_OK);
+    const ui_dl_batch *last = &dl.batches[dl.batch_count - 1]; // the child
+    float right = 50 + shown(&f, 3)[0] - 50 + w - 2; // B's left + drawn width - border
+    CHECK(last->kind == UI_DL_RECTS && last->clip.x == 52 && last->clip.width <= (int32_t)ceilf(right - 52) + 1);
+    CHECK(last->clip.width < 40);
+    f.now += 3000 * MS;
+    frame(&f);
+    ui_display_list_reset(&dl);
+    CHECK(ui_scene_build(&f.s, f.surface, &dl, NULL) == UI_OK);
+    last = &dl.batches[dl.batch_count - 1];
+    CHECK(!moving(&f, 3) && last->clip.width == INT32_MAX); // at rest it overflows, unclipped
+    ui_display_list_free(&dl);
+    teardown(&f);
+}
+
 // ---- Both schedulers ---------------------------------------------------------------------
 
 #define WIDTH 240u
@@ -358,6 +392,103 @@ static bool run(ui_scheduler_kind scheduler, ui_image *mid, ui_image *end) {
     return ok;
 }
 
+// Two cards with a paragraph shrink from 300 to 140 px wide with a layout transition; one
+// clips its content (the default), the other reflows its text. Captured mid-shrink.
+#define FONT(name) UI_TEST_FONTS "/" name
+static const char *const shrink_fonts[] = {FONT("NotoSans-VF.ttf")};
+
+typedef struct shrink_logic {
+    ui_handle_allocator *alloc;
+    ui_handle cards[2];
+    bool built;
+} shrink_logic;
+
+static ui_result on_shrink_events(void *user, const void *events, size_t sz, ui_cmd_writer *w) {
+    shrink_logic *l = user;
+    ui_event_reader rd;
+    ui_result r = ui_event_reader_init(&rd, events, sz);
+    ui_event ev;
+    while (r == UI_OK && ui_event_next(&rd, &ev) == UI_OK) {
+        if (ev.type == UI_EVENT_SURFACE_RESIZED && !l->built) {
+            l->built = true;
+            ui_handle col;
+            ui_handle_alloc(l->alloc, &col);
+            ui_cmd_create_node(w, col, ev.surface);
+            ui_cmd_set_props(w, col, (ui_style_decl[]){{UI_STYLE_FLEX_GROW, ui_number(1)},
+                                                       {UI_STYLE_FLEX_DIRECTION, ui_keyword(UI_FLEX_COLUMN)},
+                                                       {UI_STYLE_ALIGN_ITEMS, ui_keyword(UI_FLEX_START)},
+                                                       {UI_STYLE_ROW_GAP, ui_px(8)}, {UI_STYLE_PADDING_TOP, ui_px(8)},
+                                                       {UI_STYLE_PADDING_LEFT, ui_px(8)},
+                                                       {UI_STYLE_FONT_FAMILY, ui_string("Noto Sans")},
+                                                       {UI_STYLE_FONT_SIZE, ui_px(13)},
+                                                       {UI_STYLE_TEXT_COLOR, ui_rgba(0.1f, 0.1f, 0.15f, 1)}},
+                             9);
+            ui_cmd_set_color(w, col, 0.96f, 0.96f, 0.96f, 1);
+            for (int i = 0; i < 2; i++) {
+                ui_handle_alloc(l->alloc, &l->cards[i]);
+                ui_cmd_create_node(w, l->cards[i], col);
+                ui_cmd_set_props(w, l->cards[i],
+                                 (ui_style_decl[]){{UI_STYLE_WIDTH, ui_px(300)}, {UI_STYLE_PADDING_TOP, ui_px(6)},
+                                                   {UI_STYLE_PADDING_LEFT, ui_px(8)}, {UI_STYLE_PADDING_RIGHT, ui_px(8)},
+                                                   {UI_STYLE_PADDING_BOTTOM, ui_px(6)}, {UI_STYLE_BORDER_WIDTH, ui_px(1)},
+                                                   {UI_STYLE_BORDER_COLOR, ui_rgba(0.6f, 0.6f, 0.7f, 1)},
+                                                   {UI_STYLE_CORNER_RADIUS, ui_px(6)},
+                                                   {UI_STYLE_TRANSITION(UI_STYLE_LAYOUT), ui_transition(60, 15)},
+                                                   {UI_STYLE_CONTENT_ANIMATION,
+                                                    ui_keyword(i ? UI_CONTENT_REFLOW : UI_CONTENT_CLIP)}},
+                                 10);
+                ui_cmd_set_color(w, l->cards[i], 1, 1, 1, 1);
+                static const char text[] = "A paragraph in a card that shrinks, wrapping as it goes.";
+                ui_text_desc t = {.text = text, .length = sizeof text - 1};
+                ui_cmd_set_text(w, l->cards[i], &t);
+            }
+            ui_cmd_set_timer(w, 1, 50 * MS);
+        } else if (ev.type == UI_EVENT_TIMER_FIRED) {
+            for (int i = 0; i < 2; i++) ui_cmd_set_props(w, l->cards[i], &(ui_style_decl){UI_STYLE_WIDTH, ui_px(140)}, 1);
+        }
+    }
+    return UI_OK;
+}
+
+static bool run_shrink(ui_scheduler_kind scheduler, ui_image *mid) {
+    shrink_logic logic = {0};
+    if (ui_handle_allocator_create(&logic.alloc) != UI_OK) return false;
+    ui_app_desc desc = {
+        .scheduler = scheduler,
+        .gpu = UI_GPU_SOFTWARE,
+        .surface = {.kind = UI_SURFACE_HEADLESS, .width = 320, .height = 120, .scale_120 = 150},
+        .logic = {.user = &logic, .on_events = on_shrink_events},
+        .start_paused = true,
+        .text = {.font_files = shrink_fonts, .font_file_count = 1},
+    };
+    ui_app *app;
+    ui_result r = ui_app_create(&desc, &app);
+    bool ok = r == UI_OK && ui_app_frame(app) == UI_OK && ui_app_frame(app) == UI_OK;
+    if (ok) {
+        ui_app_clock_step(app, 50 * MS); // the timer fires; the new width applies next frame
+        ok = ui_app_frame(app) == UI_OK && ui_app_frame(app) == UI_OK;
+    }
+    for (int i = 0; ok && i < 6; i++) { // 96 ms into the shrink
+        ui_app_clock_step(app, 16 * MS);
+        ok = ui_app_frame(app) == UI_OK;
+    }
+    ok = ok && ui_surface_capture(app, ui_app_main_surface(app), mid) == UI_OK;
+    if (r == UI_OK) ui_app_destroy(app);
+    ui_handle_allocator_destroy(logic.alloc);
+    return ok;
+}
+
+// Mid-shrink, the top card's text keeps its final wrapping and is cut at the box's edge;
+// the bottom card's text wraps to the box as drawn.
+static void test_shrink_golden(void) {
+    ui_image single = {0}, threaded = {0};
+    bool ok = run_shrink(UI_SCHEDULER_SINGLE, &single) && run_shrink(UI_SCHEDULER_THREADED, &threaded);
+    CHECK(ok);
+    if (ok) golden_check("anim_content_mid_shrink@125", &single, &threaded);
+    ui_image_free(&single);
+    ui_image_free(&threaded);
+}
+
 static bool same_image(const ui_image *a, const ui_image *b) {
     if (a->width != b->width || a->height != b->height) return false;
     for (uint32_t y = 0; y < a->height; y++)
@@ -391,6 +522,8 @@ int main(void) {
     RUN(test_transition_removed);
     RUN(test_shown_again);
     RUN(test_wire);
+    RUN(test_content_clip);
     RUN(test_schedulers);
+    RUN(test_shrink_golden);
     return test_failures != 0;
 }
