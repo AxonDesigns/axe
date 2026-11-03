@@ -1,6 +1,7 @@
 // Headless end-to-end test: the real demo logic, core and renderer on an offscreen surface
 // at 1.25x, with a paused clock stepped to fixed times. Checks pixels at known coordinates,
 // then runs the same script under the threaded scheduler and requires identical images.
+#include <math.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -155,16 +156,15 @@ static void check_shots(const ui_image shots[SHOT_COUNT], const ui_app_stats *st
     // t = 0: the rect sits at anchor 0.
     CHECK_RGB(t0, ax, ay, expected_color(0), 2);
     CHECK_RGB(t0, bx, ay, bg, 0);
-    // Its top edge is at y = 30 * 1.25 = 37.5: the pixel row straddling it is half covered,
-    // so it must be strictly between the background and the fill (anti-aliased).
-    uint32_t edge_y = (uint32_t)(a[1] * SCALE);
-    CHECK_NEAR(a[1] * SCALE - edge_y, 0.5, 1e-4);
-    rgb half = pixel(t0, ax, edge_y), fill = expected_color(0);
-    CHECK(half.r > bg.r + 30 && half.r < fill.r - 30);
+    // Its top edge is at y = 30 * 1.25 = 37.5. At rest a box snaps to whole physical
+    // pixels (origin and size rounded), so the edge is at 38: no half-covered row.
+    uint32_t edge_y = (uint32_t)round(a[1] * SCALE);
+    CHECK_EQ_INT(edge_y, 38);
+    rgb fill = expected_color(0);
     CHECK_RGB(t0, ax, edge_y - 1, bg, 1);
-    CHECK_RGB(t0, ax, edge_y + 1, fill, 2);
+    CHECK_RGB(t0, ax, edge_y, fill, 2);
     // The rounded corner leaves the bounding-box corner empty.
-    CHECK_RGB(t0, (uint32_t)(a[0] * SCALE) + 1, edge_y + 1, bg, 2);
+    CHECK_RGB(t0, (uint32_t)round(a[0] * SCALE) + 1, edge_y + 1, bg, 2);
 
     // t = 2.1 s: 100 ms into the spring toward anchor 1. The left edge must be where the
     // closed-form spring says, within a pixel.

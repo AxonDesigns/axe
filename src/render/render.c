@@ -5,6 +5,7 @@
 
 #include <inttypes.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <threads.h>
 #include <time.h>
@@ -13,10 +14,18 @@
 #include "webgpu_checked.h"
 
 #define MODULE "render"
-#define INSTANCE_STRIDE 48u // sizeof(ui_dl_rect): rect, params, color
+#define RECT_STRIDE 64u  // sizeof(ui_dl_rect): rect, params, color, border color
+#define GLYPH_STRIDE 48u // sizeof(ui_dl_glyph): rect, uv, color
 #define MAX_PIPELINES 4u
+// Each render pass reads its globals at its own offset of one uniform buffer: the target's,
+// then one per layer of the display list.
+#define GLOBALS_SIZE 32u
+#define GLOBALS_STRIDE 256u // minUniformBufferOffsetAlignment's usual (and maximum) value
+#define LAYER_TEXTURE_STEP 64u    // layer textures are sized in steps, so they get reused
+#define LAYER_TEXTURE_FRAMES 120u // unused this many frames, a layer texture is released
 
-static_assert(sizeof(ui_dl_rect) == INSTANCE_STRIDE, "instance layout must match ui_dl_rect");
+static_assert(sizeof(ui_dl_rect) == RECT_STRIDE, "instance layout must match ui_dl_rect");
+static_assert(sizeof(ui_dl_glyph) == GLYPH_STRIDE, "instance layout must match ui_dl_glyph");
 
 static const char rrect_wgsl[] = {
 #embed "shaders/rrect.wgsl"
@@ -24,8 +33,11 @@ static const char rrect_wgsl[] = {
 static const char glyph_wgsl[] = {
 #embed "shaders/glyph.wgsl"
     , 0};
+static const char composite_wgsl[] = {
+#embed "shaders/composite.wgsl"
+    , 0};
 
-static_assert(sizeof(ui_dl_glyph) == INSTANCE_STRIDE, "glyph instances share the rect stride");
+typedef enum pipeline_kind { PIPE_RECT, PIPE_GLYPH, PIPE_COMPOSITE } pipeline_kind;
 
 typedef struct render_surface {
     bool used;
@@ -42,7 +54,8 @@ typedef struct render_surface {
     uint32_t width, height;        // current target size
     bool configured, reconfigure;
     bool has_content;
-    WGPUBuffer uniforms;
+    WGPUBuffer uniforms;           // GLOBALS_STRIDE per pass
+    uint32_t uniform_slots;
     WGPUBindGroup bind_group;
     WGPUBuffer instances;
     uint64_t instance_bytes;
@@ -62,7 +75,19 @@ typedef struct pipeline_entry {
     WGPUTextureFormat format;
     WGPURenderPipeline rect;
     WGPURenderPipeline glyph;
+    WGPURenderPipeline composite;
 } pipeline_entry;
+
+// An offscreen texture an opacity group draws into, reused across layers and frames.
+typedef struct layer_texture {
+    WGPUTexture texture;
+    WGPUTextureView view;
+    WGPUBindGroup bind_group; // for the composite pipeline
+    WGPUTextureFormat format;
+    uint32_t width, height;
+    uint64_t last_used;       // encode count
+    bool busy;                // drawn into or composited from in the current encode
+} layer_texture;
 
 struct ui_render {
     ui_actor actor;
@@ -74,6 +99,7 @@ struct ui_render {
     WGPUQueue queue;
     WGPUShaderModule shader;
     WGPUShaderModule glyph_shader;
+    WGPUShaderModule composite_shader;
     WGPUBindGroupLayout bind_group_layout;  // group 0: globals
     WGPUBindGroupLayout atlas_layout;       // group 1 of the glyph pipeline: one atlas page
     WGPUPipelineLayout pipeline_layout;
@@ -83,6 +109,9 @@ struct ui_render {
     render_surface surfaces[UI_MAX_SURFACES];
     atlas_page atlas[UI_ATLAS_MAX_PAGES];
     uint64_t atlas_seq; // newest atlas update applied
+    layer_texture *layers;
+    uint32_t layer_count, layer_capacity;
+    uint64_t encodes;   // display lists encoded (ages layer textures)
     // wgpu-native extensions, used only when available.
     struct {
         bool device_poll;
@@ -186,10 +215,13 @@ static void wait_request(ui_render *r, const request_result *res) {
 
 // ---- Pipelines ---------------------------------------------------------------------------
 
-static ui_result create_pipeline(ui_render *r, WGPUTextureFormat format, bool glyph,
+static ui_result create_pipeline(ui_render *r, WGPUTextureFormat format, pipeline_kind kind,
                                  WGPURenderPipeline *out) {
-    WGPUVertexAttribute attributes[3];
-    for (uint32_t i = 0; i < 3; i++) {
+    // Rects and composites read ui_dl_rect records (4 vec4s); glyphs read ui_dl_glyph (3).
+    bool glyph = kind == PIPE_GLYPH;
+    uint32_t vec4s = glyph ? 3 : 4;
+    WGPUVertexAttribute attributes[4];
+    for (uint32_t i = 0; i < vec4s; i++) {
         attributes[i] = WGPU_VERTEX_ATTRIBUTE_INIT;
         attributes[i].format = WGPUVertexFormat_Float32x4;
         attributes[i].offset = 16u * i;
@@ -197,9 +229,13 @@ static ui_result create_pipeline(ui_render *r, WGPUTextureFormat format, bool gl
     }
     WGPUVertexBufferLayout instance_layout = WGPU_VERTEX_BUFFER_LAYOUT_INIT;
     instance_layout.stepMode = WGPUVertexStepMode_Instance;
-    instance_layout.arrayStride = INSTANCE_STRIDE;
-    instance_layout.attributeCount = 3;
+    instance_layout.arrayStride = glyph ? GLYPH_STRIDE : RECT_STRIDE;
+    instance_layout.attributeCount = vec4s;
     instance_layout.attributes = attributes;
+    WGPUShaderModule module = kind == PIPE_RECT    ? r->shader
+                              : kind == PIPE_GLYPH ? r->glyph_shader
+                                                   : r->composite_shader;
+    static const char *const labels[] = {"rrect", "glyph", "composite"};
 
     WGPUBlendState blend = WGPU_BLEND_STATE_INIT;
     blend.color = (WGPUBlendComponent){WGPUBlendOperation_Add, WGPUBlendFactor_One,
@@ -211,15 +247,16 @@ static ui_result create_pipeline(ui_render *r, WGPUTextureFormat format, bool gl
     target.writeMask = WGPUColorWriteMask_All;
 
     WGPUFragmentState fragment = WGPU_FRAGMENT_STATE_INIT;
-    fragment.module = glyph ? r->glyph_shader : r->shader;
+    fragment.module = module;
     fragment.entryPoint = sv("fs_main");
     fragment.targetCount = 1;
     fragment.targets = &target;
 
     WGPURenderPipelineDescriptor desc = WGPU_RENDER_PIPELINE_DESCRIPTOR_INIT;
-    desc.label = sv(glyph ? "glyph" : "rrect");
-    desc.layout = glyph ? r->glyph_pipeline_layout : r->pipeline_layout;
-    desc.vertex.module = glyph ? r->glyph_shader : r->shader;
+    desc.label = sv(labels[kind]);
+    // Glyphs and composites both read a texture in group 1.
+    desc.layout = kind == PIPE_RECT ? r->pipeline_layout : r->glyph_pipeline_layout;
+    desc.vertex.module = module;
     desc.vertex.entryPoint = sv("vs_main");
     desc.vertex.bufferCount = 1;
     desc.vertex.buffers = &instance_layout;
@@ -231,8 +268,9 @@ static ui_result create_pipeline(ui_render *r, WGPUTextureFormat format, bool gl
 
 static ui_result create_pipelines(ui_render *r, WGPUTextureFormat format, pipeline_entry *e) {
     *e = (pipeline_entry){.format = format};
-    ui_result res = create_pipeline(r, format, false, &e->rect);
-    if (res == UI_OK) res = create_pipeline(r, format, true, &e->glyph);
+    ui_result res = create_pipeline(r, format, PIPE_RECT, &e->rect);
+    if (res == UI_OK) res = create_pipeline(r, format, PIPE_GLYPH, &e->glyph);
+    if (res == UI_OK) res = create_pipeline(r, format, PIPE_COMPOSITE, &e->composite);
     return res;
 }
 
@@ -317,13 +355,17 @@ static ui_result init_device(ui_render *r) {
     wgsl.code = sv(glyph_wgsl);
     shader_desc.label = sv("glyph.wgsl");
     r->glyph_shader = wgpuDeviceCreateShaderModule(r->device, &shader_desc);
-    if (!r->shader || !r->glyph_shader) return UI_ERR_GPU;
+    wgsl.code = sv(composite_wgsl);
+    shader_desc.label = sv("composite.wgsl");
+    r->composite_shader = wgpuDeviceCreateShaderModule(r->device, &shader_desc);
+    if (!r->shader || !r->glyph_shader || !r->composite_shader) return UI_ERR_GPU;
 
     WGPUBindGroupLayoutEntry entry = WGPU_BIND_GROUP_LAYOUT_ENTRY_INIT;
     entry.binding = 0;
     entry.visibility = WGPUShaderStage_Vertex | WGPUShaderStage_Fragment;
     entry.buffer.type = WGPUBufferBindingType_Uniform;
-    entry.buffer.minBindingSize = 16;
+    entry.buffer.hasDynamicOffset = true;
+    entry.buffer.minBindingSize = GLOBALS_SIZE;
     WGPUBindGroupLayoutDescriptor bgl_desc = WGPU_BIND_GROUP_LAYOUT_DESCRIPTOR_INIT;
     bgl_desc.entryCount = 1;
     bgl_desc.entries = &entry;
@@ -385,6 +427,35 @@ static void release_surface(render_surface *s) {
     memset(s, 0, sizeof *s);
 }
 
+// Room for `slots` passes' globals in the surface's uniform buffer.
+static ui_result ensure_uniforms(ui_render *r, render_surface *s, uint32_t slots) {
+    if (s->uniforms && s->uniform_slots >= slots) return UI_OK;
+    uint32_t n = s->uniform_slots ? s->uniform_slots : 4;
+    while (n < slots) n *= 2;
+    if (s->bind_group) wgpuBindGroupRelease(s->bind_group);
+    if (s->uniforms) wgpuBufferRelease(s->uniforms);
+    s->bind_group = NULL;
+    s->uniform_slots = 0;
+    WGPUBufferDescriptor ub = WGPU_BUFFER_DESCRIPTOR_INIT;
+    ub.label = sv("globals");
+    ub.size = (uint64_t)n * GLOBALS_STRIDE;
+    ub.usage = WGPUBufferUsage_Uniform | WGPUBufferUsage_CopyDst;
+    s->uniforms = wgpuDeviceCreateBuffer(r->device, &ub);
+    if (!s->uniforms) return UI_ERR_GPU;
+    WGPUBindGroupEntry be = WGPU_BIND_GROUP_ENTRY_INIT;
+    be.binding = 0;
+    be.buffer = s->uniforms;
+    be.size = GLOBALS_SIZE;
+    WGPUBindGroupDescriptor bg = WGPU_BIND_GROUP_DESCRIPTOR_INIT;
+    bg.layout = r->bind_group_layout;
+    bg.entryCount = 1;
+    bg.entries = &be;
+    s->bind_group = wgpuDeviceCreateBindGroup(r->device, &bg);
+    if (!s->bind_group) return UI_ERR_GPU;
+    s->uniform_slots = n;
+    return UI_OK;
+}
+
 static ui_result add_surface(ui_render *r, const ui_render_surface_desc *d) {
     render_surface *s = NULL;
     for (uint32_t i = 0; i < UI_MAX_SURFACES && !s; i++) {
@@ -399,21 +470,8 @@ static ui_result add_surface(ui_render *r, const ui_render_surface_desc *d) {
     s->platform = d->platform;
     s->psurface = d->psurface;
 
-    WGPUBufferDescriptor ub = WGPU_BUFFER_DESCRIPTOR_INIT;
-    ub.label = sv("globals");
-    ub.size = 16;
-    ub.usage = WGPUBufferUsage_Uniform | WGPUBufferUsage_CopyDst;
-    s->uniforms = wgpuDeviceCreateBuffer(r->device, &ub);
-    WGPUBindGroupEntry be = WGPU_BIND_GROUP_ENTRY_INIT;
-    be.binding = 0;
-    be.buffer = s->uniforms;
-    be.size = 16;
-    WGPUBindGroupDescriptor bg = WGPU_BIND_GROUP_DESCRIPTOR_INIT;
-    bg.layout = r->bind_group_layout;
-    bg.entryCount = 1;
-    bg.entries = &be;
-    s->bind_group = wgpuDeviceCreateBindGroup(r->device, &bg);
-    if (!s->uniforms || !s->bind_group) return UI_ERR_GPU;
+    ui_result res = ensure_uniforms(r, s, 1);
+    if (res != UI_OK) return res;
 
     if (s->kind == UI_NATIVE_OFFSCREEN) {
         s->format = WGPUTextureFormat_RGBA8UnormSrgb;
@@ -578,6 +636,77 @@ static ui_result apply_atlas_update(ui_render *r, const ui_atlas_update *u) {
     return UI_OK;
 }
 
+// ---- Layers ------------------------------------------------------------------------------
+
+static void release_layer_texture(layer_texture *t) {
+    if (t->bind_group) wgpuBindGroupRelease(t->bind_group);
+    if (t->view) wgpuTextureViewRelease(t->view);
+    if (t->texture) {
+        wgpuTextureDestroy(t->texture);
+        wgpuTextureRelease(t->texture);
+    }
+    *t = (layer_texture){0};
+}
+
+// A free layer texture at least width x height in `format`, reused when one fits. Sizes go
+// up in LAYER_TEXTURE_STEP steps so similar layers share textures.
+static layer_texture *acquire_layer(ui_render *r, WGPUTextureFormat format, uint32_t width,
+                                    uint32_t height) {
+    uint32_t w = (width + LAYER_TEXTURE_STEP - 1) / LAYER_TEXTURE_STEP * LAYER_TEXTURE_STEP;
+    uint32_t h = (height + LAYER_TEXTURE_STEP - 1) / LAYER_TEXTURE_STEP * LAYER_TEXTURE_STEP;
+    layer_texture *best = NULL;
+    for (uint32_t i = 0; i < r->layer_count; i++) {
+        layer_texture *t = &r->layers[i];
+        if (t->busy || t->format != format || t->width < w || t->height < h) continue;
+        if (!best || (uint64_t)t->width * t->height < (uint64_t)best->width * best->height) best = t;
+    }
+    if (!best) {
+        if (ui_grow((void **)&r->layers, &r->layer_capacity, r->layer_count + 1, sizeof *r->layers) != UI_OK)
+            return NULL;
+        best = &r->layers[r->layer_count];
+        *best = (layer_texture){.format = format, .width = w, .height = h};
+        WGPUTextureDescriptor td = WGPU_TEXTURE_DESCRIPTOR_INIT;
+        td.label = sv("layer");
+        td.usage = WGPUTextureUsage_RenderAttachment | WGPUTextureUsage_TextureBinding;
+        td.size = (WGPUExtent3D){w, h, 1};
+        td.format = format;
+        best->texture = wgpuDeviceCreateTexture(r->device, &td);
+        best->view = best->texture ? wgpuTextureCreateView(best->texture, NULL) : NULL;
+        if (best->view) {
+            WGPUBindGroupEntry be = WGPU_BIND_GROUP_ENTRY_INIT;
+            be.binding = 0;
+            be.textureView = best->view;
+            WGPUBindGroupDescriptor bg = WGPU_BIND_GROUP_DESCRIPTOR_INIT;
+            bg.layout = r->atlas_layout;
+            bg.entryCount = 1;
+            bg.entries = &be;
+            best->bind_group = wgpuDeviceCreateBindGroup(r->device, &bg);
+        }
+        if (!best->bind_group) {
+            release_layer_texture(best);
+            return NULL;
+        }
+        r->layer_count++;
+    }
+    best->busy = true;
+    best->last_used = r->encodes;
+    return best;
+}
+
+// Releases layer textures nobody used for a while.
+static void trim_layers(ui_render *r) {
+    for (uint32_t i = 0; i < r->layer_count;) {
+        layer_texture *t = &r->layers[i];
+        t->busy = false;
+        if (r->encodes - t->last_used > LAYER_TEXTURE_FRAMES) {
+            release_layer_texture(t);
+            r->layers[i] = r->layers[--r->layer_count];
+        } else {
+            i++;
+        }
+    }
+}
+
 // ---- Frames ------------------------------------------------------------------------------
 
 // Grows a per-surface instance buffer to hold `bytes` and uploads `data` into it.
@@ -600,76 +729,173 @@ static ui_result upload_instances(ui_render *r, WGPUBuffer *buffer, uint64_t *ca
     return UI_OK;
 }
 
+// A render pass target: the surface, or a layer drawn into offscreen.
+typedef struct pass_target {
+    WGPUTextureView view;
+    uint32_t width, height;  // of the texture
+    int32_t x, y;            // where its top-left is, in the surface's physical px
+    uint32_t slot;           // its globals
+    layer_texture *layer;    // NULL for the surface
+} pass_target;
+
+typedef struct pass_state {
+    WGPURenderPassEncoder pass;
+    int bound;               // pipeline set: PIPE_*, or -1
+    int32_t page;            // atlas page bound, or -1
+    uint32_t scissor[4];     // set, or {0, 0, 0, 0} unknown
+} pass_state;
+
+static void begin_pass(WGPUCommandEncoder enc, render_surface *s, const pass_target *t,
+                       WGPULoadOp load, const float clear[4], pass_state *ps) {
+    WGPURenderPassColorAttachment color = WGPU_RENDER_PASS_COLOR_ATTACHMENT_INIT;
+    color.view = t->view;
+    color.loadOp = load;
+    color.storeOp = WGPUStoreOp_Store;
+    color.clearValue = (WGPUColor){clear[0], clear[1], clear[2], clear[3]};
+    WGPURenderPassDescriptor pass_desc = WGPU_RENDER_PASS_DESCRIPTOR_INIT;
+    pass_desc.colorAttachmentCount = 1;
+    pass_desc.colorAttachments = &color;
+    ps->pass = wgpuCommandEncoderBeginRenderPass(enc, &pass_desc);
+    uint32_t offset = t->slot * GLOBALS_STRIDE;
+    wgpuRenderPassEncoderSetBindGroup(ps->pass, 0, s->bind_group, 1, &offset);
+    ps->bound = -1;
+    ps->page = -1;
+    memset(ps->scissor, 0, sizeof ps->scissor);
+}
+
+static void end_pass(pass_state *ps) {
+    wgpuRenderPassEncoderEnd(ps->pass);
+    wgpuRenderPassEncoderRelease(ps->pass);
+    ps->pass = NULL;
+}
+
+// Sets the batch's clip (surface px) as the scissor, in the target's coordinates and inside
+// it. False when nothing of it is inside.
+static bool set_scissor(pass_state *ps, const pass_target *t, ui_dl_clip clip) {
+    int64_t cx0 = (int64_t)clip.x - t->x, cy0 = (int64_t)clip.y - t->y;
+    int64_t cx1 = cx0 + clip.width, cy1 = cy0 + clip.height;
+    uint32_t x0 = (uint32_t)(cx0 < 0 ? 0 : cx0 > t->width ? t->width : cx0);
+    uint32_t y0 = (uint32_t)(cy0 < 0 ? 0 : cy0 > t->height ? t->height : cy0);
+    uint32_t x1 = (uint32_t)(cx1 < x0 ? x0 : cx1 > t->width ? t->width : cx1);
+    uint32_t y1 = (uint32_t)(cy1 < y0 ? y0 : cy1 > t->height ? t->height : cy1);
+    if (x1 == x0 || y1 == y0) return false;
+    if (x0 != ps->scissor[0] || y0 != ps->scissor[1] || x1 - x0 != ps->scissor[2] ||
+        y1 - y0 != ps->scissor[3]) {
+        wgpuRenderPassEncoderSetScissorRect(ps->pass, x0, y0, x1 - x0, y1 - y0);
+        ps->scissor[0] = x0;
+        ps->scissor[1] = y0;
+        ps->scissor[2] = x1 - x0;
+        ps->scissor[3] = y1 - y0;
+    }
+    return true;
+}
+
+static void write_globals(ui_render *r, render_surface *s, const ui_display_list *dl,
+                          const pass_target *t) {
+    const float globals[8] = {(float)t->width, (float)t->height, dl->text_contrast,
+                              dl->text_gamma, (float)t->x, (float)t->y, 0, 0};
+    wgpuQueueWriteBuffer(r->queue, s->uniforms, (uint64_t)t->slot * GLOBALS_STRIDE, globals,
+                         sizeof globals);
+}
+
 static ui_result encode(ui_render *r, render_surface *s, const ui_display_list *dl,
                         WGPUTextureView target) {
     const pipeline_entry *pipes = pipelines_for(r, s->format);
     if (!pipes) return UI_ERR_GPU;
-    const float globals[4] = {(float)dl->width, (float)dl->height, dl->text_contrast,
-                              dl->text_gamma};
-    wgpuQueueWriteBuffer(r->queue, s->uniforms, 0, globals, sizeof globals);
+    r->encodes++;
+    // One globals slot for the surface and one per layer; a target stack as deep as the
+    // nesting of layers.
+    ui_result res = ensure_uniforms(r, s, 1 + dl->layer_count);
+    if (res != UI_OK) return res;
+    pass_target *stack = malloc((1 + dl->layer_count) * sizeof *stack);
+    if (!stack) return UI_ERR_OUT_OF_MEMORY;
+    uint32_t depth = 0;
+    stack[0] = (pass_target){target, dl->width, dl->height, 0, 0, 0, NULL};
+    write_globals(r, s, dl, &stack[0]);
 
-    uint64_t rect_bytes = (uint64_t)dl->rect_count * INSTANCE_STRIDE;
-    uint64_t glyph_bytes = (uint64_t)dl->glyph_count * INSTANCE_STRIDE;
-    ui_result res = upload_instances(r, &s->instances, &s->instance_bytes, dl->rects, rect_bytes,
-                                     "rect instances");
+    uint64_t rect_bytes = (uint64_t)dl->rect_count * RECT_STRIDE;
+    uint64_t glyph_bytes = (uint64_t)dl->glyph_count * GLYPH_STRIDE;
+    res = upload_instances(r, &s->instances, &s->instance_bytes, dl->rects, rect_bytes,
+                           "rect instances");
     if (res == UI_OK)
         res = upload_instances(r, &s->glyph_instances, &s->glyph_instance_bytes, dl->glyphs,
                                glyph_bytes, "glyph instances");
-    if (res != UI_OK) return res;
+    if (res != UI_OK) {
+        free(stack);
+        return res;
+    }
 
     WGPUCommandEncoder enc = wgpuDeviceCreateCommandEncoder(r->device, NULL);
-    WGPURenderPassColorAttachment color = WGPU_RENDER_PASS_COLOR_ATTACHMENT_INIT;
-    color.view = target;
-    color.loadOp = WGPULoadOp_Clear;
-    color.storeOp = WGPUStoreOp_Store;
-    color.clearValue = (WGPUColor){dl->clear[0], dl->clear[1], dl->clear[2], dl->clear[3]};
-    WGPURenderPassDescriptor pass_desc = WGPU_RENDER_PASS_DESCRIPTOR_INIT;
-    pass_desc.colorAttachmentCount = 1;
-    pass_desc.colorAttachments = &color;
-    WGPURenderPassEncoder pass = wgpuCommandEncoderBeginRenderPass(enc, &pass_desc);
-    wgpuRenderPassEncoderSetBindGroup(pass, 0, s->bind_group, 0, NULL);
-    int bound = -1; // which pipeline is set: UI_DL_RECTS or UI_DL_GLYPHS
-    int32_t page = -1;
-    uint32_t scissor[4] = {0, 0, dl->width, dl->height}; // the pass starts unclipped
+    pass_state ps;
+    begin_pass(enc, s, &stack[0], WGPULoadOp_Clear, dl->clear, &ps);
+    static const float transparent[4] = {0, 0, 0, 0};
+    uint32_t skip = 0; // inside an empty layer: its batches draw nothing
     for (uint32_t i = 0; i < dl->batch_count; i++) {
         const ui_dl_batch *b = &dl->batches[i];
-        // The batch's clip, clamped to the target (a scissor must lie inside it).
-        int64_t cx0 = b->clip.x, cy0 = b->clip.y;
-        int64_t cx1 = cx0 + b->clip.width, cy1 = cy0 + b->clip.height;
-        uint32_t x0 = (uint32_t)(cx0 < 0 ? 0 : cx0 > dl->width ? dl->width : cx0);
-        uint32_t y0 = (uint32_t)(cy0 < 0 ? 0 : cy0 > dl->height ? dl->height : cy0);
-        uint32_t x1 = (uint32_t)(cx1 < x0 ? x0 : cx1 > dl->width ? dl->width : cx1);
-        uint32_t y1 = (uint32_t)(cy1 < y0 ? y0 : cy1 > dl->height ? dl->height : cy1);
-        if (x1 == x0 || y1 == y0) continue; // clipped away entirely
-        if (x0 != scissor[0] || y0 != scissor[1] || x1 - x0 != scissor[2] || y1 - y0 != scissor[3]) {
-            wgpuRenderPassEncoderSetScissorRect(pass, x0, y0, x1 - x0, y1 - y0);
-            scissor[0] = x0;
-            scissor[1] = y0;
-            scissor[2] = x1 - x0;
-            scissor[3] = y1 - y0;
+        if (skip) {
+            if (b->kind == UI_DL_LAYER_BEGIN) skip++;
+            if (b->kind == UI_DL_LAYER_END) skip--;
+            continue;
         }
+        if (b->kind == UI_DL_LAYER_BEGIN) {
+            const ui_dl_layer *l = &dl->layers[b->first];
+            layer_texture *t = l->width > 0 && l->height > 0
+                                   ? acquire_layer(r, s->format, (uint32_t)l->width, (uint32_t)l->height)
+                                   : NULL;
+            if (!t) { // empty, or no texture: the group draws nothing
+                skip = 1;
+                continue;
+            }
+            end_pass(&ps);
+            stack[++depth] = (pass_target){t->view, t->width, t->height, l->x, l->y, b->first + 1, t};
+            write_globals(r, s, dl, &stack[depth]);
+            begin_pass(enc, s, &stack[depth], WGPULoadOp_Clear, transparent, &ps);
+            continue;
+        }
+        if (b->kind == UI_DL_LAYER_END) {
+            // Back to the target below, then composite the layer into it.
+            layer_texture *t = stack[depth--].layer;
+            end_pass(&ps);
+            begin_pass(enc, s, &stack[depth], WGPULoadOp_Load, transparent, &ps);
+            if (!set_scissor(&ps, &stack[depth], b->clip)) {
+                t->busy = false;
+                continue;
+            }
+            wgpuRenderPassEncoderSetPipeline(ps.pass, pipes->composite);
+            wgpuRenderPassEncoderSetVertexBuffer(ps.pass, 0, s->instances, 0, rect_bytes);
+            wgpuRenderPassEncoderSetBindGroup(ps.pass, 1, t->bind_group, 0, NULL);
+            ps.bound = PIPE_COMPOSITE;
+            ps.page = -1;
+            wgpuRenderPassEncoderDraw(ps.pass, 4, 1, 0, b->first);
+            // Free for a later layer of this frame: passes run in order, so a texture may be
+            // composited and then drawn into again.
+            t->busy = false;
+            continue;
+        }
+        if (!set_scissor(&ps, &stack[depth], b->clip)) continue; // clipped away entirely
         if (b->kind == UI_DL_GLYPHS) {
             const atlas_page *ap = b->page < UI_ATLAS_MAX_PAGES ? &r->atlas[b->page] : NULL;
             if (!ap || !ap->bind_group) continue; // never sent: nothing to draw from
-            if (bound != UI_DL_GLYPHS) {
-                wgpuRenderPassEncoderSetPipeline(pass, pipes->glyph);
-                wgpuRenderPassEncoderSetVertexBuffer(pass, 0, s->glyph_instances, 0, glyph_bytes);
-                bound = UI_DL_GLYPHS;
-                page = -1;
+            if (ps.bound != PIPE_GLYPH) {
+                wgpuRenderPassEncoderSetPipeline(ps.pass, pipes->glyph);
+                wgpuRenderPassEncoderSetVertexBuffer(ps.pass, 0, s->glyph_instances, 0, glyph_bytes);
+                ps.bound = PIPE_GLYPH;
+                ps.page = -1;
             }
-            if (page != b->page) {
-                wgpuRenderPassEncoderSetBindGroup(pass, 1, ap->bind_group, 0, NULL);
-                page = b->page;
+            if (ps.page != b->page) {
+                wgpuRenderPassEncoderSetBindGroup(ps.pass, 1, ap->bind_group, 0, NULL);
+                ps.page = b->page;
             }
-        } else if (bound != UI_DL_RECTS) {
-            wgpuRenderPassEncoderSetPipeline(pass, pipes->rect);
-            wgpuRenderPassEncoderSetVertexBuffer(pass, 0, s->instances, 0, rect_bytes);
-            bound = UI_DL_RECTS;
+        } else if (ps.bound != PIPE_RECT) {
+            wgpuRenderPassEncoderSetPipeline(ps.pass, pipes->rect);
+            wgpuRenderPassEncoderSetVertexBuffer(ps.pass, 0, s->instances, 0, rect_bytes);
+            ps.bound = PIPE_RECT;
         }
-        wgpuRenderPassEncoderDraw(pass, 4, b->count, 0, b->first);
+        wgpuRenderPassEncoderDraw(ps.pass, 4, b->count, 0, b->first);
     }
-    wgpuRenderPassEncoderEnd(pass);
-    wgpuRenderPassEncoderRelease(pass);
+    end_pass(&ps);
+    free(stack);
+    trim_layers(r);
     WGPUCommandBuffer cmd = wgpuCommandEncoderFinish(enc, NULL);
     wgpuQueueSubmit(r->queue, 1, &cmd);
     wgpuCommandBufferRelease(cmd);
@@ -903,7 +1129,12 @@ static void release_all(ui_render *r) {
     for (uint32_t i = 0; i < r->pipeline_count; i++) {
         if (r->pipelines[i].rect) wgpuRenderPipelineRelease(r->pipelines[i].rect);
         if (r->pipelines[i].glyph) wgpuRenderPipelineRelease(r->pipelines[i].glyph);
+        if (r->pipelines[i].composite) wgpuRenderPipelineRelease(r->pipelines[i].composite);
     }
+    for (uint32_t i = 0; i < r->layer_count; i++) release_layer_texture(&r->layers[i]);
+    free(r->layers);
+    r->layers = NULL;
+    r->layer_count = r->layer_capacity = 0;
     r->pipeline_count = 0;
     if (r->pipeline_layout) wgpuPipelineLayoutRelease(r->pipeline_layout);
     if (r->glyph_pipeline_layout) wgpuPipelineLayoutRelease(r->glyph_pipeline_layout);
@@ -911,6 +1142,7 @@ static void release_all(ui_render *r) {
     if (r->atlas_layout) wgpuBindGroupLayoutRelease(r->atlas_layout);
     if (r->shader) wgpuShaderModuleRelease(r->shader);
     if (r->glyph_shader) wgpuShaderModuleRelease(r->glyph_shader);
+    if (r->composite_shader) wgpuShaderModuleRelease(r->composite_shader);
     if (r->queue) wgpuQueueRelease(r->queue);
     if (r->device) {
         wgpuDeviceDestroy(r->device);
@@ -924,6 +1156,7 @@ static void release_all(ui_render *r) {
     r->atlas_layout = NULL;
     r->shader = NULL;
     r->glyph_shader = NULL;
+    r->composite_shader = NULL;
     r->queue = NULL;
     r->device = NULL;
     r->adapter = NULL;

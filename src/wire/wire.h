@@ -35,7 +35,18 @@ enum {
     UI_WIRE_SIZE_SET_CLIP = 12,          // node, flags u32 (bit 0: clip)
     UI_WIRE_SIZE_LOAD_FONT_HEADER = 8,   // id u32, path_bytes u16, header_bytes u16; path
     UI_WIRE_SIZE_FONT_LOADED = 8,        // id u32, result u32
+    UI_WIRE_SIZE_DEFINE_STYLE_HEADER = 8, // id u32, header_bytes u16, block_count u16; blocks
+    UI_WIRE_SIZE_STYLE_BLOCK_HEADER = 8, // block_bytes u16, states u8, 0, entry_count u16, 0
+    UI_WIRE_SIZE_DESTROY_STYLE = 4,      // id u32
+    UI_WIRE_SIZE_SET_STYLES_HEADER = 12, // node, count u16, header_bytes u16; ids
+    UI_WIRE_SIZE_SET_PROPS_HEADER = 12,  // node, header_bytes u16, entry_count u16; entries
+    UI_WIRE_SIZE_SET_TOKEN_HEADER = 4,   // id u32; one entry (property 0)
+    UI_WIRE_SIZE_SET_STATE = 16,         // node, mask u32, value u32
 };
+
+// A style entry: u16 property, u8 kind, u8 words (its size in 4-byte words, header
+// included), then the value. Readers skip entries they don't understand by `words`.
+#define UI_WIRE_STYLE_ENTRY_HEADER 4u
 
 // set_text: fixed header, then spans, the family-name region (NUL-terminated names,
 // zero-padded to a multiple of 4), the ellipsis (padded), the first text chunk (padded).
@@ -128,6 +139,15 @@ static inline uint32_t ui_wire_append_text_header(const uint8_t *payload) {
 }
 static inline uint32_t ui_wire_load_font_header(const uint8_t *payload) {
     return ui_wire_size_or(payload + 6, UI_WIRE_SIZE_LOAD_FONT_HEADER);
+}
+static inline uint32_t ui_wire_define_style_header(const uint8_t *payload) {
+    return ui_wire_size_or(payload + 4, UI_WIRE_SIZE_DEFINE_STYLE_HEADER);
+}
+static inline uint32_t ui_wire_set_styles_header(const uint8_t *payload) {
+    return ui_wire_size_or(payload + 10, UI_WIRE_SIZE_SET_STYLES_HEADER);
+}
+static inline uint32_t ui_wire_set_props_header(const uint8_t *payload) {
+    return ui_wire_size_or(payload + 8, UI_WIRE_SIZE_SET_PROPS_HEADER);
 }
 
 // Copies the first `sent` bytes of a fixed region into `out` (`known` bytes, what this

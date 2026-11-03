@@ -134,6 +134,7 @@ static void test_huge_rects(void) {
     size_t size;
     ui_cmd_writer_take(w, &bytes, &size);
     CHECK(ui_scene_apply(&s, bytes, size, 0) == UI_OK);
+    ui_scene_resolve(&s, 0);
     CHECK_EQ_INT(s.stats.dropped, 0);
     ui_display_list dl = {.surface = surface, .width = WIDTH, .height = HEIGHT,
                           .logical_width = WIDTH, .logical_height = HEIGHT, .scale_120 = 120};

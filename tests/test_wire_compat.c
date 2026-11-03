@@ -228,8 +228,9 @@ static bool same_node(const ui_node *a, const ui_node *b) {
     if (memcmp(a->rect, b->rect, sizeof a->rect) || a->radius != b->radius ||
         memcmp(a->color, b->color, sizeof a->color) || a->clip != b->clip)
         return false;
-    for (int i = 0; i < UI_SPRING_COUNT; i++) {
-        const ui_spring *x = &a->springs[i], *y = &b->springs[i];
+    if (!a->anim != !b->anim) return false;
+    for (int i = 0; a->anim && i < UI_SPRING_COUNT; i++) {
+        const ui_spring *x = &a->anim->springs[i], *y = &b->anim->springs[i];
         if (x->active != y->active ||
             (x->active && (x->stiffness != y->stiffness || x->damping != y->damping ||
                            memcmp(x->target, y->target, sizeof x->target))))
@@ -268,6 +269,8 @@ static void check_same_result(bool paragraph_fields, rewrite_fn fn) {
     scene_init(&b, &cb);
     CHECK(ui_scene_apply(&a, bytes, size, 0) == UI_OK);
     CHECK(ui_scene_apply(&b, other, other_size, 0) == UI_OK);
+    ui_scene_resolve(&a, 0);
+    ui_scene_resolve(&b, 0);
     CHECK_EQ_INT(a.stats.dropped, 0);
     CHECK_EQ_INT(b.stats.dropped, 0);
     CHECK_EQ_INT(b.stats.applied, a.stats.applied);
@@ -280,7 +283,7 @@ static void check_same_result(bool paragraph_fields, rewrite_fn fn) {
         CHECK_NEAR(t->line_height, paragraph_fields ? 1.4 : 0, 1e-6);
         CHECK_EQ_INT(t->spans[0].style.language, 3); // "ro", after the two families
     }
-    CHECK(b.nodes[1].clip && b.nodes[2].springs[UI_SPRING_RECT].active);
+    CHECK(b.nodes[1].clip && b.nodes[2].anim && b.nodes[2].anim->springs[UI_SPRING_RECT].active);
     CHECK(cb.timer_id == 9 && cb.deadline == 123456789);
     CHECK(cb.font_id == 4 && cb.font_len == 16 && !memcmp(cb.font_path, "/fonts/Extra.ttf", 16));
     free(bytes);
@@ -377,6 +380,97 @@ static void test_unknown_ops(void) {
     free(bytes);
 }
 
+// Styles from a newer writer: unknown properties and kinds are skipped, longer entries and
+// headers are read for the fields this reader knows. Framing errors reject the buffer.
+static void test_styles(void) {
+    uint8_t define[] = {
+        0x78, 0x56, 0x34, 0x12, 12, 0, 2, 0, 0xEE, 0xEE, 0xEE, 0xEE, // header 12, 2 blocks
+        36, 0, UI_STATE_HOVER, 0, 3, 0, 12, 0, 0xEE, 0xEE, 0xEE, 0xEE, // 36 bytes, 3 entries
+        0xE7, 3, 2, 2, 0, 0, 0x80, 0x3F,                             // unknown property 999
+        1, 0, 77, 1,                                                 // unknown kind 77
+        5, 0, 6, 3, 0, 0, 0, 0x3F, 0xEE, 0xEE, 0xEE, 0xEE,            // opacity 0.5 + a word
+        8, 0, 0, 0, 0, 0, 0, 0,                                      // an empty base block
+    };
+    ui_wire_buf b;
+    ui_wire_buf_init(&b, UI_WIRE_MAGIC_CMD);
+    memcpy(emit(&b, UI_OP_DEFINE_STYLE, sizeof define), define, sizeof define);
+    uint8_t *p = emit(&b, UI_OP_CREATE_NODE, UI_WIRE_SIZE_CREATE_NODE);
+    ui_wire_put_handle(ui_wire_put_handle(p, node), surface);
+    // set_props with a 16-byte header and an unknown entry before a known one.
+    p = emit(&b, UI_OP_SET_PROPS, 16 + 4 + 8);
+    p = ui_wire_put_handle(p, node);
+    p = ui_wire_put_u16(p, 16);
+    p = ui_wire_put_u16(p, 2);
+    p = ui_wire_put_u32(p, 0xEEEEEEEEu);
+    p = ui_wire_put_u32(p, 0x0101B000u); // property 0xB000 (unknown transition), kind 1, 1 word
+    p = ui_wire_put_u16(p, UI_STYLE_BORDER_WIDTH);
+    *p++ = UI_VALUE_PX;
+    *p++ = 2;
+    ui_wire_put_f32(p, 3);
+    // set_token with bytes appended after its entry.
+    p = emit(&b, UI_OP_SET_TOKEN, 4 + 8 + 4);
+    p = ui_wire_put_u32(p, 9);
+    p = ui_wire_put_u16(p, 0);
+    *p++ = UI_VALUE_NUMBER;
+    *p++ = 2;
+    p = ui_wire_put_f32(p, 0.25f);
+    ui_wire_put_u32(p, 0xEEEEEEEEu);
+    // set_styles with a 16-byte header.
+    p = emit(&b, UI_OP_SET_STYLES, 16 + 4);
+    p = ui_wire_put_handle(p, node);
+    p = ui_wire_put_u16(p, 1);
+    p = ui_wire_put_u16(p, 16);
+    p = ui_wire_put_u32(p, 0xEEEEEEEEu);
+    ui_wire_put_u32(p, 0x12345678u);
+    size_t n;
+    uint8_t *bytes = ui_wire_buf_finish(&b, &n);
+    ui_scene s;
+    captured c = {0};
+    scene_init(&s, &c);
+    CHECK(ui_scene_apply(&s, bytes, n, 0) == UI_OK);
+    CHECK_EQ_INT(s.stats.dropped, 0);
+    CHECK_EQ_INT(s.stats.applied, 5);
+    ui_scene_resolve(&s, 0);
+    const ui_style_def *d = ui_styles_find(&s.styles, 0x12345678);
+    CHECK(d && d->block_count == 2 && d->entry_count == 1);
+    if (d && d->entry_count) CHECK(d->entries[0].prop == UI_STYLE_OPACITY && d->entries[0].value.number == 0.5f);
+    const ui_node *nd = &s.nodes[ui_handle_slot(node)];
+    CHECK(nd->border_width == 3 && nd->override_count == 1);
+    CHECK(nd->opacity == 1); // the hover block doesn't match
+    free(bytes);
+    ui_scene_destroy(&s);
+
+    // Framing errors: an entry of 0 words, a block past the payload, a block header below 8,
+    // set_props entries past the payload, set_styles ids past it, a token's entry past it.
+    uint8_t bad[sizeof define];
+    const struct {
+        uint32_t offset;
+        uint8_t value;
+    } patches[] = {{27, 0}, {12, 200}, {18, 4}};
+    for (size_t i = 0; i < sizeof patches / sizeof *patches; i++) {
+        memcpy(bad, define, sizeof bad);
+        bad[patches[i].offset] = patches[i].value;
+        CHECK_EQ_INT(apply_patched(UI_OP_DEFINE_STYLE, bad, sizeof bad), UI_ERR_MALFORMED);
+    }
+    uint8_t props[16] = {0};
+    ui_wire_put_u16(props + 8, 12);
+    ui_wire_put_u16(props + 10, 2); // two entries, room for one
+    props[15] = 1;
+    CHECK_EQ_INT(apply_patched(UI_OP_SET_PROPS, props, sizeof props), UI_ERR_MALFORMED);
+    uint8_t styles[16] = {0};
+    ui_wire_put_u16(styles + 8, 2); // two ids, room for one
+    CHECK_EQ_INT(apply_patched(UI_OP_SET_STYLES, styles, sizeof styles), UI_ERR_MALFORMED);
+    uint8_t token[8] = {1, 0, 0, 0, 0, 0, UI_VALUE_COLOR, 5}; // a color needs 20 bytes
+    CHECK_EQ_INT(apply_patched(UI_OP_SET_TOKEN, token, sizeof token), UI_ERR_MALFORMED);
+    // Well-framed but invalid values drop just the op.
+    uint8_t negative[16] = {0};
+    ui_wire_put_u32(negative, 3);
+    negative[6] = UI_VALUE_PX;
+    negative[7] = 2;
+    ui_wire_put_f32(negative + 8, -1); // a token may hold any length; a border ignores it
+    CHECK_EQ_INT(apply_patched(UI_OP_SET_TOKEN, negative, 12), UI_OK);
+}
+
 static void test_events(void) {
     // A newer core appended fields to frame_committed and timer_fired: they are skipped, and
     // the events after them still read correctly.
@@ -421,6 +515,7 @@ int main(void) {
     RUN(test_older_writer);
     RUN(test_newer_writer);
     RUN(test_too_short);
+    RUN(test_styles);
     RUN(test_unknown_ops);
     RUN(test_events);
     return test_failures != 0;

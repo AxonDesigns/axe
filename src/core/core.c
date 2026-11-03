@@ -664,6 +664,7 @@ static void frame(ui_core *c) {
         UI_HOOK_PHASE_END(c->hooks, UI_PHASE_APPLY, main, frame_id);
 
         UI_HOOK_PHASE_BEGIN(c->hooks, UI_PHASE_ANIMATE, main, frame_id);
+        ui_scene_resolve(&c->scene, now);
         ui_scene_animate(&c->scene, now);
         UI_HOOK_PHASE_END(c->hooks, UI_PHASE_ANIMATE, main, frame_id);
     }

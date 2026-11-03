@@ -4,6 +4,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "style/props.h"
+
 void ui_wire_buf_init(ui_wire_buf *b, uint32_t magic) {
     memset(b, 0, sizeof *b);
     b->magic = magic;
@@ -348,6 +350,137 @@ ui_result ui_cmd_load_font(ui_cmd_writer *w, uint32_t id, const char *path) {
     p = ui_wire_put_u16(p, (uint16_t)n);
     p = ui_wire_put_u16(p, UI_WIRE_SIZE_LOAD_FONT_HEADER);
     put_bytes(p, path, (uint32_t)n);
+    return UI_OK;
+}
+
+// ---- Styles ------------------------------------------------------------------------------
+
+static uint8_t *put_value(uint8_t *p, const ui_value *v) {
+    switch (v->kind) {
+    case UI_VALUE_PX:
+    case UI_VALUE_PERCENT:
+    case UI_VALUE_NUMBER: return ui_wire_put_f32(p, v->number);
+    case UI_VALUE_KEYWORD: return ui_wire_put_u32(p, v->keyword);
+    case UI_VALUE_TOKEN: return ui_wire_put_u32(p, v->token);
+    case UI_VALUE_SPRING:
+        p = ui_wire_put_f32(p, v->spring.stiffness);
+        return ui_wire_put_f32(p, v->spring.damping);
+    case UI_VALUE_COLOR:
+        for (int i = 0; i < 4; i++) p = ui_wire_put_f32(p, v->color[i]);
+        return p;
+    default: return p;
+    }
+}
+
+static uint8_t *put_entry(uint8_t *p, uint16_t prop, const ui_value *v) {
+    uint32_t words = ui_style_kind_words((uint8_t)v->kind);
+    p = ui_wire_put_u16(p, prop);
+    *p++ = (uint8_t)v->kind;
+    *p++ = (uint8_t)words;
+    return put_value(p, v);
+}
+
+// Bytes of the entries, or 0 if any declaration is invalid.
+static uint64_t decl_bytes(const ui_style_decl *decls, uint32_t count, bool override) {
+    uint64_t bytes = 0;
+    for (uint32_t i = 0; i < count; i++) {
+        if (!ui_style_value_valid(decls[i].property, &decls[i].value, override)) return 0;
+        bytes += 4u * ui_style_kind_words((uint8_t)decls[i].value.kind);
+    }
+    return count ? bytes : 1; // 1: valid and empty (no bytes are written)
+}
+
+ui_result ui_cmd_define_style(ui_cmd_writer *w, uint32_t id, const ui_style_block_desc *blocks,
+                              uint32_t block_count) {
+    if (!id || block_count > UINT16_MAX || (block_count && !blocks)) return UI_ERR_INVALID_ARGUMENT;
+    uint64_t size = UI_WIRE_SIZE_DEFINE_STYLE_HEADER;
+    for (uint32_t b = 0; b < block_count; b++) {
+        if (blocks[b].count > UINT16_MAX || (blocks[b].count && !blocks[b].decls))
+            return UI_ERR_INVALID_ARGUMENT;
+        uint64_t bytes = decl_bytes(blocks[b].decls, blocks[b].count, false);
+        if (!bytes) return UI_ERR_INVALID_ARGUMENT;
+        bytes = blocks[b].count ? bytes : 0;
+        if (UI_WIRE_SIZE_STYLE_BLOCK_HEADER + bytes > UINT16_MAX) return UI_ERR_INVALID_ARGUMENT;
+        size += UI_WIRE_SIZE_STYLE_BLOCK_HEADER + bytes;
+    }
+    if (size > UI_WIRE_MAX_PAYLOAD) return UI_ERR_INVALID_ARGUMENT;
+    uint8_t *p = ui_wire_buf_op(&w->buf, UI_OP_DEFINE_STYLE, (uint32_t)size);
+    if (!p) return UI_ERR_OUT_OF_MEMORY;
+    p = ui_wire_put_u32(p, id);
+    p = ui_wire_put_u16(p, UI_WIRE_SIZE_DEFINE_STYLE_HEADER);
+    p = ui_wire_put_u16(p, (uint16_t)block_count);
+    for (uint32_t b = 0; b < block_count; b++) {
+        uint32_t bytes = UI_WIRE_SIZE_STYLE_BLOCK_HEADER;
+        for (uint32_t i = 0; i < blocks[b].count; i++)
+            bytes += 4u * ui_style_kind_words((uint8_t)blocks[b].decls[i].value.kind);
+        p = ui_wire_put_u16(p, (uint16_t)bytes);
+        *p++ = blocks[b].states;
+        *p++ = 0;
+        p = ui_wire_put_u16(p, (uint16_t)blocks[b].count);
+        p = ui_wire_put_u16(p, 0);
+        for (uint32_t i = 0; i < blocks[b].count; i++)
+            p = put_entry(p, blocks[b].decls[i].property, &blocks[b].decls[i].value);
+    }
+    return UI_OK;
+}
+
+ui_result ui_cmd_destroy_style(ui_cmd_writer *w, uint32_t id) {
+    if (!id) return UI_ERR_INVALID_ARGUMENT;
+    uint8_t *p = ui_wire_buf_op(&w->buf, UI_OP_DESTROY_STYLE, UI_WIRE_SIZE_DESTROY_STYLE);
+    if (!p) return UI_ERR_OUT_OF_MEMORY;
+    ui_wire_put_u32(p, id);
+    return UI_OK;
+}
+
+ui_result ui_cmd_set_styles(ui_cmd_writer *w, ui_handle node, const uint32_t *ids,
+                            uint32_t count) {
+    if (count > UINT8_MAX || (count && !ids)) return UI_ERR_INVALID_ARGUMENT;
+    for (uint32_t i = 0; i < count; i++) {
+        if (!ids[i]) return UI_ERR_INVALID_ARGUMENT;
+    }
+    uint8_t *p = ui_wire_buf_op(&w->buf, UI_OP_SET_STYLES, UI_WIRE_SIZE_SET_STYLES_HEADER + 4 * count);
+    if (!p) return UI_ERR_OUT_OF_MEMORY;
+    p = ui_wire_put_handle(p, node);
+    p = ui_wire_put_u16(p, (uint16_t)count);
+    p = ui_wire_put_u16(p, UI_WIRE_SIZE_SET_STYLES_HEADER);
+    for (uint32_t i = 0; i < count; i++) p = ui_wire_put_u32(p, ids[i]);
+    return UI_OK;
+}
+
+ui_result ui_cmd_set_props(ui_cmd_writer *w, ui_handle node, const ui_style_decl *decls,
+                           uint32_t count) {
+    if (count > UINT16_MAX || (count && !decls)) return UI_ERR_INVALID_ARGUMENT;
+    uint64_t bytes = decl_bytes(decls, count, true);
+    if (!bytes) return UI_ERR_INVALID_ARGUMENT;
+    bytes = count ? bytes : 0;
+    if (UI_WIRE_SIZE_SET_PROPS_HEADER + bytes > UI_WIRE_MAX_PAYLOAD) return UI_ERR_INVALID_ARGUMENT;
+    uint8_t *p = ui_wire_buf_op(&w->buf, UI_OP_SET_PROPS,
+                                (uint32_t)(UI_WIRE_SIZE_SET_PROPS_HEADER + bytes));
+    if (!p) return UI_ERR_OUT_OF_MEMORY;
+    p = ui_wire_put_handle(p, node);
+    p = ui_wire_put_u16(p, UI_WIRE_SIZE_SET_PROPS_HEADER);
+    p = ui_wire_put_u16(p, (uint16_t)count);
+    for (uint32_t i = 0; i < count; i++) p = put_entry(p, decls[i].property, &decls[i].value);
+    return UI_OK;
+}
+
+ui_result ui_cmd_set_token(ui_cmd_writer *w, uint32_t id, ui_value value) {
+    if (!id || (value.kind != UI_VALUE_UNSET && !ui_style_token_value_valid(&value)))
+        return UI_ERR_INVALID_ARGUMENT;
+    uint32_t words = ui_style_kind_words((uint8_t)value.kind);
+    uint8_t *p = ui_wire_buf_op(&w->buf, UI_OP_SET_TOKEN, UI_WIRE_SIZE_SET_TOKEN_HEADER + 4 * words);
+    if (!p) return UI_ERR_OUT_OF_MEMORY;
+    p = ui_wire_put_u32(p, id);
+    put_entry(p, 0, &value);
+    return UI_OK;
+}
+
+ui_result ui_cmd_set_state(ui_cmd_writer *w, ui_handle node, uint32_t mask, uint32_t value) {
+    uint8_t *p = ui_wire_buf_op(&w->buf, UI_OP_SET_STATE, UI_WIRE_SIZE_SET_STATE);
+    if (!p) return UI_ERR_OUT_OF_MEMORY;
+    p = ui_wire_put_handle(p, node);
+    p = ui_wire_put_u32(p, mask);
+    ui_wire_put_u32(p, value);
     return UI_OK;
 }
 

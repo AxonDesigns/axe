@@ -157,3 +157,23 @@ target_link_libraries(test_prepare PRIVATE ui m)
 ui_target_warnings(test_prepare)
 add_test(NAME prepare COMMAND test_prepare)
 set_tests_properties(prepare PROPERTIES ENVIRONMENT "UI_GPU=software" TIMEOUT 120)
+
+# Golden images of borders, opacity groups and clipping; snapping at rest.
+add_executable(test_paint_golden test_paint_golden.c)
+target_include_directories(test_paint_golden PRIVATE ${PROJECT_SOURCE_DIR}/src)
+target_compile_definitions(test_paint_golden PRIVATE _DEFAULT_SOURCE
+    UI_TEST_FONTS="${CMAKE_CURRENT_SOURCE_DIR}/fonts"
+    UI_TEST_GOLDENS="${CMAKE_CURRENT_SOURCE_DIR}/goldens"
+    UI_TEST_OUT="${CMAKE_CURRENT_BINARY_DIR}")
+target_link_libraries(test_paint_golden PRIVATE ui m)
+ui_target_warnings(test_paint_golden)
+add_test(NAME paint_golden COMMAND test_paint_golden)
+set_tests_properties(paint_golden PROPERTIES ENVIRONMENT "UI_GPU=software" TIMEOUT 300)
+
+# Styles: precedence, state variants, tokens, transitions.
+add_executable(test_style test_style.c)
+target_include_directories(test_style PRIVATE ${PROJECT_SOURCE_DIR}/src)
+target_compile_definitions(test_style PRIVATE _DEFAULT_SOURCE)
+target_link_libraries(test_style PRIVATE ui m)
+ui_target_warnings(test_style)
+add_test(NAME style COMMAND test_style)

@@ -137,6 +137,7 @@ static void test_scene_apply_and_stale(void) {
     size_t size;
     take(w, &bytes, &size);
     CHECK(ui_scene_apply(&sc, bytes, size, 0) == UI_OK);
+    ui_scene_resolve(&sc, 0);
     free(bytes);
     CHECK_EQ_INT(sc.stats.applied, 6);
     CHECK_EQ_INT(sc.stats.dropped, 0);
@@ -145,7 +146,7 @@ static void test_scene_apply_and_stale(void) {
     CHECK(ui_scene_build(&sc, surf, &dl, NULL) == UI_OK);
     CHECK_EQ_INT(dl.rect_count, 2);
     CHECK_NEAR(dl.rects[0].x, 15, 1e-4);         // 10 * 1.5
-    CHECK_NEAR(dl.rects[1].x, 22.5, 1e-4);       // (10 + 5) * 1.5, child relative to parent
+    CHECK_NEAR(dl.rects[1].x, 23, 1e-4);         // (10 + 5) * 1.5 = 22.5, snapped at rest
     CHECK_NEAR(dl.rects[1].color[3], 0.5, 1e-6);
     CHECK_NEAR(dl.rects[1].color[2], 0.5, 1e-6); // premultiplied
 

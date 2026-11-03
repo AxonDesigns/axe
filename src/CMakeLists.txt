@@ -32,6 +32,8 @@ add_library(ui STATIC
     platform/wayland/pacing.c
     platform/wayland/wayland.c
     render/render.c
+    style/props.c
+    style/style.c
     text/atlas.c
     text/font_registry.c
     text/glyph_cache.c

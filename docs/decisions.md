@@ -5,6 +5,99 @@ milestone first.
 
 ## Milestone 2: layout and styles
 
+### Styles (paint properties)
+- **Wire:** opcodes 12–17 (`define_style`, `destroy_style`, `set_styles`, `set_props`,
+  `set_token`, `set_state`); `docs/styles.md` has the layout. Entries are self-sized
+  (`u16 property, u8 kind, u8 words`), so readers skip what they don't know and newer
+  writers can grow values. Blocks and op headers carry their size. IDs are chosen by
+  logic, as handles are, so defining needs no round trip.
+- **The writer takes descriptor arrays** (`ui_style_block_desc`, `ui_style_decl`) with
+  value constructors (`ui_px`, `ui_rgba`, `ui_token_ref`, `ui_transition`, ...) instead of
+  the builder object the plan mentioned. It is simpler in C and fits a generated binding
+  just as well. The writer validates every declaration against the same table the core
+  uses (`src/style/props.c`).
+- **Precedence:** initial values, `set_text`'s paragraph values, the matching blocks
+  ordered by specificity (number of states), then list order, then declaration order, then
+  overrides (review change). A hover+pressed block beats a later style's hover, as
+  pseudo-class specificity would; `test_style` checks it.
+- **Tokens** may refer to tokens (review change). Chains resolve when used, with Floyd's
+  cycle detection. A missing token, a cycle or a value of the wrong kind makes the
+  declaration count as absent, so the lower one shows; CSS would use the initial value.
+  Changing a token closes over the tokens that refer to it, finds the styles using any of
+  them, and resolves only the nodes that list those styles or use the tokens in overrides.
+- **Resolution runs once per frame**, after apply and before animate, for the nodes queued
+  by ops (a dirty list, not a scan). A style or token change scans the nodes once to queue
+  their users.
+- **Transitions** exist for background, border color, radius, opacity and text color.
+  - They start whenever the resolved value changes, for any reason; `test_style` starts
+    one from each source.
+  - A node's first resolution never animates.
+  - The change is detected against the running spring's target, or the drawn value, so no
+    old state is kept.
+  - Border width and layout properties don't transition; geometry animates through layout
+    animations.
+- **`set_color`, `set_corner_radius` and `set_clip` are overrides.**
+  - Without a declared transition they jump and stop a spring, exactly as in M0. With one,
+    they animate.
+  - `start_spring` on color or radius sets the override and starts its own spring on the
+    next resolution, ahead of any declared transition.
+  - `set_rect` and the rect spring are untouched until the layout step.
+- **Text:** styles carry only properties that don't reshape (decided before the
+  milestone): text color, line height, alignment, max lines. They override `set_text`'s
+  values, which sit just above the initial values; spans keep their explicit colors.
+  `set_text` queues the node for resolution, so new text keeps the styles' values.
+- **No inheritance, no z-index (review):** a parent's text color doesn't reach its
+  children, and paint order is tree order. Inheritance of text properties is planned for
+  M2.1; tokens carry theming until then.
+- **Node storage:** springs moved into a block allocated the first time a property animates
+  (`ui_node_anim`), so a still node doesn't carry six springs (768 bytes). Each node keeps
+  its computed style (about 120 bytes).
+
+### Borders, opacity layers and snapping
+- **Rect instances grew to 64 bytes** (border width and color); glyph instances stay at 48,
+  each with its own stride. The border is a second signed distance inside the first, with
+  inner radius r − w. The background covers the whole rect under it, as CSS's default
+  `background-clip: border-box` does.
+- **Group opacity is a layer** (decided before the milestone):
+  - **Display list:** a node below opacity 1 brackets itself and its subtree with
+    `LAYER_BEGIN`/`LAYER_END` batches. The bounds are the union of what was drawn inside,
+    with a 1 px anti-aliasing margin around rects, intersected with the clip at the begin
+    batch and the surface, rounded out to whole pixels. The composite quad is an ordinary
+    `ui_dl_rect` record, so no new buffer is needed.
+  - **Render:** ends the pass, draws the layer into a pooled texture (the target's format,
+    sizes in 64 px steps, released after 120 unused frames), then resumes the target pass
+    and composites with `textureLoad` at exact texels, times the opacity.
+  - **Per-pass state:** each pass reads its viewport and origin from one uniform buffer at
+    its own dynamic offset (256-byte slots), so every pipeline draws into a layer
+    translated.
+  - **Reuse:** a texture is free again once its composite is encoded; passes run in order,
+    so later layers of the same frame reuse it.
+  - **Cheaper cases:** a node with nothing but a background multiplies its alpha instead,
+    and opacity 0 skips the subtree.
+  - **What makes a layer empty:** content entirely clipped or off the surface. Its batches
+    draw nothing.
+- **Snapping at rest (review change):** a box at rest rounds its origin and its size
+  separately, to physical pixels, so sizes never wobble. A box whose rect springs, and
+  everything under it, draws unsnapped, and snaps on the frame the spring settles. Layout
+  animations will count as moving too.
+  - Borders at rest are whole pixels, at least one (`floor`, as browsers do).
+  - Text baselines keep snapping, so moving text steps vertically (a known limitation).
+  - `test_paint_golden` checks subpixel positions during a slow spring and whole pixels
+    once it settles.
+  - It changed the 1.25× text goldens by one row: the card's bottom edge at 167.5 px now
+    snaps to 168. They were regenerated; no text pixel changed. `test_headless` now expects
+    the snapped edge where it expected a half-covered row.
+- **Goldens:** `paint_borders`, `paint_opacity`, `paint_clipping` at 1.0, 1.25 and 1.5. The
+  opacity case also checks a pixel where two overlapping children of a 50% group meet:
+  blue over light gray with no red, which per-primitive alpha would show. The golden
+  comparison moved to `tests/golden.h`, shared with the text goldens.
+- **Fuzzing found one bug in the new code within minutes:** a layer with nothing visible
+  kept an infinite extent, which `end_layer` converted to an integer (undefined
+  behavior). Bounds are now clamped into the surface first, NaN included
+  (`regress-layer-infinite-extent`, `test_layer_bounds`). New seeds `seed06` and `seed07`
+  cover styles, tokens, states and layers, written by this writer and as a newer writer
+  would (unknown properties and kinds, longer entries and headers).
+
 ### Preparation off the core thread
 - **A worker pool owned by the app** (`src/runtime/jobs.h`): N threads, where
   `ui_app_desc.worker_threads` 0 means auto = hardware threads − 3 (core, logic, render),

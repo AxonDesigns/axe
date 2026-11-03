@@ -27,6 +27,12 @@ typedef enum ui_op {
     UI_OP_APPEND_TEXT = 9, // continues a set_text whose text is longer than one op holds
     UI_OP_SET_CLIP = 10,
     UI_OP_LOAD_FONT = 11,
+    UI_OP_DEFINE_STYLE = 12,
+    UI_OP_DESTROY_STYLE = 13,
+    UI_OP_SET_STYLES = 14,
+    UI_OP_SET_PROPS = 15,
+    UI_OP_SET_TOKEN = 16,
+    UI_OP_SET_STATE = 17,
 } ui_op;
 
 // Animatable node properties and their component counts.
@@ -116,6 +122,126 @@ ui_result ui_cmd_cancel_timer(ui_cmd_writer *w, uint32_t id);
 // frame boundary and answers with UI_EVENT_FONT_LOADED carrying `id`. Text everywhere is
 // shaped again, since the new font can change family matches and fallbacks. Face 0 only.
 ui_result ui_cmd_load_font(ui_cmd_writer *w, uint32_t id, const char *path);
+
+// ---- Styles ----------------------------------------------------------------------------
+// docs/styles.md. A style is a set of declarations, defined once by ID and applied to
+// nodes by listing IDs. Precedence, lowest first: initial values; set_text's paragraph
+// values (text color, line height, align, max lines); the base blocks of a node's styles
+// in list order; the state blocks that match the node's state, most specific first
+// (number of states), then list order, then declaration order; per-node overrides.
+
+typedef enum ui_style_prop {
+    UI_STYLE_BACKGROUND_COLOR = 1, // color
+    UI_STYLE_BORDER_COLOR = 2,     // color
+    UI_STYLE_BORDER_WIDTH = 3,     // px >= 0, all four sides
+    UI_STYLE_CORNER_RADIUS = 4,    // px >= 0, all four corners
+    UI_STYLE_OPACITY = 5,          // number in [0, 1]; applies to the node and its subtree
+    UI_STYLE_CLIP = 6,             // keyword ui_clip
+    UI_STYLE_TEXT_COLOR = 7,       // color: the text's default style (spans keep theirs)
+    UI_STYLE_LINE_HEIGHT = 8,      // number in (0, 100] (multiple of the size), or auto
+    UI_STYLE_TEXT_ALIGN = 9,       // keyword ui_text_align
+    UI_STYLE_MAX_LINES = 10,       // number (whole, <= 65535; 0 = unlimited), or none
+} ui_style_prop;
+
+// The transition of a property: a spring that animates the property's value whenever what
+// it resolves to changes, whatever the reason. Its value is UI_VALUE_SPRING, or
+// UI_VALUE_NONE for no transition. Transitions exist for background, border color, corner
+// radius, opacity and text color.
+#define UI_STYLE_TRANSITION(prop) ((uint16_t)(0x8000u | (uint16_t)(prop)))
+
+typedef enum ui_value_kind {
+    UI_VALUE_UNSET = 1,   // per-node overrides only: removes the override
+    UI_VALUE_PX = 2,      // logical pixels
+    UI_VALUE_PERCENT = 3,
+    UI_VALUE_AUTO = 4,
+    UI_VALUE_NONE = 5,
+    UI_VALUE_NUMBER = 6,
+    UI_VALUE_COLOR = 7,   // sRGB, straight alpha, clamped to [0, 1]
+    UI_VALUE_KEYWORD = 8, // a property's enumerated value
+    UI_VALUE_TOKEN = 9,   // the value of theme token `token` (see ui_cmd_set_token)
+    UI_VALUE_SPRING = 10, // a transition: stiffness > 0, damping >= 0 (mass 1)
+} ui_value_kind;
+
+typedef struct ui_value {
+    ui_value_kind kind;
+    union {
+        float number;      // px, percent, number
+        float color[4];
+        uint32_t keyword;
+        uint32_t token;
+        struct {
+            float stiffness, damping;
+        } spring;
+    };
+} ui_value;
+
+// Value constructors (C only: compound literals).
+#ifndef __cplusplus
+static inline ui_value ui_px(float v) { return (ui_value){.kind = UI_VALUE_PX, .number = v}; }
+static inline ui_value ui_percent(float v) { return (ui_value){.kind = UI_VALUE_PERCENT, .number = v}; }
+static inline ui_value ui_number(float v) { return (ui_value){.kind = UI_VALUE_NUMBER, .number = v}; }
+static inline ui_value ui_auto(void) { return (ui_value){.kind = UI_VALUE_AUTO}; }
+static inline ui_value ui_none(void) { return (ui_value){.kind = UI_VALUE_NONE}; }
+static inline ui_value ui_unset(void) { return (ui_value){.kind = UI_VALUE_UNSET}; }
+static inline ui_value ui_keyword(uint32_t k) { return (ui_value){.kind = UI_VALUE_KEYWORD, .keyword = k}; }
+static inline ui_value ui_token_ref(uint32_t id) { return (ui_value){.kind = UI_VALUE_TOKEN, .token = id}; }
+static inline ui_value ui_rgba(float r, float g, float b, float a) {
+    return (ui_value){.kind = UI_VALUE_COLOR, .color = {r, g, b, a}};
+}
+static inline ui_value ui_transition(float stiffness, float damping) {
+    return (ui_value){.kind = UI_VALUE_SPRING, .spring = {stiffness, damping}};
+}
+#endif
+
+typedef enum ui_clip {
+    UI_CLIP_NONE = 0,
+    UI_CLIP_RECT = 1, // text and descendants are drawn only inside the node's rect
+} ui_clip;
+
+// Node states that select state blocks. Input sets them from milestone 4; until then
+// ui_cmd_set_state does.
+typedef enum ui_state {
+    UI_STATE_HOVER = 1,
+    UI_STATE_PRESSED = 2,
+    UI_STATE_FOCUSED = 4,
+    UI_STATE_DISABLED = 8,
+    UI_STATE_SELECTED = 16,
+} ui_state;
+
+typedef struct ui_style_decl {
+    uint16_t property; // ui_style_prop, or UI_STYLE_TRANSITION(prop)
+    ui_value value;
+} ui_style_decl;
+
+// A block of declarations that applies when the node has every state in `states` (0: the
+// base block, always).
+typedef struct ui_style_block_desc {
+    uint8_t states;
+    const ui_style_decl *decls;
+    uint32_t count;
+} ui_style_block_desc;
+
+// Defines style `id` (not 0), or redefines it: every node using it is resolved again.
+// UI_ERR_INVALID_ARGUMENT for an unknown property, a kind the property doesn't accept, an
+// out-of-range value, or more than 255 blocks or 65535 declarations in a block.
+ui_result ui_cmd_define_style(ui_cmd_writer *w, uint32_t id, const ui_style_block_desc *blocks,
+                              uint32_t block_count);
+// Removes style `id`; nodes listing it resolve as if it weren't there (until redefined).
+ui_result ui_cmd_destroy_style(ui_cmd_writer *w, uint32_t id);
+// Replaces the node's style list (at most 255 IDs). IDs not defined yet contribute nothing
+// until they are.
+ui_result ui_cmd_set_styles(ui_cmd_writer *w, ui_handle node, const uint32_t *ids,
+                            uint32_t count);
+// Sets per-node overrides, which win over every style. UI_VALUE_UNSET removes one. Writes
+// to the same property replace the earlier override.
+ui_result ui_cmd_set_props(ui_cmd_writer *w, ui_handle node, const ui_style_decl *decls,
+                           uint32_t count);
+// Sets theme token `id` (not 0) to a value: px, percent, number, color, keyword, or another
+// token (resolved when used; a cycle or a missing token makes the declaration that uses it
+// count as absent). UI_VALUE_UNSET removes the token. Every node using it is resolved again.
+ui_result ui_cmd_set_token(ui_cmd_writer *w, uint32_t id, ui_value value);
+// Sets the node's states selected by `mask` to those in `value` (ui_state bits).
+ui_result ui_cmd_set_state(ui_cmd_writer *w, ui_handle node, uint32_t mask, uint32_t value);
 
 // ---- Text ------------------------------------------------------------------------------
 

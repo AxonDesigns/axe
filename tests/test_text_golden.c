@@ -1,22 +1,7 @@
 // Golden images of text rendered headless with the bundled fonts, at scales 1.0, 1.25 and
-// 1.5, under both schedulers. The two schedulers must produce byte-identical images; each
-// must match the stored golden (tests/goldens/*.qoi, generated under lavapipe) within a
-// small tolerance that absorbs sRGB blending differences between driver versions:
-// at most GOLDEN_MAX_BAD of the pixels may differ by more than GOLDEN_CHANNEL_TOL per channel.
-//
-// UI_UPDATE_GOLDENS=1 rewrites the goldens. On a mismatch the actual image, the golden and
-// a diff are written as PNGs next to the test binary.
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
+// 1.5, under both schedulers (tests/golden.h has the rules).
+#include "golden.h"
 
-#include "image/image_codec.h"
-#include "runtime/common.h"
-#include "test.h"
-#include "ui/ui.h"
-
-#define GOLDEN_CHANNEL_TOL 2
-#define GOLDEN_MAX_BAD 0.0005 // fraction of pixels
 #define WIDTH 400u
 #define HEIGHT 150u
 
@@ -172,90 +157,16 @@ static bool render(const golden_case *c, uint32_t scale_120, ui_scheduler_kind s
     return ok;
 }
 
-static void path_for(char *buf, size_t cap, const char *dir, const golden_case *c,
-                     uint32_t scale_120, const char *suffix) {
-    snprintf(buf, cap, "%s/%s@%u%s", dir, c->name, scale_120 * 100 / 120, suffix);
-}
-
-static void write_diff(const ui_rgba_image *a, const ui_rgba_image *b, const char *path) {
-    ui_rgba_image d = {a->width, a->height, malloc((size_t)a->width * a->height * 4)};
-    if (!d.pixels) return;
-    for (size_t i = 0; i < (size_t)a->width * a->height; i++) {
-        int m = 0;
-        for (int k = 0; k < 3; k++) {
-            int v = abs(a->pixels[i * 4 + k] - b->pixels[i * 4 + k]);
-            if (v > m) m = v;
-        }
-        uint8_t v = (uint8_t)(m > GOLDEN_CHANNEL_TOL ? 255 : m * 60);
-        d.pixels[i * 4] = v;
-        d.pixels[i * 4 + 1] = (uint8_t)(m > GOLDEN_CHANNEL_TOL ? 0 : v);
-        d.pixels[i * 4 + 2] = (uint8_t)(m > GOLDEN_CHANNEL_TOL ? 0 : v);
-        d.pixels[i * 4 + 3] = 255;
-    }
-    ui_png_write(&d, path);
-    free(d.pixels);
-}
-
 static void check_case(const golden_case *c, uint32_t scale_120) {
     ui_image single = {0}, threaded = {0};
     bool ok = render(c, scale_120, UI_SCHEDULER_SINGLE, &single) &&
               render(c, scale_120, UI_SCHEDULER_THREADED, &threaded);
     CHECK(ok);
-    if (!ok) goto done;
-    CHECK(single.width == threaded.width && single.height == threaded.height);
-    if (memcmp(single.pixels, threaded.pixels, (size_t)single.stride * single.height)) {
-        fprintf(stderr, "  %s@%u: schedulers differ\n", c->name, scale_120);
-        test_failures++;
+    if (ok) {
+        char name[128];
+        snprintf(name, sizeof name, "%s@%u", c->name, scale_120 * 100 / 120);
+        golden_check(name, &single, &threaded);
     }
-    ui_rgba_image actual = {single.width, single.height, single.pixels};
-    char golden[512], out[512];
-    path_for(golden, sizeof golden, UI_TEST_GOLDENS, c, scale_120, ".qoi");
-    if (ui_env_flag("UI_UPDATE_GOLDENS")) {
-        uint8_t *q;
-        size_t qn;
-        CHECK(ui_qoi_encode(&actual, &q, &qn) == UI_OK);
-        CHECK(ui_file_write(golden, q, qn) == UI_OK);
-        free(q);
-        fprintf(stderr, "  wrote %s\n", golden);
-        goto done;
-    }
-    uint8_t *data;
-    size_t size;
-    ui_rgba_image expected = {0};
-    if (ui_file_read(golden, &data, &size) != UI_OK) {
-        fprintf(stderr, "  missing golden %s (run with UI_UPDATE_GOLDENS=1)\n", golden);
-        test_failures++;
-        goto done;
-    }
-    ui_result dr = ui_qoi_decode(data, size, &expected);
-    free(data);
-    CHECK(dr == UI_OK);
-    if (dr != UI_OK) goto done;
-    bool same_size = expected.width == actual.width && expected.height == actual.height;
-    size_t bad = 0, pixels = (size_t)actual.width * actual.height;
-    for (size_t i = 0; same_size && i < pixels; i++) {
-        for (int k = 0; k < 4; k++) {
-            if (abs(actual.pixels[i * 4 + k] - expected.pixels[i * 4 + k]) > GOLDEN_CHANNEL_TOL) {
-                bad++;
-                break;
-            }
-        }
-    }
-    if (!same_size || (double)bad > GOLDEN_MAX_BAD * (double)pixels) {
-        fprintf(stderr, "  %s@%u: %zu of %zu pixels differ from the golden%s\n", c->name,
-                scale_120, bad, pixels, same_size ? "" : " (size differs)");
-        test_failures++;
-        path_for(out, sizeof out, UI_TEST_OUT, c, scale_120, "-actual.png");
-        ui_png_write(&actual, out);
-        path_for(out, sizeof out, UI_TEST_OUT, c, scale_120, "-expected.png");
-        ui_png_write(&expected, out);
-        if (same_size) {
-            path_for(out, sizeof out, UI_TEST_OUT, c, scale_120, "-diff.png");
-            write_diff(&actual, &expected, out);
-        }
-    }
-    free(expected.pixels);
-done:
     ui_image_free(&single);
     ui_image_free(&threaded);
 }

@@ -62,6 +62,7 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
     // now exist, slots whose generation moved on).
     for (int pass = 0; pass < 2; pass++) {
         ui_scene_apply(&s, buf, UI_WIRE_HEADER_SIZE + body, (uint64_t)pass * 16000000u);
+        ui_scene_resolve(&s, (uint64_t)pass * 16000000u);
         ui_scene_animate(&s, (uint64_t)(pass + 1) * 16000000u);
         for (int i = 0; i < 2; i++) {
             ui_display_list dl = {.surface = surfaces[i], .width = 400, .height = 300,

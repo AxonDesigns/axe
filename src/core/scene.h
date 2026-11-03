@@ -7,26 +7,63 @@
 
 #include "core/display_list.h"
 #include "core/spring.h"
+#include "core/text_op.h"
 #include "runtime/common.h"
 #include "runtime/handle_table.h"
-#include "core/text_op.h"
+#include "style/style.h"
 #include "text/atlas.h"
 #include "text/paragraph.h"
 
 #define UI_NO_SLOT UINT32_MAX
 
-enum { UI_SPRING_RECT = 0, UI_SPRING_RADIUS, UI_SPRING_COLOR, UI_SPRING_COUNT };
+// Animated node properties. The paint springs come in the order of UI_ANIM_* (style.h),
+// one after UI_SPRING_RECT.
+enum {
+    UI_SPRING_RECT = 0,
+    UI_SPRING_COLOR,        // background
+    UI_SPRING_BORDER_COLOR,
+    UI_SPRING_RADIUS,
+    UI_SPRING_OPACITY,
+    UI_SPRING_TEXT_COLOR,
+    UI_SPRING_COUNT,
+};
+static_assert(UI_SPRING_COLOR == 1 + UI_ANIM_BACKGROUND && UI_SPRING_TEXT_COLOR == 1 + UI_ANIM_TEXT_COLOR,
+              "paint springs follow the style transitions");
+
+// A node's springs, allocated the first time one of its properties animates.
+typedef struct ui_node_anim {
+    ui_spring springs[UI_SPRING_COUNT];
+    // start_spring asked for this spring: it starts (or retargets) with these parameters
+    // at the next resolution, whatever transition the styles declare.
+    bool requested[UI_SPRING_COUNT];
+    float requested_params[UI_SPRING_COUNT][2];
+} ui_node_anim;
 
 typedef struct ui_node {
     uint32_t parent;       // node slot, or UI_NO_SLOT when attached to a surface root
     uint32_t root;         // index into ui_scene.roots
     uint32_t first_child, last_child, next_sibling, prev_sibling;
     float rect[4];         // logical px relative to the parent
+    // What is drawn. Each follows its resolved value in `computed`, through a spring while
+    // one runs.
+    float color[4];        // background: linear, straight alpha
+    float border_color[4];
+    float border_width;    // logical px
     float radius;
-    float color[4];        // linear, straight alpha
-    ui_spring springs[UI_SPRING_COUNT];
-    ui_paragraph *text;    // NULL when the node has no text
+    float opacity;
+    float text_color[4];   // the text's default style (spans keep their own colors)
     bool clip;             // text and descendants are clipped to the rect
+    ui_node_anim *anim;
+    ui_paragraph *text;    // NULL when the node has no text
+    // Styles: the node's list, overrides and state, and what they resolve to.
+    uint32_t *styles;
+    ui_style_entry *overrides;
+    uint16_t style_count, override_count, override_capacity;
+    uint8_t state;         // ui_state bits
+    uint8_t jump;          // 1 << UI_SPRING_*: a set_* op set it (it jumps unless transitioned)
+    bool style_dirty;      // resolve at the next ui_scene_resolve
+    bool resolved;         // resolved before: changes may animate from now on
+    ui_computed computed;
 } ui_node;
 
 typedef struct ui_scene_root {
@@ -72,6 +109,8 @@ typedef struct ui_scene_text {
     ui_raster *raster;
 } ui_scene_text;
 
+typedef struct ui_build_level ui_build_level;
+
 typedef struct ui_scene {
     const ui_logger *log;
     ui_handle_table handles;
@@ -79,10 +118,13 @@ typedef struct ui_scene {
     uint32_t node_capacity;
     ui_scene_root roots[UI_MAX_SURFACES];
     ui_scene_stats stats;
+    ui_styles styles;
+    uint32_t *style_dirty;    // slots to resolve (their style_dirty is set)
+    uint32_t style_dirty_count, style_dirty_capacity;
     uint32_t *scratch; // traversal stack
     uint32_t scratch_capacity;
-    float (*clips)[4]; // build: the clip of each ancestor level (x0, y0, x1, y1, physical px)
-    uint32_t clip_capacity;
+    ui_build_level *levels;   // build: one per ancestor level
+    uint32_t level_capacity;
     ui_scene_timer_fn timer_fn;
     void *timer_user;
     ui_scene_font_fn font_fn;
@@ -117,6 +159,11 @@ bool ui_scene_font_path_valid(const uint8_t *payload, const char **path, uint32_
 // prepared or by the text context's generation check).
 void ui_scene_fonts_changed(ui_scene *s);
 
+// Resolves the styles of every node whose list, overrides or state changed, or that uses a
+// style or token that changed. A changed value jumps, or starts its transition at `now_ns`.
+// Call after applying, before animating.
+void ui_scene_resolve(ui_scene *s, uint64_t now_ns);
+
 // Advances every running spring to `now_ns`. Roots with a spring that was running are
 // marked dirty (the settling frame still changes the picture); `animating` is updated to
 // whether one is still running.
@@ -131,7 +178,10 @@ ui_handle ui_scene_handle_of(const ui_scene *s, uint32_t slot);
 ui_scene_root *ui_scene_root_of(ui_scene *s, ui_handle surface);
 
 // Appends the surface's tree to `dl` in paint order (parents before children; a node's
-// background, then its text). Text wraps to the node's width at the list's scale; its
-// glyphs are rasterized into the atlas on first use. `text` may be NULL (no text drawn).
+// background and border, then its text). A node with opacity below 1 draws with its
+// subtree into a layer. Boxes at rest snap to whole physical pixels (origin and size each
+// rounded); a box that moves, or whose ancestor moves, draws where it is. Text wraps to the
+// node's width at the list's scale; its glyphs are rasterized into the atlas on first use.
+// `text` may be NULL (no text drawn).
 ui_result ui_scene_build(ui_scene *s, ui_handle surface, ui_display_list *dl,
                          const ui_scene_text *text);

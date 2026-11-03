@@ -74,6 +74,16 @@ the [op history](#op-history) lists appended fields.
 | 9 | `append_text` | node, `u16 chunk_bytes`, `u16 header_bytes` (12), chunk (padded to 4) | 12 + chunk |
 | 10 | `set_clip` | node, `u32 flags` (bit 0: clip; other bits must be 0) | 12 |
 | 11 | `load_font` | `u32 id`, `u16 path_bytes` (1–4096), `u16 header_bytes` (8), the path in UTF-8 (padded to 4, no NUL) | 8 + path |
+| 12 | `define_style` | `u32 id`, `u16 header_bytes` (8), `u16 block_count`, blocks (see [`docs/styles.md`](styles.md)) | 8 + blocks |
+| 13 | `destroy_style` | `u32 id` | 4 |
+| 14 | `set_styles` | node, `u16 count`, `u16 header_bytes` (12), `u32 ids[count]` | 12 + 4·count |
+| 15 | `set_props` | node, `u16 header_bytes` (12), `u16 entry_count`, entries | 12 + entries |
+| 16 | `set_token` | `u32 id`, one entry (property 0) | 4 + entry |
+| 17 | `set_state` | node, `u32 mask`, `u32 value` | 16 |
+
+`set_color`, `set_corner_radius` and `set_clip` set the node's overrides of the matching
+style properties ([`docs/styles.md`](styles.md), "Older ops"). Styles, tokens, states and
+transitions are described there.
 
 ### Properties for `start_spring`
 
@@ -88,7 +98,8 @@ rate.
 
 - A `start_spring` on a property whose spring is running **retargets it and keeps its
   current position and velocity**.
-- A `set_*` op on a property stops that property's spring.
+- A `set_*` op on a property stops that property's spring, unless the node's styles declare
+  a transition for it, which then animates the change.
 - `count` must equal the property's component count; stiffness must be > 0 and damping ≥ 0.
 
 ### Clipping
@@ -277,7 +288,8 @@ Ops and events change without a version bump as long as each change follows thes
   - only a payload smaller than the original size is a framing error, which rejects the
     buffer.
 - **Variable-length ops carry their header size** (`set_text`, `append_text`,
-  `load_font`), and `set_text` also carries its span size. Readers find the variable data
+  `load_font`, `define_style` and its blocks, `set_styles`, `set_props`), and `set_text` also
+  carries its span size. Style entries carry their size in words. Readers find the variable data
   from these sizes, never from their own idea of the layout. A size of 0 stands for the
   original size: writers from before the size fields existed left those bytes 0. Data
   appended after the variable data is ignored like any trailing field. `start_spring`'s

@@ -6,8 +6,10 @@
 
 struct Globals {
     viewport: vec2<f32>,
-    contrast: f32, // k in c + k c (1 - c) (1 - L)
-    gamma: f32,    // coverage exponent 1/gamma; 1 = off
+    contrast: f32,      // k in c + k c (1 - c) (1 - L)
+    gamma: f32,         // coverage exponent 1/gamma; 1 = off
+    origin: vec2<f32>,  // physical px of the target's top-left (a layer's bounds)
+    _pad: vec2<f32>,
 };
 
 @group(0) @binding(0) var<uniform> globals: Globals;
@@ -28,7 +30,7 @@ struct VsOut {
 @vertex
 fn vs_main(@builtin(vertex_index) vertex: u32, inst: Instance) -> VsOut {
     let corner = vec2<f32>(f32(vertex & 1u), f32(vertex >> 1u));
-    let p = inst.rect.xy + corner * inst.rect.zw;
+    let p = inst.rect.xy + corner * inst.rect.zw - globals.origin;
     var out: VsOut;
     out.position = vec4<f32>(p.x / globals.viewport.x * 2.0 - 1.0,
                              1.0 - p.y / globals.viewport.y * 2.0, 0.0, 1.0);

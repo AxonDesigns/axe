@@ -10,11 +10,16 @@
 
 #define UI_MAX_SURFACES 8u
 
+// A rounded rectangle with an optional border inside its edge, as in CSS: the background
+// covers the whole rect (under the border), the border is drawn over it. A layer's
+// composite quad uses the same record (see ui_dl_layer).
 typedef struct ui_dl_rect {
     float x, y, width, height;
     float radius;
-    float reserved[3];
+    float border_width;
+    float reserved[2];
     float color[4];
+    float border_color[4];
 } ui_dl_rect;
 
 // One glyph quad: a rectangle of whole physical pixels showing the same-sized rectangle of
@@ -29,7 +34,19 @@ typedef struct ui_dl_glyph {
 typedef enum ui_dl_kind {
     UI_DL_RECTS = 0,
     UI_DL_GLYPHS,
+    UI_DL_LAYER_BEGIN, // `first`: the layer; what follows draws into it
+    UI_DL_LAYER_END,   // `page`: the layer; `first`: its composite quad in `rects`
 } ui_dl_kind;
+
+// An opacity group: content between its begin and end batches is drawn into an offscreen
+// texture, which is then composited at `opacity` (CSS group opacity). The bounds are what
+// the content covers, intersected with the clip at the begin batch and with the surface.
+typedef struct ui_dl_layer {
+    int32_t x, y, width, height; // physical px; empty (0 wide or high): draw nothing
+    float opacity;
+    uint32_t parent;             // enclosing layer + 1, or 0 (used while building)
+    float extent[4];             // content bounds while building: x0, y0, x1, y1
+} ui_dl_layer;
 
 // A scissor rectangle in physical pixels. UI_DL_NO_CLIP covers everything.
 typedef struct ui_dl_clip {
@@ -39,7 +56,7 @@ typedef struct ui_dl_clip {
 #define UI_DL_NO_CLIP ((ui_dl_clip){0, 0, INT32_MAX, INT32_MAX})
 
 // Paint order: batches draw in sequence; each covers a contiguous range of rects or of
-// glyphs (all on one atlas page).
+// glyphs (all on one atlas page), or begins or ends a layer.
 typedef struct ui_dl_batch {
     uint16_t kind;  // ui_dl_kind
     uint16_t page;  // glyph batches: atlas page
@@ -67,10 +84,18 @@ typedef struct ui_display_list {
     ui_dl_glyph *glyphs;
     uint32_t batch_count, batch_capacity;
     ui_dl_batch *batches;
+    uint32_t layer_count, layer_capacity;
+    ui_dl_layer *layers;
     ui_dl_clip clip;      // applies to what is pushed next (a new clip starts a new batch)
+    uint32_t open_layer;  // the innermost layer being built + 1, or 0
 } ui_display_list;
 
 void ui_display_list_reset(ui_display_list *dl);
 ui_result ui_display_list_push_rect(ui_display_list *dl, const ui_dl_rect *rect);
 ui_result ui_display_list_push_glyph(ui_display_list *dl, uint16_t page, const ui_dl_glyph *glyph);
+// Opens a layer composited at `opacity`; pushes until the matching end draw into it.
+ui_result ui_display_list_begin_layer(ui_display_list *dl, float opacity);
+// Closes the innermost layer: fixes its bounds and adds its composite quad, drawn with the
+// clip that was current when it began.
+ui_result ui_display_list_end_layer(ui_display_list *dl);
 void ui_display_list_free(ui_display_list *dl);
