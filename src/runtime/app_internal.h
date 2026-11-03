@@ -5,6 +5,7 @@
 #include "hooks/hooks_internal.h"
 #include "platform/platform.h"
 #include "render/render.h"
+#include "runtime/jobs.h"
 #include "runtime/logic_actor.h"
 #include "ui/app.h"
 
@@ -23,6 +24,9 @@ typedef struct ui_scheduler_ops {
     // Lets the actors process messages just queued by the main thread, then returns when
     // `done` is true.
     void (*wait_until)(ui_app *app, _Atomic bool *done);
+    // Takes the command buffers queued so far and waits until they are prepared, so the
+    // next frame applies them (ui_app_frame and ui_app_step_core are deterministic).
+    void (*wait_prepared)(ui_app *app);
 } ui_scheduler_ops;
 
 extern const ui_scheduler_ops ui_scheduler_threaded;
@@ -45,6 +49,7 @@ struct ui_app {
     const ui_scheduler_ops *sched;
     ui_platform *platform;
     ui_signal progress;  // notified on messages to the core and on capture completion
+    ui_jobs *jobs;       // worker threads for any module (created before the core)
     ui_core core;
     ui_logic logic;
     ui_render *render;

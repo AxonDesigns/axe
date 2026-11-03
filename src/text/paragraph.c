@@ -41,12 +41,65 @@ void ui_text_context_free(ui_text_context *c) {
     memset(c, 0, sizeof *c);
 }
 
+static void *dup_bytes(const void *src, size_t n) {
+    void *d = malloc(n ? n : 1);
+    if (d && n) memcpy(d, src, n);
+    return d;
+}
+
+static void free_source(ui_text_source *s) {
+    free(s->text);
+    free(s->spans);
+    free(s->families);
+    free(s->family_offsets);
+    free(s->ellipsis);
+    free(s);
+}
+
+ui_result ui_text_source_create(const ui_paragraph_desc *d, ui_text_source **out) {
+    ui_text_source *s = calloc(1, sizeof *s);
+    if (!s) return UI_ERR_OUT_OF_MEMORY;
+    uint32_t fam_bytes = d->family_count ? d->family_offsets[d->family_count] : 0;
+    s->text = dup_bytes(d->text, d->len);
+    s->spans = dup_bytes(d->spans, d->span_count * sizeof *s->spans);
+    s->families = dup_bytes(d->families, fam_bytes);
+    s->family_offsets = dup_bytes(d->family_offsets,
+                                  d->family_count ? (d->family_count + 1) * sizeof(uint32_t) : 0);
+    s->ellipsis = dup_bytes(d->ellipsis, d->ellipsis_len);
+    if (!s->text || !s->spans || !s->families || !s->family_offsets || !s->ellipsis) {
+        free_source(s);
+        return UI_ERR_OUT_OF_MEMORY;
+    }
+    atomic_init(&s->refs, 1u);
+    s->len = d->len;
+    s->base = d->base;
+    s->span_count = d->span_count;
+    s->family_count = d->family_count;
+    s->dir = d->dir;
+    s->max_lines = d->max_lines;
+    s->ellipsis_len = d->ellipsis_len;
+    s->align = d->align;
+    s->line_height = d->line_height > 0 && isfinite(d->line_height) ? d->line_height : 0;
+    *out = s;
+    return UI_OK;
+}
+
+ui_text_source *ui_text_source_retain(ui_text_source *s) {
+    atomic_fetch_add_explicit(&s->refs, 1u, memory_order_relaxed);
+    return s;
+}
+
+void ui_text_source_release(ui_text_source *s) {
+    if (s && atomic_fetch_sub_explicit(&s->refs, 1u, memory_order_acq_rel) == 1) free_source(s);
+}
+
+ui_text_input ui_text_source_input(const ui_text_source *s) {
+    return (ui_text_input){s->text, s->len, s->base, s->spans, s->span_count, s->families,
+                           s->family_offsets, s->family_count, s->dir};
+}
+
 void ui_paragraph_free(ui_paragraph *p) {
-    free(p->text);
-    free(p->spans);
-    free(p->families);
-    free(p->family_offsets);
-    free(p->ellipsis);
+    ui_text_source_release(p->source);
     ui_shaped_paragraph_free(&p->shaped);
     ui_paragraph_layout_free(&p->layout);
     free(p->clusters);
@@ -54,51 +107,56 @@ void ui_paragraph_free(ui_paragraph *p) {
     memset(p, 0, sizeof *p);
 }
 
-static void *dup_bytes(const void *src, size_t n) {
-    void *d = malloc(n ? n : 1);
-    if (d && n) memcpy(d, src, n);
-    return d;
-}
-
-ui_result ui_paragraph_set(ui_paragraph *p, const ui_paragraph_desc *d) {
-    uint8_t *text = dup_bytes(d->text, d->len);
-    ui_text_span *spans = dup_bytes(d->spans, d->span_count * sizeof *spans);
-    uint32_t fam_bytes = d->family_count ? d->family_offsets[d->family_count] : 0;
-    char *families = dup_bytes(d->families, fam_bytes);
-    uint32_t *offsets = dup_bytes(d->family_offsets,
-                                  d->family_count ? (d->family_count + 1) * sizeof *offsets : 0);
-    uint8_t *ellipsis = dup_bytes(d->ellipsis, d->ellipsis_len);
-    if (!text || !spans || !families || !offsets || !ellipsis) {
-        free(text);
-        free(spans);
-        free(families);
-        free(offsets);
-        free(ellipsis);
-        return UI_ERR_OUT_OF_MEMORY;
-    }
-    free(p->text);
-    free(p->spans);
-    free(p->families);
-    free(p->family_offsets);
-    free(p->ellipsis);
-    p->text = text;
-    p->len = d->len;
-    p->base = d->base;
-    p->spans = spans;
-    p->span_count = d->span_count;
-    p->families = families;
-    p->family_offsets = offsets;
-    p->family_count = d->family_count;
-    p->dir = d->dir;
-    p->max_lines = d->max_lines;
-    p->ellipsis = ellipsis;
-    p->ellipsis_len = d->ellipsis_len;
-    p->align = d->align;
-    p->line_height = d->line_height > 0 && isfinite(d->line_height) ? d->line_height : 0;
+void ui_paragraph_set_source(ui_paragraph *p, ui_text_source *s) {
+    ui_text_source_retain(s);
+    ui_text_source_release(p->source);
+    p->source = s;
+    p->text = s->text;
+    p->len = s->len;
+    p->base = s->base;
+    p->spans = s->spans;
+    p->span_count = s->span_count;
+    p->families = s->families;
+    p->family_offsets = s->family_offsets;
+    p->family_count = s->family_count;
+    p->dir = s->dir;
+    p->ellipsis = s->ellipsis;
+    p->ellipsis_len = s->ellipsis_len;
+    p->max_lines = s->max_lines;
+    p->align = s->align;
+    p->line_height = s->line_height;
     p->shaped_valid = false;
     p->layout_valid = false;
     p->hits_valid = false;
+}
+
+ui_result ui_paragraph_set(ui_paragraph *p, const ui_paragraph_desc *d) {
+    ui_text_source *s;
+    ui_result res = ui_text_source_create(d, &s);
+    if (res != UI_OK) return res;
+    ui_paragraph_set_source(p, s);
+    ui_text_source_release(s);
     return UI_OK;
+}
+
+void ui_paragraph_adopt_shaped(ui_paragraph *p, ui_shaped_paragraph *shaped) {
+    ui_shaped_paragraph_free(&p->shaped);
+    p->shaped = *shaped;
+    memset(shaped, 0, sizeof *shaped);
+    p->shaped_valid = true;
+    p->layout_valid = false;
+    p->hits_valid = false;
+}
+
+void ui_paragraph_set_params(ui_paragraph *p, uint32_t max_lines, ui_align align,
+                             float line_height) {
+    if (!(line_height > 0) || !isfinite(line_height)) line_height = 0;
+    if (p->max_lines == max_lines && p->align == align && p->line_height == line_height) return;
+    p->max_lines = max_lines;
+    p->align = align;
+    p->line_height = line_height;
+    p->layout_valid = false;
+    p->hits_valid = false;
 }
 
 static ui_text_input input_of(const ui_paragraph *p) {
@@ -249,7 +307,8 @@ static ui_result add_ellipsis(builder *b, uint32_t r, uint32_t at, uint8_t para_
     ui_paragraph *p = b->para;
     ui_text_context *c = b->ctx;
     const ui_shaped_run *run = &p->shaped.runs[r];
-    ui_font *font = ui_font_registry_font_by_key(c->fonts, run->font);
+    ui_font *font = run->sized_font;
+    if (!font) font = ui_font_registry_font_by_key(c->fonts, run->font);
     if (!font) return UI_ERR_OUT_OF_MEMORY;
     const uint8_t *text = p->ellipsis;
     uint32_t len = p->ellipsis_len;
@@ -358,7 +417,8 @@ static ui_result build_line(builder *b, uint32_t lcs, uint32_t lce, uint32_t met
         desc = fmaxf(desc, srun->descent);
         gap = fmaxf(gap, srun->line_gap);
         ui_layout_run *lr = &o->runs[o->run_count++];
-        *lr = (ui_layout_run){.font = srun->font, .start = pc->start, .end = pc->end,
+        *lr = (ui_layout_run){.font = srun->font, .sized_font = srun->sized_font,
+                              .start = pc->start, .end = pc->end,
                               .level = pc->level, .ellipsis = pc->ellipsis,
                               .x = pen, .glyph_start = pc->glyph_start,
                               .glyph_count = pc->glyph_count};
@@ -487,22 +547,9 @@ static ui_result layout(ui_paragraph *p, ui_text_context *c, float max_w) {
 
     builder b = {p, c, input_of(p), o, c->pieces, 0, false, 0, 0, 0};
     float top = 0;
-    // The base style's font: metrics for empty text and for fixed line boxes.
-    ui_font_metrics base = {0};
-    if (n == 0 || p->line_height > 0) {
-        ui_text_style *st = &p->base;
-        const char *fam;
-        uint32_t fam_len;
-        ui_text_input in = input_of(p);
-        ui_text_input_family(&in, st, &fam, &fam_len);
-        uint32_t face = ui_font_registry_match(c->fonts, fam, fam_len, st->weight,
-                                               (ui_font_style)st->style);
-        if (face == UI_NO_FACE) return UI_ERR_WRONG_STATE;
-        ui_font *font = ui_font_registry_font(c->fonts, face, st->size * sp->scale, st->weight,
-                                              (ui_font_style)st->style, NULL);
-        if (!font) return UI_ERR_OUT_OF_MEMORY;
-        ui_font_get_metrics(font, &base);
-    }
+    // The base style's font (matched when shaping): metrics for empty text and for fixed
+    // line boxes.
+    ui_font_metrics base = sp->base_metrics;
     if (p->line_height > 0) {
         b.fixed = true;
         b.fixed_height = fmaxf(roundf(p->line_height * p->base.size * sp->scale), 1);
@@ -597,13 +644,15 @@ const ui_paragraph_layout *ui_paragraph_layout_get(ui_paragraph *p, ui_text_cont
                                                    ui_result *result) {
     if (!(max_width >= 0)) max_width = INFINITY;
     *result = UI_OK;
-    if (!p->shaped_valid || p->shaped.scale != scale) {
+    if (!p->shaped_valid || p->shaped.scale != scale || p->shaped.generation < c->generation) {
         ui_text_input in = input_of(p);
+        p->shaped_valid = false;
+        p->layout_valid = false;
         *result = ui_shape_paragraph(&c->shaper, c->fonts, &in, scale, &p->shaped);
         if (*result != UI_OK) return NULL;
         p->shaped_valid = true;
-        p->layout_valid = false;
         p->shape_count++;
+        c->shapes++;
     }
     if (!p->layout_valid || p->layout.max_width != max_width) {
         *result = layout(p, c, max_width);

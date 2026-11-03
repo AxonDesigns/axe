@@ -36,6 +36,14 @@ ui_result ui_app_create(const ui_app_desc *desc, ui_app **out) {
         return r;
     }
 
+    // The single scheduler keeps everything on the main thread: jobs run inline.
+    ui_jobs_desc jobs_desc = {
+        .log = &app->log,
+        .threads = app->sched == &ui_scheduler_single ? 0 : ui_jobs_default_threads(desc->worker_threads),
+    };
+    r = ui_jobs_create(&jobs_desc, &app->jobs);
+    if (r != UI_OK) goto fail_jobs;
+
     // The core and its listener must exist before the platform, which calls back into it.
     ui_core_desc core_desc = {
         .log = &app->log,
@@ -45,6 +53,7 @@ ui_result ui_app_create(const ui_app_desc *desc, ui_app **out) {
         .start_paused = desc->start_paused,
         .progress = &app->progress,
         .text = &desc->text,
+        .jobs = app->jobs,
     };
     r = ui_core_init(&app->core, &core_desc);
     if (r != UI_OK) goto fail_core;
@@ -100,8 +109,12 @@ fail_render:
 fail_logic:
     app->platform->vt->destroy(app->platform);
 fail_platform:
+    ui_jobs_destroy(app->jobs); // before the core whose buffers its jobs work on
+    app->jobs = NULL;
     ui_core_destroy(&app->core);
 fail_core:
+    ui_jobs_destroy(app->jobs);
+fail_jobs:
     ui_signal_destroy(&app->progress);
     free(app);
     return r;
@@ -115,6 +128,7 @@ void ui_app_destroy(ui_app *app) {
     ui_core_remove_surfaces(&app->core);
     ui_render_destroy(app->render);
     ui_logic_destroy(&app->logic);
+    ui_jobs_destroy(app->jobs); // before the core whose buffers its jobs work on
     ui_core_destroy(&app->core);
     app->platform->vt->destroy(app->platform);
     ui_signal_destroy(&app->progress);
@@ -213,6 +227,7 @@ void ui_app_get_stats(const ui_app *app, ui_app_stats *out) { *out = app->core.s
 
 ui_result ui_app_step_core(ui_app *app) {
     if (app->running) return UI_ERR_WRONG_STATE;
+    app->sched->wait_prepared(app);
     ui_core_force_frame(&app->core);
     ui_core_step(&app->core);
     return app->core.failure;

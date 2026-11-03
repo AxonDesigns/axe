@@ -46,6 +46,7 @@ typedef struct ui_shaped_run {
     uint32_t start, end;             // byte range
     uint32_t glyph_start, glyph_count; // into ui_shaped_paragraph.glyphs, visual order
     ui_font_key font;
+    ui_font *sized_font;             // the instance `font` names (owned by the registry)
     uint32_t script;                 // ISO 15924 tag
     uint32_t style;                  // shaping style: 0 = base, else span index + 1
     uint8_t level;                   // bidi embedding level (odd = RTL)
@@ -54,6 +55,8 @@ typedef struct ui_shaped_run {
 
 typedef struct ui_shaped_paragraph {
     float scale;
+    uint64_t generation;   // font registry generation the paragraph was shaped with
+    ui_font_metrics base_metrics; // the base style's primary font (empty text, fixed lines)
     // Per code point; offsets has cp_count + 1 entries (the last is the text length).
     uint32_t cp_count;
     uint32_t *cps;

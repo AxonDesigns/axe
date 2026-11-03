@@ -59,6 +59,9 @@ struct ui_atlas {
     uint32_t pixel_count, pixel_capacity;
     lru_entry *lru; // scratch for pressure eviction
     uint32_t lru_capacity;
+    ui_glyph_cache *cache; // prepared bitmaps (may be NULL)
+    uint8_t *copy;         // a bitmap copied out of the cache
+    uint32_t copy_capacity;
     ui_atlas_stats stats;
 };
 
@@ -95,6 +98,7 @@ void ui_atlas_destroy(ui_atlas *a) {
     free(a->ops);
     free(a->writes);
     free(a->pixels);
+    free(a->copy);
     free(a);
 }
 
@@ -343,6 +347,31 @@ void ui_atlas_begin_frame(ui_atlas *a, uint64_t epoch, uint64_t protect_epoch) {
     a->protect_epoch = protect_epoch;
 }
 
+void ui_atlas_set_glyph_cache(ui_atlas *a, ui_glyph_cache *cache) { a->cache = cache; }
+
+typedef struct cache_copy {
+    ui_atlas *a;
+    ui_bitmap *out;
+    ui_result result; // UI_ERR_UNSUPPORTED: the glyph could not be rasterized
+} cache_copy;
+
+// Copies a cached bitmap out, since the cache's lock is held only during the call.
+static void copy_bitmap(void *user, const ui_bitmap *bm) {
+    cache_copy *cc = user;
+    if (!bm) {
+        cc->result = UI_ERR_UNSUPPORTED;
+        return;
+    }
+    uint32_t n = bm->width * bm->height;
+    if (ui_grow((void **)&cc->a->copy, &cc->a->copy_capacity, n ? n : 1, 1) != UI_OK) {
+        cc->result = UI_ERR_OUT_OF_MEMORY;
+        return;
+    }
+    if (n) memcpy(cc->a->copy, bm->pixels, n);
+    *cc->out = *bm;
+    cc->out->pixels = cc->a->copy;
+}
+
 const ui_atlas_glyph *ui_atlas_get(ui_atlas *a, ui_raster *raster, ui_font *font,
                                    ui_glyph_key key) {
     bool found;
@@ -357,9 +386,17 @@ const ui_atlas_glyph *ui_atlas_get(ui_atlas *a, ui_raster *raster, ui_font *font
         e = probe(a, key, &found);
     }
     ui_bitmap bm;
-    float dx = (float)key.bin / UI_ATLAS_SUBPIXEL_BINS;
-    ui_result res = ui_raster_glyph(raster, font, key.glyph, dx, &bm);
-    if (res == UI_ERR_OUT_OF_MEMORY) return NULL;
+    ui_result res;
+    cache_copy cc = {a, &bm, UI_OK};
+    if (a->cache && ui_glyph_cache_with(a->cache, key, copy_bitmap, &cc)) {
+        res = cc.result;
+        if (res == UI_ERR_OUT_OF_MEMORY) return NULL;
+        a->stats.from_cache++;
+    } else {
+        float dx = (float)key.bin / UI_ATLAS_SUBPIXEL_BINS;
+        res = ui_raster_glyph(raster, font, key.glyph, dx, &bm);
+        if (res == UI_ERR_OUT_OF_MEMORY) return NULL;
+    }
     a->stats.rasterized++;
     entry fresh = {.key = key, .last_used = a->epoch, .state = SLOT_LIVE};
     uint32_t limit = a->page_size; // a glyph may fill a page; larger ones need bigger pages

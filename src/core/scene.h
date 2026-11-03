@@ -9,6 +9,7 @@
 #include "core/spring.h"
 #include "runtime/common.h"
 #include "runtime/handle_table.h"
+#include "core/text_op.h"
 #include "text/atlas.h"
 #include "text/paragraph.h"
 
@@ -33,12 +34,31 @@ typedef struct ui_scene_root {
     uint32_t first_child, last_child;
     bool dirty;            // something under this root changed since the core last drew it
     bool animating;        // a spring under this root is still running
+    float scale;           // the surface's scale (the core keeps it current); text shapes at it
 } ui_scene_root;
 
 // Receives set_timer ops, which belong to the core rather than to any node.
 typedef void (*ui_scene_timer_fn)(void *user, uint32_t id, uint64_t deadline_ns);
-// Receives load_font ops (the path is not NUL-terminated).
-typedef void (*ui_scene_font_fn)(void *user, uint32_t id, const char *path, uint32_t len);
+// Receives load_font ops with a valid path (not NUL-terminated); `offset` is the op's byte
+// offset in its buffer, which identifies what was prepared for it.
+typedef void (*ui_scene_font_fn)(void *user, uint32_t id, const char *path, uint32_t len,
+                                 uint32_t offset);
+
+// A set_text decoded and shaped before its buffer is applied (by the worker threads that
+// prepare buffers). Applying adopts the source and the shaping at the node's scale.
+typedef struct ui_scene_text_prep {
+    uint32_t offset;       // byte offset of the set_text op in its buffer
+    bool decoded;          // false: preparation didn't run; the op is decoded when applied
+    ui_text_op op;         // decoded; its source reference is consumed when applied
+    float scales[UI_MAX_SURFACES];
+    ui_shaped_paragraph shaped[UI_MAX_SURFACES]; // per scale; moved out when adopted
+    uint32_t scale_count;
+} ui_scene_text_prep;
+
+typedef struct ui_scene_prepared {
+    ui_scene_text_prep *texts; // in buffer order
+    uint32_t text_count;
+} ui_scene_prepared;
 
 typedef struct ui_scene_stats {
     uint64_t applied, dropped, rejected;
@@ -76,19 +96,36 @@ ui_result ui_scene_add_root(ui_scene *s, ui_handle surface);
 // Destroys every node under the surface.
 void ui_scene_remove_root(ui_scene *s, ui_handle surface);
 
+// Checks a command buffer's framing without applying anything: UI_ERR_MALFORMED when the
+// buffer would be rejected.
+ui_result ui_scene_validate(const uint8_t *data, size_t size);
+
 // Validates the whole buffer, then applies every op in order at animation time `now_ns`.
 // A malformed buffer is rejected entirely (UI_ERR_MALFORMED) and nothing is applied, so a
 // flush is all-or-nothing. Ops on stale handles are dropped individually and reported in
 // debug builds. Every applied node op marks its root dirty; set_timer goes to timer_fn.
 ui_result ui_scene_apply(ui_scene *s, const uint8_t *data, size_t size, uint64_t now_ns);
+// The same, using what was prepared for the buffer's set_text ops (NULL: nothing).
+ui_result ui_scene_apply_prepared(ui_scene *s, const uint8_t *data, size_t size, uint64_t now_ns,
+                                  const ui_scene_prepared *prep);
 
-// Marks every paragraph for reshaping and every root dirty (the fonts changed).
+// Checks a load_font payload's path: non-empty, at most UI_FONT_PATH_MAX bytes, no NUL,
+// valid UTF-8.
+bool ui_scene_font_path_valid(const uint8_t *payload, const char **path, uint32_t *len);
+
+// Marks every root with text dirty (the fonts changed: text is shaped again, from what was
+// prepared or by the text context's generation check).
 void ui_scene_fonts_changed(ui_scene *s);
 
 // Advances every running spring to `now_ns`. Roots with a spring that was running are
 // marked dirty (the settling frame still changes the picture); `animating` is updated to
 // whether one is still running.
 void ui_scene_animate(ui_scene *s, uint64_t now_ns);
+
+// The live node a handle names, or NULL.
+ui_node *ui_scene_node(ui_scene *s, ui_handle h);
+// The handle of the live node in `slot`.
+ui_handle ui_scene_handle_of(const ui_scene *s, uint32_t slot);
 
 // The root for a surface, or NULL. Callers read and clear `dirty`.
 ui_scene_root *ui_scene_root_of(ui_scene *s, ui_handle surface);

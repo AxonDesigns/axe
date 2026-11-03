@@ -90,7 +90,18 @@ static ui_result run(ui_app *app) {
     return app->core.failure;
 }
 
+static void wait_prepared(ui_app *app) {
+    for (;;) {
+        uint64_t seen = ui_signal_seq(&app->progress);
+        ui_core_receive(&app->core); // workers notify `progress` when a buffer is prepared
+        if (!ui_core_preparing(&app->core) || app->core.quit_requested) break;
+        ui_signal_wait(&app->progress, seen, 0);
+    }
+}
+
 static ui_result frame(ui_app *app) {
+    // Buffers queued before the frame apply in it, as under the single scheduler.
+    wait_prepared(app);
     ui_core_force_frame(&app->core);
     ui_core_step(&app->core);
     // Wait for render to finish the frame and logic to handle its events. Every message to
@@ -132,4 +143,5 @@ const ui_scheduler_ops ui_scheduler_threaded = {
     .frame = frame,
     .frame_without_logic = frame_without_logic,
     .wait_until = wait_until,
+    .wait_prepared = wait_prepared,
 };

@@ -32,7 +32,8 @@ static void on_timer(void *user, uint32_t id, uint64_t deadline_ns) {
     c->deadline = deadline_ns;
 }
 
-static void on_font(void *user, uint32_t id, const char *path, uint32_t len) {
+static void on_font(void *user, uint32_t id, const char *path, uint32_t len, uint32_t offset) {
+    (void)offset;
     captured *c = user;
     c->font_id = id;
     c->font_len = len < sizeof c->font_path ? len : 0;

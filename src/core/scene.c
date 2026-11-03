@@ -3,6 +3,7 @@
 #include <math.h>
 #include <string.h>
 
+#include "core/color.h"
 #include "unicode/utf8.h"
 #include "wire/wire.h"
 
@@ -10,10 +11,6 @@
 
 // Settle thresholds per property, in the property's units.
 static const double spring_epsilon[UI_SPRING_COUNT] = {0.01, 0.01, 1e-4};
-
-static float srgb_to_linear(float c) {
-    return c <= 0.04045f ? c / 12.92f : powf((c + 0.055f) / 1.055f, 2.4f);
-}
 
 void ui_scene_init(ui_scene *s, const ui_logger *log) {
     memset(s, 0, sizeof *s);
@@ -50,7 +47,7 @@ static ui_scene_root *find_root(ui_scene *s, ui_handle surface) {
 ui_result ui_scene_add_root(ui_scene *s, ui_handle surface) {
     for (uint32_t i = 0; i < UI_MAX_SURFACES; i++) {
         if (ui_handle_is_null(s->roots[i].surface)) {
-            s->roots[i] = (ui_scene_root){surface, UI_NO_SLOT, UI_NO_SLOT, false, false};
+            s->roots[i] = (ui_scene_root){surface, UI_NO_SLOT, UI_NO_SLOT, false, false, 1.f};
             return UI_OK;
         }
     }
@@ -122,7 +119,7 @@ static bool finite_n(const float *v, uint32_t n) {
 // Checks the framing of every op without applying anything. A known op's payload must hold
 // at least its original fields and, for variable-length ops, the data its counts describe;
 // bytes past that come from a newer writer and are ignored.
-static ui_result validate(const uint8_t *data, size_t size) {
+ui_result ui_scene_validate(const uint8_t *data, size_t size) {
     ui_wire_reader r;
     ui_result res = ui_wire_reader_init(&r, UI_WIRE_MAGIC_CMD, data, size);
     if (res != UI_OK) return res;
@@ -232,23 +229,31 @@ static bool apply_create(ui_scene *s, const uint8_t *p) {
 
 static bool apply_node_op(ui_scene *s, const ui_wire_op *op, uint64_t now_ns);
 
+bool ui_scene_font_path_valid(const uint8_t *payload, const char **path, uint32_t *len) {
+    *len = ui_wire_get_u16(payload + 4);
+    *path = (const char *)payload + ui_wire_load_font_header(payload);
+    return *len && *len <= UI_FONT_PATH_MAX && !memchr(*path, 0, *len) &&
+           ui_utf8_valid((const uint8_t *)*path, *len);
+}
+
+static bool apply_load_font(ui_scene *s, const ui_wire_op *op, uint32_t offset) {
+    const char *path;
+    uint32_t len;
+    if (!ui_scene_font_path_valid(op->payload, &path, &len)) {
+        s->stats.dropped++;
+        UI_DEBUG_REPORT(s->log, MODULE, "dropped load_font %u: bad path",
+                        ui_wire_get_u32(op->payload));
+        return false;
+    }
+    if (s->font_fn) s->font_fn(s->font_user, ui_wire_get_u32(op->payload), path, len, offset);
+    return true;
+}
+
 static bool apply_op(ui_scene *s, const ui_wire_op *op, uint64_t now_ns) {
     const uint8_t *p = op->payload;
     if (op->opcode == UI_OP_CREATE_NODE) return apply_create(s, p);
     if (op->opcode == UI_OP_SET_TIMER) {
         if (s->timer_fn) s->timer_fn(s->timer_user, ui_wire_get_u32(p), ui_wire_get_u64(p + 8));
-        return true;
-    }
-    if (op->opcode == UI_OP_LOAD_FONT) {
-        uint32_t len = ui_wire_get_u16(p + 4);
-        const char *path = (const char *)p + ui_wire_load_font_header(p);
-        if (!len || len > UI_FONT_PATH_MAX || memchr(path, 0, len) ||
-            !ui_utf8_valid((const uint8_t *)path, len)) {
-            s->stats.dropped++;
-            UI_DEBUG_REPORT(s->log, MODULE, "dropped load_font %u: bad path", ui_wire_get_u32(p));
-            return false;
-        }
-        if (s->font_fn) s->font_fn(s->font_user, ui_wire_get_u32(p), path, len);
         return true;
     }
     // An unknown op comes from a newer writer and may be any size, even shorter than a
@@ -305,8 +310,7 @@ static bool apply_node_op(ui_scene *s, const ui_wire_op *op, uint64_t now_ns) {
         if (!n) return drop(s, "set_color", h);
         for (int i = 0; i < 4; i++) v[i] = ui_wire_get_f32(p + 8 + 4 * i);
         if (!finite_n(v, 4)) return drop(s, "set_color (value)", h);
-        for (int i = 0; i < 3; i++) n->color[i] = srgb_to_linear(fminf(fmaxf(v[i], 0.f), 1.f));
-        n->color[3] = fminf(fmaxf(v[3], 0.f), 1.f);
+        ui_color_from_wire(v, n->color);
         n->springs[UI_SPRING_COLOR].active = false;
         return true;
     case UI_OP_SET_CLIP: {
@@ -340,8 +344,7 @@ static bool apply_node_op(ui_scene *s, const ui_wire_op *op, uint64_t now_ns) {
         case UI_PROP_COLOR:
             spring = &n->springs[UI_SPRING_COLOR];
             current = n->color;
-            for (int i = 0; i < 3; i++) v[i] = srgb_to_linear(fminf(fmaxf(v[i], 0.f), 1.f));
-            v[3] = fminf(fmaxf(v[3], 0.f), 1.f);
+            ui_color_from_wire(v, v);
             break;
         default: return drop(s, "start_spring (property)", h);
         }
@@ -357,207 +360,50 @@ static bool apply_node_op(ui_scene *s, const ui_wire_op *op, uint64_t now_ns) {
 
 // ---- set_text ----------------------------------------------------------------------------
 
-static_assert((int)UI_TEXT_ALIGN_START == (int)UI_ALIGN_START &&
-                  (int)UI_TEXT_ALIGN_JUSTIFY == (int)UI_ALIGN_JUSTIFY &&
-                  (int)UI_TEXT_ALIGN_CENTER == (int)UI_ALIGN_CENTER,
-              "wire and layout alignment values match");
-
-static bool read_style(const uint8_t *p, uint32_t family_count, ui_text_style *out,
-                       uint32_t *start, uint32_t *end) {
-    *start = ui_wire_get_u32(p);
-    *end = ui_wire_get_u32(p + 4);
-    uint16_t family = ui_wire_get_u16(p + 8), weight = ui_wire_get_u16(p + 10);
-    uint8_t slant = p[12];
-    uint16_t language = ui_wire_get_u16(p + 14); // string index + 1; 0 = none
-    float size = ui_wire_get_f32(p + 16), c[4];
-    for (int i = 0; i < 4; i++) c[i] = ui_wire_get_f32(p + 20 + 4 * i);
-    if ((family != UI_TEXT_FAMILY_DEFAULT && family >= family_count) || weight < 1 ||
-        weight > 1000 || slant > UI_TEXT_OBLIQUE || !isfinite(size) || size <= 0 ||
-        size > 4096 || !finite_n(c, 4) || language > family_count)
-        return false;
-    *out = (ui_text_style){.family = family, .weight = weight, .style = slant, .size = size,
-                           .language = language};
-    for (int i = 0; i < 3; i++) out->color[i] = srgb_to_linear(fminf(fmaxf(c[i], 0.f), 1.f));
-    out->color[3] = fminf(fmaxf(c[3], 0.f), 1.f);
-    return true;
-}
-
-// Maps byte offsets of the received text to the sanitized text. Offsets inside a sequence
-// (valid or replaced) snap to its start.
-static void map_offsets(const uint8_t *in, uint32_t len, uint32_t *map) {
-    uint32_t i = 0, out = 0;
-    while (i < len) {
-        uint32_t n;
-        bool bad = ui_utf8_decode(in + i, len - i, &n) < 0;
-        for (uint32_t k = 0; k < n; k++) map[i + k] = out;
-        out += bad ? 3 : n;
-        i += n;
-    }
-    map[len] = out;
-}
-
-typedef struct text_parts {
-    uint8_t *text;      // assembled from set_text and its append_text continuations
-    uint8_t *clean;     // sanitized
-    ui_text_span *spans;
-    char *names;
-    uint32_t *name_offsets;
-    uint32_t *map;
-} text_parts;
-
-static void free_parts(text_parts *t) {
-    free(t->text);
-    free(t->clean);
-    free(t->spans);
-    free(t->names);
-    free(t->name_offsets);
-    free(t->map);
-}
-
-// Applies one set_text, consuming the append_text ops that continue it from `r`. Every
-// check that fails drops the op (and its continuations) without touching the node.
-static bool apply_set_text(ui_scene *s, const ui_wire_op *op, ui_wire_reader *r) {
-    // Fields past the header an older writer sent read as 0: line height from the fonts,
-    // start alignment.
-    uint32_t header = ui_wire_set_text_header(op->payload);
-    uint32_t stride = ui_wire_set_text_span(op->payload);
-    uint8_t p[UI_WIRE_SIZE_SET_TEXT_HEADER];
-    ui_wire_read_fields(p, sizeof p, op->payload, header);
-    ui_handle h = ui_wire_get_handle(p);
-    uint32_t total = ui_wire_get_u32(p + 8), chunk = ui_wire_get_u16(p + 12);
-    uint32_t span_count = ui_wire_get_u16(p + 16), family_count = ui_wire_get_u16(p + 18);
-    uint32_t fam_bytes = ui_wire_get_u16(p + 20), ell_len = ui_wire_get_u16(p + 22);
-    uint32_t max_lines = ui_wire_get_u16(p + 24);
-    uint8_t dir = p[26], flags = p[27];
-    float line_height = ui_wire_get_f32(p + 64);
-    uint8_t align = p[68];
-    const uint8_t *spans_p = op->payload + header;
-    const uint8_t *fam_p = spans_p + span_count * stride;
-    const uint8_t *ell_p = fam_p + fam_bytes;
-    const uint8_t *chunk_p = ell_p + ui_wire_pad4(ell_len);
-
-    text_parts t = {0};
-    bool ok = total <= UI_TEXT_MAX_BYTES && chunk <= total;
-    if (ok) {
-        t.text = malloc(total ? total : 1);
-        ok = t.text != NULL;
-    }
-    uint32_t have = 0;
-    if (ok) {
-        memcpy(t.text, chunk_p, chunk);
-        have = chunk;
-        while (have < total) {
-            ui_wire_reader look = *r;
-            ui_wire_op next;
-            if (ui_wire_reader_next(&look, &next) != UI_OK || next.opcode != UI_OP_APPEND_TEXT ||
-                !ui_handle_eq(ui_wire_get_handle(next.payload), h))
-                break;
-            uint32_t n = ui_wire_get_u16(next.payload + 8);
-            if (n > total - have) break;
-            memcpy(t.text + have, next.payload + ui_wire_append_text_header(next.payload), n);
-            have += n;
-            *r = look; // the continuation belongs to this set_text
+// Applies one set_text: the prepared one for this op when there is one, else it is decoded
+// here, consuming the append_text ops that continue it from `r`. A drop leaves the node
+// untouched.
+static bool apply_set_text(ui_scene *s, const ui_wire_op *op, ui_wire_reader *r,
+                           ui_scene_text_prep *prep) {
+    ui_text_op local, *t = &local;
+    if (prep) {
+        t = &prep->op;
+        for (uint32_t i = 0; i < t->continuations; i++) {
+            ui_wire_op skip;
+            ui_wire_reader_next(r, &skip); // decoded from these same bytes: append_text ops
         }
+    } else {
+        ui_text_op_decode(op, r, &local);
     }
-    ui_node *n = node_of(s, h);
-    const char *why = !n ? "set_text" : !ok ? "set_text (size)" : have < total ? "set_text (incomplete)" : NULL;
-    if (!why && (!isfinite(line_height) || line_height < 0 || line_height > 100 ||
-                 align > UI_TEXT_ALIGN_JUSTIFY))
-        why = "set_text (paragraph)";
-    if (!why && (dir > UI_TEXT_DIR_RTL || span_count > UI_TEXT_MAX_SPANS ||
-                 family_count > UI_TEXT_MAX_STRINGS || ell_len > UI_TEXT_MAX_ELLIPSIS))
-        why = "set_text (limits)";
-
-    ui_text_style base;
-    uint32_t a, b;
-    if (!why && !read_style(p + 28, family_count, &base, &a, &b)) why = "set_text (style)";
-    if (!why) {
-        t.spans = malloc((span_count ? span_count : 1) * sizeof *t.spans);
-        t.name_offsets = malloc((family_count + 1) * sizeof *t.name_offsets);
-        t.names = malloc(fam_bytes ? fam_bytes : 1);
-        if (!t.spans || !t.name_offsets || !t.names) why = "set_text (out of memory)";
-    }
-    uint32_t prev_end = 0;
-    for (uint32_t i = 0; !why && i < span_count; i++) {
-        if (!read_style(spans_p + i * stride, family_count, &t.spans[i].style,
-                        &t.spans[i].start, &t.spans[i].end) ||
-            t.spans[i].start >= t.spans[i].end || t.spans[i].end > total ||
-            t.spans[i].start < prev_end)
-            why = "set_text (span)";
-        else
-            prev_end = t.spans[i].end;
-    }
-    // Family names: family_count NUL-terminated UTF-8 strings.
-    uint32_t pos = 0, names_len = 0;
-    for (uint32_t i = 0; !why && i < family_count; i++) {
-        const uint8_t *nul = memchr(fam_p + pos, 0, fam_bytes - pos);
-        if (!nul || !ui_utf8_valid(fam_p + pos, (size_t)(nul - (fam_p + pos)))) {
-            why = "set_text (family names)";
-            break;
-        }
-        uint32_t len = (uint32_t)(nul - (fam_p + pos));
-        t.name_offsets[i] = names_len;
-        memcpy(t.names + names_len, fam_p + pos, len);
-        names_len += len;
-        pos += len + 1;
-    }
-    if (!why) t.name_offsets[family_count] = names_len;
-    bool custom = flags & UI_WIRE_TEXT_CUSTOM_ELLIPSIS;
-    if (!why && custom && !ui_utf8_valid(ell_p, ell_len)) why = "set_text (ellipsis)";
-
-    // Replace ill-formed UTF-8, keeping span offsets on the same characters.
-    size_t clean_len = 0;
-    uint32_t replaced = 0;
-    if (!why && ui_utf8_sanitize(t.text, total, &t.clean, &clean_len, &replaced) != UI_OK)
-        why = "set_text (out of memory)";
-    if (!why && span_count) {
-        t.map = malloc(((size_t)total + 1) * sizeof *t.map);
-        if (!t.map) {
-            why = "set_text (out of memory)";
-        } else {
-            map_offsets(t.text, total, t.map);
-            uint32_t kept = 0;
-            for (uint32_t i = 0; i < span_count; i++) {
-                ui_text_span sp = t.spans[i];
-                sp.start = t.map[sp.start];
-                sp.end = t.map[sp.end];
-                if (sp.start < sp.end) t.spans[kept++] = sp;
-            }
-            span_count = kept;
-        }
-    }
+    ui_node *n = node_of(s, t->node);
+    const char *why = !n ? "set_text" : t->why;
+    if (!why && !n->text && !(n->text = calloc(1, sizeof *n->text))) why = "set_text (out of memory)";
     if (why) {
-        free_parts(&t);
+        ui_handle h = t->node;
+        ui_text_op_free(t);
         return drop(s, why, h);
     }
-    if (!n->text) n->text = calloc(1, sizeof *n->text);
-    ui_paragraph_desc desc = {
-        .text = t.clean, .len = (uint32_t)clean_len, .base = base,
-        .spans = t.spans, .span_count = span_count,
-        .families = t.names, .family_offsets = t.name_offsets, .family_count = family_count,
-        .dir = dir == UI_TEXT_DIR_LTR ? UI_BIDI_LTR : dir == UI_TEXT_DIR_RTL ? UI_BIDI_RTL : UI_BIDI_AUTO,
-        .max_lines = max_lines,
-        .ellipsis = custom ? ell_p : (const uint8_t *)"\xE2\x80\xA6",
-        .ellipsis_len = custom ? ell_len : 3,
-        .align = (ui_align)align, // the wire and layout enums share values
-        .line_height = line_height,
-    };
-    bool applied = n->text && ui_paragraph_set(n->text, &desc) == UI_OK;
-    free_parts(&t);
-    if (!applied) {
-        UI_ERROR(s->log, MODULE, "out of memory setting text");
-        s->stats.dropped++;
-        return false;
+    ui_paragraph_set_source(n->text, t->source);
+    for (uint32_t i = 0; prep && i < prep->scale_count; i++) {
+        if (prep->scales[i] != s->roots[n->root].scale) continue;
+        ui_paragraph_adopt_shaped(n->text, &prep->shaped[i]);
+        break;
     }
-    s->stats.text_invalid += replaced;
-    if (replaced)
-        UI_DEBUG_REPORT(s->log, MODULE, "set_text: replaced %u ill-formed UTF-8 sequence(s)", replaced);
+    s->stats.text_invalid += t->replaced;
+    if (t->replaced)
+        UI_DEBUG_REPORT(s->log, MODULE, "set_text: replaced %u ill-formed UTF-8 sequence(s)", t->replaced);
+    ui_text_op_free(t);
     s->roots[n->root].dirty = true;
     return true;
 }
 
 ui_result ui_scene_apply(ui_scene *s, const uint8_t *data, size_t size, uint64_t now_ns) {
-    ui_result res = validate(data, size);
+    return ui_scene_apply_prepared(s, data, size, now_ns, NULL);
+}
+
+ui_result ui_scene_apply_prepared(ui_scene *s, const uint8_t *data, size_t size, uint64_t now_ns,
+                                  const ui_scene_prepared *prep) {
+    ui_result res = ui_scene_validate(data, size);
     if (res != UI_OK) {
         s->stats.rejected++;
         UI_DEBUG_REPORT(s->log, MODULE, "rejected malformed command buffer (%zu bytes)", size);
@@ -566,14 +412,23 @@ ui_result ui_scene_apply(ui_scene *s, const uint8_t *data, size_t size, uint64_t
     ui_wire_reader r;
     ui_wire_reader_init(&r, UI_WIRE_MAGIC_CMD, data, size);
     ui_wire_op op;
+    uint32_t next_text = 0;
     while (ui_wire_reader_next(&r, &op) == UI_OK) {
         bool applied;
-        if (op.opcode == UI_OP_SET_TEXT)
-            applied = apply_set_text(s, &op, &r);
-        else if (op.opcode == UI_OP_APPEND_TEXT)
+        uint32_t offset = (uint32_t)(op.payload - UI_WIRE_OP_HEADER_SIZE - data);
+        if (op.opcode == UI_OP_SET_TEXT) {
+            ui_scene_text_prep *tp = NULL;
+            if (prep && next_text < prep->text_count && prep->texts[next_text].offset == offset)
+                tp = &prep->texts[next_text++];
+            if (tp && !tp->decoded) tp = NULL;
+            applied = apply_set_text(s, &op, &r, tp);
+        } else if (op.opcode == UI_OP_LOAD_FONT) {
+            applied = apply_load_font(s, &op, offset);
+        } else if (op.opcode == UI_OP_APPEND_TEXT) {
             applied = drop(s, "append_text (no set_text before it)", ui_wire_get_handle(op.payload));
-        else
+        } else {
             applied = apply_op(s, &op, now_ns);
+        }
         if (applied) s->stats.applied++;
     }
     return UI_OK;
@@ -611,13 +466,13 @@ void ui_scene_animate(ui_scene *s, uint64_t now_ns) {
 
 ui_scene_root *ui_scene_root_of(ui_scene *s, ui_handle surface) { return find_root(s, surface); }
 
+ui_node *ui_scene_node(ui_scene *s, ui_handle h) { return node_of(s, h); }
+
+ui_handle ui_scene_handle_of(const ui_scene *s, uint32_t slot) { return handle_of(s, slot); }
+
 void ui_scene_fonts_changed(ui_scene *s) {
     for (uint32_t slot = 0; slot < s->handles.used; slot++) {
-        if (s->handles.alive[slot] && s->nodes[slot].text) {
-            s->nodes[slot].text->shaped_valid = false;
-            s->nodes[slot].text->layout_valid = false;
-            s->roots[s->nodes[slot].root].dirty = true;
-        }
+        if (s->handles.alive[slot] && s->nodes[slot].text) s->roots[s->nodes[slot].root].dirty = true;
     }
 }
 
@@ -629,7 +484,8 @@ static ui_result build_text(ui_paragraph *p, float ox, float oy, float width, fl
     if (!l) return res == UI_ERR_WRONG_STATE ? UI_OK : res; // no fonts: nothing to draw
     for (uint32_t r = 0; r < l->run_count; r++) {
         const ui_layout_run *run = &l->runs[r];
-        ui_font *font = ui_font_registry_font_by_key(t->ctx->fonts, run->font);
+        ui_font *font = run->sized_font;
+        if (!font) font = ui_font_registry_font_by_key(t->ctx->fonts, run->font);
         if (!font) return UI_ERR_OUT_OF_MEMORY;
         for (uint32_t i = 0; i < run->glyph_count; i++) {
             const ui_layout_glyph *g = &l->glyphs[run->glyph_start + i];

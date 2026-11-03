@@ -3,6 +3,114 @@
 Choices the architecture document leaves open, recorded as they are made. Newest
 milestone first.
 
+## Milestone 2: layout and styles
+
+### Preparation off the core thread
+- **A worker pool owned by the app** (`src/runtime/jobs.h`): N threads, where
+  `ui_app_desc.worker_threads` 0 means auto = hardware threads − 3 (core, logic, render),
+  clamped to 1–4. `UI_WORKERS` overrides it.
+  - Jobs are short and FIFO, and they never wait for each other.
+  - Jobs belong to groups. A group counts its unfinished jobs and calls `done` once it is
+    sealed and the count reaches 0. A job may submit follow-ups to its own group, and the
+    owner may reopen a sealed group.
+  - Workers never touch the scene, the atlas or the GPU.
+  - **Under the single scheduler the pool has no threads and jobs run inline** when
+    submitted, on the main thread. A core made without a pool (unit tests) gets an inline
+    one of its own.
+- **Preparation starts when the core receives a buffer**, in `drain()` at every core
+  step, not at the frame boundary (`src/core/prepare.h`).
+  - Framing is validated first, so a malformed buffer is never prepared.
+  - **`set_text`:** decoding (assembling continuations, sanitizing, building the source)
+    moved from `scene.c` into the pure `ui_text_op_decode` (`src/core/text_op.c`). A job
+    decodes, then shapes at every distinct configured surface scale (usually one), then
+    submits glyph jobs.
+  - **Glyph jobs** rasterize every distinct glyph of the result at **all 4 subpixel
+    bins** into a new CPU glyph cache, 64 glyphs per job. The bin depends on pen
+    positions, which are known only after layout. That is 4× the rasterization work,
+    but it is done on workers.
+  - **`load_font`:** the file is read and parsed on a worker.
+- **The atomicity rule:**
+  - A buffer applies whole at the first frame boundary where it and every buffer before it
+    are prepared. The first unready buffer and everything after it wait.
+  - Animations, timers and frames continue meanwhile. Pending buffers wake idle surfaces
+    only once the head buffer is ready, so waiting never costs an empty frame.
+  - When a group finishes, the worker wakes the core (platform wake, then `progress`).
+- **Font loads have a second, scene-dependent step.** When a buffer with `load_font`
+  reaches the head of the queue and its own jobs are done:
+  - Its faces are registered, and the registry generation goes up.
+  - Every existing paragraph is shaped again in the buffer's group.
+  - Text in it and in later pending buffers that was shaped at an older generation is
+    prepared again.
+  - Because every earlier buffer is applied by then, the scene can't change before this
+    buffer applies, so all reshaped paragraphs swap in during the frame that applies it.
+    The frame that applies `load_font` still shows the new font, as in M1.
+  - This step runs only before or after a frame, never inside its apply phase, so it
+    happens at the same point under both schedulers.
+  - A lock orders "this text is done at generation g" against registration, so every item
+    is either found stale by the registration or sees the new generation itself.
+- **Font discovery initializes on a worker** at startup (`defer_discovery`). Received
+  buffers start preparing only once it is done, so nothing is shaped without the system
+  fonts. Until then buffers wait; frames don't.
+- **Determinism:**
+  - `ui_app_frame` and `ui_app_step_core` first wait until every queued buffer is prepared
+    (`wait_prepared`), and "idle" now includes no preparation in flight. A buffer queued
+    before `ui_app_frame` therefore applies in that frame under both schedulers, and the
+    test captures stay byte-identical.
+  - `ui_app_frame_without_logic` waits for neither logic nor preparation, which is what
+    the stall test needs.
+- **The font registry is thread-safe:**
+  - The face table is append-only, in chunks, and published with a release store, so
+    lookups by id and coverage checks take no lock.
+  - Matching, fallback, instances and the font table take a mutex. The font table became
+    a hash map; it was a linear search.
+  - Fontconfig calls (behind their own mutex) and face loading happen outside that mutex,
+    with a re-check when inserting.
+  - The cluster scratch moved into a parameter.
+  - **Registered faces are kept apart from discovered ones.** Only registered faces take
+    part in family matching and in the registration-order fallback step, and only the
+    core registers. Discovery results are cached per family, weight and style, and per
+    fallback code point. Before, discovered faces joined the registration list, so with
+    concurrent discovery the fallback order could have depended on which worker
+    discovered what first.
+  - A **generation** counts changes to the registered set. Shaping records it, and a text
+    context treats older shaping as stale (`ui_text_context.generation`).
+- **Paragraph input is an immutable, refcounted `ui_text_source`.** The paragraph and
+  the jobs that prepare it each hold a reference. The paragraph's old fields now point
+  into it. Styles will override max lines, alignment and line height through
+  `ui_paragraph_set_params`.
+- **Nothing on the frame path takes the registry lock:**
+  - Shaped and laid-out runs carry their font pointer.
+  - Shaping records the base font's metrics, so line layout no longer matches a family,
+    which could have run a Fontconfig query on the core.
+- **CPU glyph cache** (`src/text/glyph_cache.h`): 16 shards with a lock each, 16 MiB by
+  default (`ui_text_config.glyph_cache_bytes`), least recently used out first.
+  - Entries carry the sequence number of the buffer that prepared them, and are protected
+    until the core releases it. The core releases a buffer's glyphs once every surface
+    has drawn since it applied, or has nothing to draw.
+  - Glyphs that fail to rasterize are cached as failures, so the core doesn't retry them.
+  - On a miss, the atlas copies from this cache before rasterizing itself.
+- **Fallbacks stay correct, only slower:**
+  - A buffer that couldn't be prepared (out of memory) applies unprepared: decoded on the
+    core, shaped at layout, and `load_font` read on the core.
+  - A scale no preparation covered, such as moving to a monitor with another scale, also
+    shapes on the core.
+  - The counters `text_shaped_on_core` and `glyphs_rasterized_on_core` show this. The
+    tests require both to stay 0 on the prepared path.
+- **Stats:**
+  - `texts_prepared`, `glyphs_prepared`;
+  - `buffers_deferred`: buffers that missed at least one frame at the head;
+  - `max_head_wait_ns`, with a debug warning above 100 ms.
+
+  `glyphs_rasterized` keeps counting glyphs that enter the atlas.
+- **Tracepoints** `UI_TRACE_PREPARE_BEGIN/END` fire on the worker, around each job, with
+  the buffer's sequence number. `test_prepare` holds a worker in one, as
+  `test_atlas_upload` holds the render thread. The `UI_TRACE` printer reports preparation
+  jobs and their time per second.
+- **ThreadSanitizer.** A local TSan build (not a preset) found nothing in our code. glibc's
+  C11 `thrd_create` and `mtx_*` call pthreads internally where TSan doesn't intercept them,
+  so the build force-includes a small shim mapping C11 threads onto pthreads. The only
+  reports left come from Mesa's llvmpipe (`lp_fence_destroy`).
+
 ## Milestone 1.1: wire compatibility and fuzzing
 
 ### Wire evolution

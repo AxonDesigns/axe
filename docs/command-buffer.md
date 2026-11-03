@@ -3,7 +3,7 @@
 The language runtime and the core talk only through two binary buffers:
 
 - **Command buffer**: logic → core. Operations on nodes. Applied atomically, in order, at
-  the next frame boundary.
+  the first frame boundary after its preparation (shaping text, reading fonts) is done.
 - **Event buffer**: core → logic. What happened: frames committed, surfaces resized or
   asked to close.
 
@@ -101,9 +101,11 @@ they reach the display list, so clipped-away glyphs are never rasterized.
 
 ### Fonts
 
-`load_font` registers face 0 of a font file at the frame boundary and answers with
-`font_loaded` carrying the same id. On success all text is shaped again, since the new
-font can change family matches and fallbacks, and the surfaces redraw. A path that is
+`load_font` registers face 0 of a font file and answers with `font_loaded` carrying the
+same id, when its buffer applies. The file is read on a worker thread. On success all
+text is shaped again (also on workers, before the buffer applies), since the new font can
+change family matches and fallbacks, and the surfaces redraw with the new shaping in the
+frame that applies the buffer. A path that is
 empty, too long, contains NUL or is not valid UTF-8 drops the op (no event).
 
 ### Timers
@@ -113,7 +115,8 @@ empty, too long, contains NUL or is not valid UTF-8 drops the op (no event).
 - It fires as a `timer_fired` event once the animation clock reaches `deadline_ns`. That
   happens even when no surface draws, so logic can keep time while everything is idle.
 - A paused clock only moves when stepped, so timers don't fire while it's paused.
-- Like every command, `set_timer` takes effect at the next frame boundary.
+- Like every command, `set_timer` takes effect at the frame boundary where its buffer
+  applies.
 - `deadline_ns = UINT64_MAX` disarms the timer (`ui_cmd_cancel_timer`).
 - An app holds at most 4096 armed timers; further ones are dropped like an invalid op.
 
@@ -301,8 +304,13 @@ their original size.
 
 ## Flow control and ordering
 
-- Each flush is one buffer. All buffers received before a frame starts are applied in
-  arrival order during that frame's apply phase.
+- Each flush is one buffer. Buffers are applied in arrival order, each one whole.
+- **Preparation.** When the core receives a buffer, worker threads start preparing it:
+  every `set_text` is decoded and shaped and its glyphs rasterized, and every `load_font`
+  file is read. A buffer applies at the first frame boundary where it and every buffer
+  before it are prepared; until then, it and every later buffer wait for a later frame,
+  while frames and animations continue. Most buffers have nothing to prepare, or are
+  prepared long before the next frame.
 - Writes become visible no earlier than the next frame commit after the flush.
 - **Logic → core is lossless.** The channel is unbounded: a flush is never refused,
   delayed or dropped, however far ahead logic runs, and buffers apply in the order they

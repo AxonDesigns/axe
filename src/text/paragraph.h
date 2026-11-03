@@ -3,6 +3,7 @@
 // two-level cache. All lengths are physical pixels; text offsets are UTF-8 byte offsets.
 #pragma once
 
+#include <stdatomic.h>
 #include <stdbool.h>
 #include <stdint.h>
 
@@ -28,6 +29,7 @@ typedef struct ui_layout_glyph {
 // A piece of a shaped run on one line, in visual order. Glyph order within it is visual too.
 typedef struct ui_layout_run {
     ui_font_key font;
+    ui_font *sized_font;   // the instance `font` names (owned by the registry)
     uint32_t start, end;   // bytes
     uint8_t level;         // after L1 (odd = RTL)
     bool ellipsis;         // the ellipsis, not text; start == end == the truncation point
@@ -63,6 +65,10 @@ void ui_paragraph_layout_free(ui_paragraph_layout *l);
 // Shared state for laying out text on one thread (the core): fonts, shaper and scratch.
 typedef struct ui_text_context {
     ui_font_registry *fonts;
+    // Shaping older than this font registry generation is stale (a font was loaded since)
+    // and is redone when laid out.
+    uint64_t generation;
+    uint64_t shapes;       // paragraphs shaped by this context (on its thread), for stats
     ui_text_shaper shaper;
     float *advances;       // per code point
     uint32_t advance_capacity;
@@ -77,10 +83,12 @@ typedef struct ui_text_context {
 ui_result ui_text_context_init(ui_text_context *c, ui_font_registry *fonts);
 void ui_text_context_free(ui_text_context *c);
 
-// A paragraph with its input and cached results. Results are recomputed only when what
-// they depend on changes: shaping on text, spans, direction or scale; line layout also on
-// width or max lines.
-typedef struct ui_paragraph {
+typedef struct ui_paragraph_desc ui_paragraph_desc;
+
+// A paragraph's input, immutable once created and shared by reference counting: the
+// paragraph that shows it and the worker jobs that prepare it each hold a reference.
+typedef struct ui_text_source {
+    _Atomic uint32_t refs;
     uint8_t *text;
     uint32_t len;
     ui_text_style base;
@@ -90,9 +98,38 @@ typedef struct ui_paragraph {
     uint32_t *family_offsets;
     uint32_t family_count;
     ui_bidi_dir dir;
-    uint32_t max_lines;    // 0 = unlimited
+    uint32_t max_lines;
+    uint8_t *ellipsis;
+    uint32_t ellipsis_len;
+    ui_align align;
+    float line_height;
+} ui_text_source;
+
+// Copies the description into a new source with one reference.
+ui_result ui_text_source_create(const ui_paragraph_desc *desc, ui_text_source **out);
+ui_text_source *ui_text_source_retain(ui_text_source *s);
+void ui_text_source_release(ui_text_source *s); // thread: any
+// What shaping reads from a source.
+ui_text_input ui_text_source_input(const ui_text_source *s);
+
+// A paragraph with its input and cached results. Results are recomputed only when what
+// they depend on changes: shaping on text, spans, direction, scale or the font registry's
+// generation; line layout also on width, max lines, alignment or line height.
+typedef struct ui_paragraph {
+    ui_text_source *source; // the input; the fields below point into it
+    uint8_t *text;
+    uint32_t len;
+    ui_text_style base;
+    ui_text_span *spans;
+    uint32_t span_count;
+    char *families;
+    uint32_t *family_offsets;
+    uint32_t family_count;
+    ui_bidi_dir dir;
     uint8_t *ellipsis;     // UTF-8; empty = cut without an ellipsis
     uint32_t ellipsis_len;
+    // Line layout parameters: the source's, unless styles override them.
+    uint32_t max_lines;    // 0 = unlimited
     ui_align align;
     float line_height;     // multiple of the base size; 0 = from the fonts' metrics
 
@@ -110,7 +147,7 @@ typedef struct ui_paragraph {
     uint64_t shape_count, layout_count;
 } ui_paragraph;
 
-typedef struct ui_paragraph_desc {
+struct ui_paragraph_desc {
     const uint8_t *text;   // valid UTF-8
     uint32_t len;
     ui_text_style base;
@@ -128,10 +165,19 @@ typedef struct ui_paragraph_desc {
     // base size, with the baseline placed by the base font's metrics, so fallback fonts with
     // tall metrics no longer change the spacing.
     float line_height;
-} ui_paragraph_desc;
+};
 
 // Copies the description. Fails only on allocation (the paragraph keeps its old content).
 ui_result ui_paragraph_set(ui_paragraph *p, const ui_paragraph_desc *desc);
+// Shows `source` (the paragraph takes a reference); cached results are dropped.
+void ui_paragraph_set_source(ui_paragraph *p, ui_text_source *source);
+// Installs shaping prepared elsewhere for the current source, taking over its arrays (*shaped
+// is left empty). It is used when its scale is asked for and its generation is current.
+void ui_paragraph_adopt_shaped(ui_paragraph *p, ui_shaped_paragraph *shaped);
+// Sets the line layout parameters (styles may override the source's). The line layout is
+// redone only if one changed.
+void ui_paragraph_set_params(ui_paragraph *p, uint32_t max_lines, ui_align align,
+                             float line_height);
 void ui_paragraph_free(ui_paragraph *p);
 
 // The layout at `scale` for `max_width` physical px (INFINITY or negative: unbounded).

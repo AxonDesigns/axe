@@ -77,6 +77,8 @@ typedef struct ui_text_config {
     uint32_t atlas_page_size;      // px per side; 0 = 1024
     uint32_t atlas_max_pages;      // 0 = 8
     uint32_t glyph_evict_frames;   // 0 = 300
+    // Bytes of glyph bitmaps that worker threads rasterize ahead of drawing; 0 = 16 MiB.
+    uint32_t glyph_cache_bytes;
 } ui_text_config;
 
 typedef struct ui_app_desc {
@@ -87,6 +89,10 @@ typedef struct ui_app_desc {
     ui_time_source time;     // optional; zeroed means CLOCK_MONOTONIC
     bool start_paused;       // start with the animation clock paused (tests)
     ui_text_config text;
+    // Worker threads that prepare command buffers (shaping, glyphs, font loading) off the
+    // core thread. 0: hardware threads minus 3, between 1 and 4; UI_WORKERS overrides.
+    // The single scheduler always runs that work inline on the main thread.
+    uint32_t worker_threads;
 } ui_app_desc;
 
 // Creates the app and its first surface, and starts the actors. Thread: becomes the main
@@ -153,12 +159,19 @@ typedef struct ui_app_stats {
     uint64_t commands_dropped;       // stale or wrong-kind handles, unknown ops
     uint64_t buffers_rejected;       // malformed command buffers
     uint64_t text_invalid_sequences; // ill-formed UTF-8 subparts replaced with U+FFFD
-    uint64_t glyphs_rasterized;
+    uint64_t glyphs_rasterized;      // glyphs added to the atlas (prepared or rasterized now)
     uint64_t glyphs_evicted;
     uint64_t glyphs_rejected;        // too large for the atlas, or no space left
     uint64_t atlas_updates;          // updates sent to the render thread
     uint32_t atlas_pages;
     uint32_t glyphs_cached;
+    // Preparation off the core thread (command buffers are applied once prepared).
+    uint64_t texts_prepared;            // set_text ops decoded and shaped on workers
+    uint64_t glyphs_prepared;           // glyph bitmaps rasterized on workers
+    uint64_t text_shaped_on_core;       // paragraphs the core had to shape itself
+    uint64_t glyphs_rasterized_on_core; // glyphs the core had to rasterize itself
+    uint64_t buffers_deferred;          // buffers that missed a frame waiting for preparation
+    uint64_t max_head_wait_ns;          // longest such wait at the head of the queue
 } ui_app_stats;
 void ui_app_get_stats(const ui_app *app, ui_app_stats *out);
 

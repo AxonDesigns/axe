@@ -5,12 +5,14 @@
 
 #include "core/clock.h"
 #include "core/display_list.h"
+#include "core/prepare.h"
 #include "core/scene.h"
 #include "text/atlas.h"
 #include "text/paragraph.h"
 #include "hooks/hooks_internal.h"
 #include "platform/platform.h"
 #include "runtime/actor.h"
+#include "runtime/jobs.h"
 #include "wire/wire.h"
 #include "ui/app.h"
 
@@ -47,6 +49,7 @@ typedef struct ui_core_desc {
     bool start_paused;
     ui_signal *progress;         // notified on every message to the core
     const ui_text_config *text;  // fonts and text rendering (may be NULL)
+    ui_jobs *jobs;               // the app's workers (NULL: the core runs jobs inline)
 } ui_core_desc;
 
 typedef struct ui_core_timer {
@@ -72,11 +75,16 @@ struct ui_core {
     ui_handle_table surface_handles;
     ui_core_surface surfaces[UI_MAX_SURFACES];
 
+    // Command buffers received, in order. Each is applied whole at the first frame boundary
+    // where it and every buffer before it are prepared.
     struct ui_pending_cmds {
         uint8_t *data;
         size_t size;
-    } *pending;                  // command buffers received, applied at the next frame
+        ui_prep_buffer *prep;    // NULL: nothing to prepare (or no memory to)
+        bool deferred;           // a frame passed while it waited at the head
+    } *pending;
     uint32_t pending_count, pending_capacity;
+    uint64_t head_wait_since;    // monotonic ns: when the head buffer first missed a frame
 
     ui_core_timer *timers;       // armed timers, unordered
     uint32_t timer_count, timer_capacity;
@@ -86,6 +94,13 @@ struct ui_core {
     ui_text_context text;
     ui_atlas *atlas;
     ui_raster raster;
+    ui_jobs *jobs;
+    ui_jobs *own_jobs;           // an inline pool, when the desc gave none
+    ui_preparer *preparer;
+    ui_glyph_cache *glyphs;      // bitmaps rasterized by workers, read by the atlas
+    ui_prep_buffer *applying;    // the prepared buffer being applied (load_font results)
+    uint64_t unreleased_seq;     // newest applied prepared buffer whose glyphs stay protected
+    uint64_t unreleased_epoch;   // until every surface has drawn from this epoch on
     uint64_t epoch;              // core frames that drew; glyphs age by it
     ui_atlas_update *unsent;     // an atlas update the render inbox could not take (OOM)
     float text_contrast, text_gamma;
@@ -119,11 +134,18 @@ void ui_core_force_frame(ui_core *c);
 // Actor step: drains messages, produces a frame if any surface is ready, flushes events.
 void ui_core_step(void *self);
 
+// Takes queued messages and moves preparation along (starting received buffers, the head
+// step of a buffer with fonts) without producing a frame. Thread: main.
+void ui_core_receive(ui_core *c);
+// True while any received buffer's preparation is unfinished (or not yet started).
+bool ui_core_preparing(const ui_core *c);
+
 // How long the main thread may block in the platform wait: 0 when a step has work now (a
 // surface is ready to draw or messages wait), the time to the next timer, or UINT64_MAX.
 uint64_t ui_core_wait_timeout_ns(ui_core *c);
 
-// True when every surface's last committed frame is done and logic has handled all events.
+// True when every surface's last committed frame is done, logic has handled all events and
+// no buffer is being prepared.
 bool ui_core_idle(const ui_core *c);
 // True when the render actor has finished every committed frame (logic may still be busy).
 bool ui_core_frames_done(const ui_core *c);

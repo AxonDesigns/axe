@@ -1,10 +1,12 @@
-// UI_TRACE=1 consumer: once per second prints frame rate, frame and present intervals, and
-// min/avg/max per phase. Core-thread and render-thread phases accumulate into atomics; the
-// core thread prints.
+// UI_TRACE=1 consumer: once per second prints frame rate, frame and present intervals,
+// min/avg/max per phase, and the work done preparing command buffers on worker threads.
+// Core-thread, render-thread and worker timings accumulate into atomics; the core thread
+// prints.
 #include <inttypes.h>
 #include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <threads.h>
 
 #include "hooks/hooks_internal.h"
 
@@ -25,6 +27,7 @@ struct ui_trace_printer {
     interval_acc frames;   // FRAME_BEGIN to FRAME_BEGIN (core thread)
     interval_acc presents; // compositor present timestamps (core thread)
     _Atomic uint64_t frames_done;
+    phase_acc prepare;     // preparation jobs (worker threads; begin times are per thread)
     uint64_t refresh_ns;
     uint64_t idle_frames;
     bool resuming; // after an idle period the next intervals measure the gap, not pacing
@@ -60,6 +63,16 @@ static void atomic_max(_Atomic uint64_t *v, uint64_t x) {
 
 static double ms(uint64_t ns) { return (double)ns / 1e6; }
 
+// A preparation job's start, on the worker running it. Timing only; no app state.
+static thread_local uint64_t prepare_begin_ns;
+
+static void phase_add(phase_acc *a, uint64_t d) {
+    atomic_fetch_add_explicit(&a->sum, d, memory_order_relaxed);
+    atomic_fetch_add_explicit(&a->count, 1, memory_order_relaxed);
+    atomic_max(&a->max, d);
+    atomic_min(&a->min, d);
+}
+
 static void print_and_reset(ui_trace_printer *p, uint64_t now) {
     double secs = (double)(now - p->window_start) / 1e9;
     uint64_t done = atomic_exchange_explicit(&p->frames_done, 0, memory_order_relaxed);
@@ -84,6 +97,14 @@ static void print_and_reset(ui_trace_printer *p, uint64_t now) {
         n += snprintf(line + n, sizeof line - (size_t)n, " | %s %.3f/%.3f/%.3f", phase_names[i],
                       ms(mn), ms(sum / count), ms(mx));
     }
+    uint64_t jobs = atomic_exchange_explicit(&p->prepare.count, 0, memory_order_relaxed);
+    uint64_t work = atomic_exchange_explicit(&p->prepare.sum, 0, memory_order_relaxed);
+    uint64_t longest = atomic_exchange_explicit(&p->prepare.max, 0, memory_order_relaxed);
+    atomic_store_explicit(&p->prepare.min, 0, memory_order_relaxed);
+    if (jobs && n < (int)sizeof line)
+        n += snprintf(line + n, sizeof line - (size_t)n,
+                      " | prepare %" PRIu64 " jobs, %.3f ms (longest %.3f)", jobs, ms(work),
+                      ms(longest));
     if (p->idle_frames && n < (int)sizeof line)
         n += snprintf(line + n, sizeof line - (size_t)n, " | idle %" PRIu64, p->idle_frames);
     p->idle_frames = 0;
@@ -115,15 +136,16 @@ static void on_trace(void *user, const ui_trace_event *ev) {
     case UI_TRACE_PHASE_BEGIN:
         p->phases[ev->phase].begin_ns = ev->time_ns;
         break;
-    case UI_TRACE_PHASE_END: {
-        phase_acc *a = &p->phases[ev->phase];
-        uint64_t d = ev->time_ns - a->begin_ns;
-        atomic_fetch_add_explicit(&a->sum, d, memory_order_relaxed);
-        atomic_fetch_add_explicit(&a->count, 1, memory_order_relaxed);
-        atomic_max(&a->max, d);
-        atomic_min(&a->min, d);
+    case UI_TRACE_PHASE_END:
+        phase_add(&p->phases[ev->phase], ev->time_ns - p->phases[ev->phase].begin_ns);
         break;
-    }
+    case UI_TRACE_PREPARE_BEGIN:
+        prepare_begin_ns = ev->time_ns;
+        break;
+    case UI_TRACE_PREPARE_END:
+        if (prepare_begin_ns) phase_add(&p->prepare, ev->time_ns - prepare_begin_ns);
+        prepare_begin_ns = 0;
+        break;
     case UI_TRACE_FRAME_IDLE:
         // Core thread.
         p->idle_frames++;

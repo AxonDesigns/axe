@@ -7,10 +7,14 @@ in `docs/command-buffer.md`.
 ## Pipeline
 
 ```
-set_text (wire)  ──►  scene node owns a ui_paragraph (text, spans, families, direction)
+set_text (wire)  ──►  worker: decode ─► ui_text_source (immutable) ─► shape at each
+                      surface scale ─► rasterize its glyphs (4 bins) into the glyph cache
+                         │  the buffer applies once prepared (see Preparation)
+                         ▼
+  scene node owns a ui_paragraph: the source, plus the adopted shaping
                          │  core thread, at display-list build time
                          ▼
-  shaped paragraph   (cached: text, spans, direction, scale)
+  shaped paragraph   (cached: source, scale, font generation)
      decode UTF-8 ─► bidi levels (UAX #9) ─► script runs (UAX #24)
      ─► grapheme clusters (UAX #29) ─► font per cluster (match + fallback)
      ─► runs where level, script, font or shaping style change ─► HarfBuzz per run
@@ -22,7 +26,7 @@ set_text (wire)  ──►  scene node owns a ui_paragraph (text, spans, familie
                          │
                          ▼
   display list       glyph quads (atlas page, texel rect, color) batched with rects
-     glyph cache: rasterize on first use (exact-area coverage, 4 subpixel bins)
+     atlas: on first use, copy from the glyph cache (else rasterize here)
      atlas update ──(render inbox, FIFO)──► render thread uploads, then draws
 ```
 
@@ -36,7 +40,10 @@ set_text (wire)  ──►  scene node owns a ui_paragraph (text, spans, familie
 | `src/text/paragraph.*` | line layout, ellipsis, the two-level cache | shape |
 | `src/text/hittest.*` | point ↔ offset, carets, selections | paragraph |
 | `src/text/raster.*` | coverage rasterizer | hb (outlines via a path sink) |
-| `src/text/atlas.*` | glyph cache, packing, eviction, upload batches | raster |
+| `src/text/glyph_cache.*` | CPU bitmaps rasterized on workers, thread-safe | raster |
+| `src/text/atlas.*` | GPU glyph atlas: packing, eviction, upload batches | raster, glyph cache |
+| `src/core/text_op.*` | decoding `set_text` into a text source | paragraph |
+| `src/core/prepare.*` | preparing command buffers on worker threads | everything above |
 | `src/render/shaders/glyph.wgsl` | glyph quads, coverage contrast | — |
 
 ## Shaping and fonts
@@ -77,6 +84,33 @@ set_text (wire)  ──►  scene node owns a ui_paragraph (text, spans, familie
   default, in the font of the run before it, at the logical end).
 - **Caching.** A width change, such as a resize or a spring, only re-breaks lines. A scale
   change reshapes. New text or spans recompute both levels.
+
+## Preparation
+
+Shaping and rasterizing are the expensive part of new text, so they happen on the app's
+worker threads (`src/runtime/jobs.h`), never on the core thread:
+
+1. **On receipt.** When the core takes a command buffer from logic, it scans it and starts
+   jobs right away. Each `set_text` is decoded into an immutable `ui_text_source`, then
+   shaped at every surface scale. Every distinct glyph of the result is then rasterized at
+   all four subpixel bins into the **glyph cache**, a thread-safe CPU cache; the bin
+   depends on pen positions, which are known only after layout. Each `load_font` file is
+   read and parsed.
+2. **Applying.** A buffer applies whole, at the first frame boundary where it and every
+   buffer before it are prepared. Until then it, and everything after it, waits; frames,
+   springs and timers carry on. Applying installs the prepared source and shaping.
+3. **Drawing.** The atlas copies each new glyph from the glyph cache into a page instead of
+   rasterizing it. A buffer's glyphs stay protected in the cache until every surface has
+   drawn once after it applied.
+4. **Font loads.** A new font can change every paragraph's matches and fallbacks. When a
+   buffer with `load_font` reaches the head of the queue, its faces are registered and
+   every existing paragraph is shaped again on the workers. The buffer applies once that is
+   done, so the frame that applies it shows every paragraph in its new shaping.
+
+Under the single scheduler the jobs run inline on the main thread, so nothing changes but
+the thread count. The counters `text_shaped_on_core` and `glyphs_rasterized_on_core` show
+the cases that still fall back to the core: a buffer that couldn't be prepared (out of
+memory), or a scale nobody prepared for (a window moved to a monitor with another scale).
 
 ## Atlas uploads
 
@@ -203,6 +237,20 @@ build, 2026-11-02):
 | Frame with 2,000 glyphs, 1600×900 px, rebuilt every frame, GTX 1650 | 0.30 ms (core 0.15, encode 0.14) |
 | The same frame on lavapipe | 7.6 ms (mostly software rendering) |
 
+Milestone 2, after moving preparation to workers (release build, 2026-11-02). New text is
+the example's paragraph, 345 code points in five scripts at 17 px and 1.25×, on a fresh app
+each run, with nothing cached:
+
+| Benchmark | Result |
+| --- | --- |
+| Shaping + layout, 10,028 code points, cold / re-layout | 7.4 ms / 1.2 ms (unchanged) |
+| Core thread, frame that first shows the new paragraph (apply, animate, commit) | 0.14 ms |
+| The same preparation on workers (decoding, shaping, 376 glyph bitmaps) | 3.4 ms of worker time |
+| Everything on one thread (single scheduler) | 1.9 ms |
+
+The core's cost for new text dropped from about 2 ms to 0.14 ms. Workers do more in total
+than the core used to, because they rasterize all four subpixel bins of every glyph.
+
 ## Known limitations
 
 - Justification stretches spaces only; CJK text without spaces is not justified.
@@ -212,9 +260,8 @@ build, 2026-11-02):
 - Out of M1's scope: color glyphs (the atlas format field is ready for RGBA pages),
   vertical text, hyphenation, and dictionary line breaking for Thai, Lao, Khmer and
   Myanmar (those lines break only at spaces and punctuation).
-- New text is shaped and rasterized on the core thread in the frame that first shows it:
-  about 2 ms for the example's paragraph in five scripts (1.5 ms shaping, 0.5 ms
-  rasterizing), in any build. Rasterizing off-thread is future work.
+- Preparation rasterizes all four subpixel bins of every glyph, which is 4× the work
+  actually drawn, on workers. Predicting bins would need layout before preparation.
+- A window moved to a monitor whose scale no surface had before shapes its text on the
+  core thread once.
 - Tab stops are fixed at 8 spaces.
-- `load_font` reads the file on the core thread at the frame boundary; off-thread loading
-  comes with the asset system.

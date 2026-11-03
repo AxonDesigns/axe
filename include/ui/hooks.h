@@ -2,7 +2,8 @@
 //
 // Tracepoints cost nothing when the library is built with UI_HOOKS=OFF, and one relaxed
 // atomic load when built in but nobody subscribes. Callbacks run synchronously on the
-// thread that hits the tracepoint (core or render), so they must be short and thread-safe.
+// thread that hits the tracepoint (core, render or a worker), so they must be short and
+// thread-safe.
 #pragma once
 
 #include <stdint.h>
@@ -35,6 +36,12 @@ typedef enum ui_trace_kind {
     UI_TRACE_PHASE_END,
     UI_TRACE_PRESENTED,       // the compositor reports the frame reached the screen
     UI_TRACE_FRAME_IDLE,      // a frame opportunity had nothing to draw: the surface idles
+    // A worker starts or finishes a job preparing a command buffer: decoding and shaping one
+    // set_text, rasterizing a batch of its glyphs, reading a font file, or shaping one
+    // paragraph again after a font load. frame_id carries the buffer's sequence number,
+    // counted from 1 in the order prepared buffers arrive; surface is null.
+    UI_TRACE_PREPARE_BEGIN,
+    UI_TRACE_PREPARE_END,
 } ui_trace_kind;
 
 typedef struct ui_trace_event {

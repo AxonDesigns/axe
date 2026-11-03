@@ -60,6 +60,9 @@ static void wait_until(ui_app *app, _Atomic bool *done) {
     while (!atomic_load(done)) render->step(render->self);
 }
 
+// Jobs run inline: a buffer is prepared as soon as the core takes it.
+static void wait_prepared(ui_app *app) { ui_core_receive(&app->core); }
+
 const ui_scheduler_ops ui_scheduler_single = {
     .name = "single",
     .start = start,
@@ -68,4 +71,5 @@ const ui_scheduler_ops ui_scheduler_single = {
     .frame = frame,
     .frame_without_logic = frame_without_logic,
     .wait_until = wait_until,
+    .wait_prepared = wait_prepared,
 };

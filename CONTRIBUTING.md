@@ -29,7 +29,7 @@ test's 10,000 runs are not enough to catch most bugs a change introduces.
 | `fuzz_utf8` | `src/unicode/utf8.c` |
 | `fuzz_linebreak` | `src/unicode/linebreak.c`, `grapheme.c`, the UCD tables |
 | `fuzz_bidi` | `src/unicode/bidi.c`, the UCD tables |
-| `fuzz_set_text` | the `set_text`/`append_text` decoding in `src/core/scene.c`, and all of `src/text/` (fonts, shaping, paragraph layout, rasterizer, atlas, hit testing) and `src/unicode/` |
+| `fuzz_set_text` | the `set_text`/`append_text` decoding in `src/core/text_op.c` and its application in `src/core/scene.c`, and all of `src/text/` (fonts, shaping, paragraph layout, rasterizer, atlas, glyph cache, hit testing) and `src/unicode/` |
 | `fuzz_commands` | `src/wire/` and `src/core/scene.c`: framing and validation of every op, applying them, springs, clipping and display-list building |
 
 ```sh

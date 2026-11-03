@@ -97,6 +97,7 @@ static ui_result shape_run(ui_text_shaper *s, ui_font_registry *fonts, const ui_
     ui_font *font = ui_font_registry_font(fonts, face, st->size * p->scale, st->weight,
                                           (ui_font_style)st->style, &run->font);
     if (!font) return UI_ERR_OUT_OF_MEMORY;
+    run->sized_font = font;
     ui_font_metrics m;
     ui_font_get_metrics(font, &m);
     run->ascent = m.ascent;
@@ -122,6 +123,8 @@ static ui_result shape_run(ui_text_shaper *s, ui_font_registry *fonts, const ui_
 ui_result ui_shape_paragraph(ui_text_shaper *s, ui_font_registry *fonts,
                              const ui_text_input *in, float scale, ui_shaped_paragraph *p) {
     p->scale = scale;
+    // Read before matching: shaping that raced a registration is then seen as stale.
+    p->generation = ui_font_registry_generation(fonts);
     p->run_count = 0;
     p->glyph_count = 0;
     // Decode. The text is valid UTF-8, so the code point count is at most its length.
@@ -164,6 +167,11 @@ ui_result ui_shape_paragraph(ui_text_shaper *s, ui_font_registry *fonts,
                                                    (ui_font_style)st->style);
         if (s->style_faces[k] == UI_NO_FACE) return UI_ERR_WRONG_STATE;
     }
+    const ui_text_style *base = &in->base;
+    ui_font *base_font = ui_font_registry_font(fonts, s->style_faces[0], base->size * scale,
+                                               base->weight, (ui_font_style)base->style, NULL);
+    if (!base_font) return UI_ERR_OUT_OF_MEMORY;
+    ui_font_get_metrics(base_font, &p->base_metrics);
 
     // Font per grapheme cluster, then runs at cluster starts where anything changes.
     ui_shaped_run cur = {0};
@@ -226,7 +234,8 @@ ui_result ui_shape_paragraph(ui_text_shaper *s, ui_font_registry *fonts,
 ui_result ui_reshape_range(ui_text_shaper *s, ui_font_registry *fonts, const ui_text_input *in,
                            const ui_shaped_run *run, uint32_t start, uint32_t end,
                            const ui_glyph_pos **glyphs, uint32_t *count) {
-    ui_font *font = ui_font_registry_font_by_key(fonts, run->font);
+    ui_font *font = run->sized_font;
+    if (!font) font = ui_font_registry_font_by_key(fonts, run->font);
     if (!font) return UI_ERR_OUT_OF_MEMORY;
     ui_shape_request req = {in->text, in->len, start, end - start, run->script, run->level & 1,
                             NULL, 0};

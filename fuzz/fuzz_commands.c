@@ -17,8 +17,9 @@ static void ignore_timer(void *user, uint32_t id, uint64_t deadline_ns) {
     (void)user, (void)id, (void)deadline_ns;
 }
 
-static void ignore_font(void *user, uint32_t id, const char *path, uint32_t len) {
-    (void)user, (void)id, (void)path, (void)len;
+static void ignore_font(void *user, uint32_t id, const char *path, uint32_t len,
+                        uint32_t offset) {
+    (void)user, (void)id, (void)path, (void)len, (void)offset;
 }
 
 // The number of ops a walk of the framing finds, plus one if it stops at a framing error

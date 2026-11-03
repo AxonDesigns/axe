@@ -1,6 +1,7 @@
-// Loading fonts at runtime: load_font registers a file at the frame boundary, answers with
-// font_loaded, and text already on screen is shaped again with the new font (here Hebrew,
-// which the app could only draw as .notdef before).
+// Loading fonts at runtime: load_font registers a file, answers with font_loaded, and text
+// already on screen is shaped again with the new font (here Hebrew, which the app could
+// only draw as .notdef before). The file is read and the text reshaped on workers, so the
+// frame that applies load_font shows the new font without the core shaping anything.
 #include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
@@ -51,13 +52,13 @@ static uint32_t first_run_face(ui_app *app, ui_handle node) {
     return p && p->shaped_valid && p->shaped.run_count ? p->shaped.runs[0].font.face : UINT32_MAX;
 }
 
-static void test_load_font(void) {
+static void load_font_with(ui_scheduler_kind scheduler) {
     font_logic logic = {0};
     ui_handle_allocator_create(&logic.alloc);
     atomic_init(&logic.loaded_ok, 0);
     atomic_init(&logic.loaded_failed, 0);
     ui_app_desc desc = {
-        .scheduler = UI_SCHEDULER_SINGLE,
+        .scheduler = scheduler,
         .gpu = UI_GPU_SOFTWARE,
         .surface = {.kind = UI_SURFACE_HEADLESS, .width = 200, .height = 60},
         .logic = {.user = &logic, .on_events = on_events},
@@ -88,6 +89,10 @@ static void test_load_font(void) {
     ui_image after;
     CHECK(ui_surface_capture(app, ui_app_main_surface(app), &after) == UI_OK);
     CHECK(memcmp(before.pixels, after.pixels, (size_t)before.stride * before.height) != 0);
+    ui_app_stats stats;
+    ui_app_get_stats(app, &stats);
+    CHECK_EQ_INT(stats.text_shaped_on_core, 0);
+    CHECK_EQ_INT(stats.glyphs_rasterized_on_core, 0);
     ui_image_free(&before);
     ui_image_free(&after);
     ui_cmd_writer_destroy(w);
@@ -95,7 +100,11 @@ static void test_load_font(void) {
     ui_handle_allocator_destroy(logic.alloc);
 }
 
+static void test_load_font_single(void) { load_font_with(UI_SCHEDULER_SINGLE); }
+static void test_load_font_threaded(void) { load_font_with(UI_SCHEDULER_THREADED); }
+
 int main(void) {
-    RUN(test_load_font);
+    RUN(test_load_font_single);
+    RUN(test_load_font_threaded);
     return test_failures != 0;
 }

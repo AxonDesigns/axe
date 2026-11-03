@@ -12,6 +12,7 @@ add_library(ui STATIC
     runtime/app.c
     runtime/common.c
     runtime/handle_table.c
+    runtime/jobs.c
     runtime/logic_actor.c
     runtime/queue.c
     runtime/sched_single.c
@@ -20,7 +21,9 @@ add_library(ui STATIC
     core/clock.c
     core/core.c
     core/display_list.c
+    core/prepare.c
     core/scene.c
+    core/text_op.c
     core/spring.c
     hooks/hooks.c
     image/image_codec.c
@@ -31,6 +34,7 @@ add_library(ui STATIC
     render/render.c
     text/atlas.c
     text/font_registry.c
+    text/glyph_cache.c
     text/hittest.c
     text/paragraph.c
     text/raster.c

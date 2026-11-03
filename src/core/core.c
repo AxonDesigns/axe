@@ -45,19 +45,33 @@ static void set_timer(void *user, uint32_t id, uint64_t deadline_ns) {
 }
 
 // Scene callback for load_font ops, applied at the frame boundary like every command. The
-// file is opened on the core thread: HarfBuzz maps it and reads tables lazily, so this is
-// cheap for local files.
-static void load_font(void *user, uint32_t id, const char *path, uint32_t len) {
+// file was read on a worker and registered when its buffer reached the head of the queue
+// (core/prepare.h); here only the answer goes out. A buffer that could not be prepared
+// loads the file now, on the core thread.
+static void load_font(void *user, uint32_t id, const char *path, uint32_t len, uint32_t offset) {
     ui_core *c = user;
-    char buf[UI_FONT_PATH_MAX + 1];
-    memcpy(buf, path, len);
-    buf[len] = 0;
-    uint32_t before = ui_font_registry_face_count(c->fonts);
-    ui_result r = ui_font_registry_add_file(c->fonts, buf, 0, NULL);
-    if (r == UI_OK && ui_font_registry_face_count(c->fonts) != before)
-        ui_scene_fonts_changed(&c->scene);
+    ui_prep_font *f = c->applying ? ui_prep_font_at(c->applying, offset) : NULL;
+    ui_result r;
+    if (f) {
+        r = f->result;
+    } else {
+        char buf[UI_FONT_PATH_MAX + 1];
+        memcpy(buf, path, len);
+        buf[len] = 0;
+        uint64_t before = ui_font_registry_generation(c->fonts);
+        r = ui_font_registry_add_file(c->fonts, buf, 0, NULL);
+        if (ui_font_registry_generation(c->fonts) != before) {
+            c->text.generation = ui_font_registry_generation(c->fonts);
+            ui_scene_fonts_changed(&c->scene);
+        }
+    }
     if (ui_wire_event_font_loaded(&c->events, id, r) != UI_OK)
         UI_ERROR(c->log, MODULE, "out of memory queueing font events");
+}
+
+static void free_pending(ui_core *c, uint32_t i) {
+    ui_prep_free(c->pending[i].prep);
+    free(c->pending[i].data);
 }
 
 static int timer_order(const void *a, const void *b) {
@@ -95,7 +109,10 @@ static float env_float(const char *name, float fallback) {
 static ui_result init_text(ui_core *c, const ui_text_config *cfg) {
     static const ui_text_config none = {0};
     if (!cfg) cfg = &none;
-    ui_font_registry_desc fd = {.log = c->log, .system_fonts = cfg->system_fonts};
+    // Loading the system font configuration can take tens of milliseconds: it happens on a
+    // worker, and buffers are prepared once it is done.
+    ui_font_registry_desc fd = {.log = c->log, .system_fonts = cfg->system_fonts,
+                                .defer_discovery = true};
     ui_result r = ui_font_registry_create(&fd, &c->fonts);
     if (r != UI_OK) return r;
     for (uint32_t i = 0; i < cfg->font_file_count; i++)
@@ -104,9 +121,20 @@ static ui_result init_text(ui_core *c, const ui_text_config *cfg) {
         UI_WARN(c->log, MODULE, "no fonts: text will not be drawn");
     r = ui_text_context_init(&c->text, c->fonts);
     if (r != UI_OK) return r;
+    c->text.generation = ui_font_registry_generation(c->fonts);
     ui_atlas_desc ad = {cfg->atlas_page_size, cfg->atlas_max_pages, cfg->glyph_evict_frames};
     r = ui_atlas_create(&ad, &c->atlas);
     if (r != UI_OK) return r;
+    r = ui_glyph_cache_create(cfg->glyph_cache_bytes, &c->glyphs);
+    if (r != UI_OK) return r;
+    ui_atlas_set_glyph_cache(c->atlas, c->glyphs);
+    ui_preparer_desc pd = {
+        .log = c->log, .hooks = c->hooks, .jobs = c->jobs, .fonts = c->fonts,
+        .glyphs = c->glyphs, .wake = core_wake, .wake_user = c,
+    };
+    r = ui_preparer_create(&pd, &c->preparer);
+    if (r != UI_OK) return r;
+    ui_preparer_start_discovery(c->preparer);
     c->text_contrast = env_float("UI_TEXT_CONTRAST", cfg->contrast > 0 ? cfg->contrast : UI_TEXT_DEFAULT_CONTRAST);
     c->text_gamma = env_float("UI_TEXT_GAMMA", cfg->gamma > 0 ? cfg->gamma : 1.f);
     return UI_OK;
@@ -118,6 +146,7 @@ ui_result ui_core_init(ui_core *c, const ui_core_desc *desc) {
     c->hooks = desc->hooks;
     c->platform = desc->platform;
     c->progress = desc->progress;
+    c->jobs = desc->jobs;
     ui_clock_init(&c->clock, desc->time, desc->start_paused);
     ui_scene_init(&c->scene, desc->log);
     ui_handle_table_init(&c->surface_handles, UI_HANDLE_SURFACE);
@@ -134,11 +163,18 @@ ui_result ui_core_init(ui_core *c, const ui_core_desc *desc) {
         ui_actor_destroy(&c->actor);
         return r;
     }
-    r = init_text(c, desc->text);
+    if (!c->jobs) {
+        r = ui_jobs_create(&(ui_jobs_desc){.log = c->log, .threads = 0}, &c->own_jobs);
+        c->jobs = c->own_jobs;
+    }
+    if (r == UI_OK) r = init_text(c, desc->text);
     if (r != UI_OK) {
+        ui_jobs_destroy(c->own_jobs);
         ui_queue_destroy(&c->from_logic, NULL);
         ui_actor_destroy(&c->actor);
+        ui_preparer_destroy(c->preparer); // discovery starts last, so no job is running
         ui_atlas_destroy(c->atlas);
+        ui_glyph_cache_destroy(c->glyphs);
         ui_text_context_free(&c->text);
         ui_font_registry_destroy(c->fonts);
     }
@@ -149,7 +185,7 @@ void ui_core_destroy(ui_core *c) {
     ui_queue_destroy(&c->from_logic, ui_msg_drop);
     ui_actor_destroy(&c->actor);
     free(c->timers);
-    for (uint32_t i = 0; i < c->pending_count; i++) free(c->pending[i].data);
+    for (uint32_t i = 0; i < c->pending_count; i++) free_pending(c, i);
     free(c->pending);
     for (uint32_t i = 0; i < UI_MAX_SURFACES; i++) {
         for (int j = 0; j < 3; j++) ui_display_list_free(&c->surfaces[i].lists[j]);
@@ -158,7 +194,10 @@ void ui_core_destroy(ui_core *c) {
     ui_handle_table_destroy(&c->surface_handles);
     ui_scene_destroy(&c->scene); // before the fonts its paragraphs refer to
     free(c->unsent);
+    ui_jobs_destroy(c->own_jobs); // inline: never holds queued work
+    ui_preparer_destroy(c->preparer);
     ui_atlas_destroy(c->atlas);
+    ui_glyph_cache_destroy(c->glyphs);
     ui_raster_free(&c->raster);
     ui_text_context_free(&c->text);
     ui_font_registry_destroy(c->fonts);
@@ -299,10 +338,16 @@ void ui_core_force_frame(ui_core *c) {
 
 static void handle(ui_core *c, ui_msg msg) {
     switch (msg.type) {
-    case UI_MSG_CMD_BUFFER:
-        // drain() reserved the slot, so a buffer is never refused here.
-        c->pending[c->pending_count++] = (struct ui_pending_cmds){msg.ptr, msg.size};
+    case UI_MSG_CMD_BUFFER: {
+        // drain() reserved the slot, so a buffer is never refused here. A well-framed buffer
+        // starts preparing now (once font discovery is ready); a malformed one is rejected
+        // when applied.
+        ui_prep_buffer *prep = NULL;
+        if (ui_scene_validate(msg.ptr, msg.size) == UI_OK)
+            prep = ui_prep_create(c->preparer, msg.ptr, msg.size);
+        c->pending[c->pending_count++] = (struct ui_pending_cmds){msg.ptr, msg.size, prep, false};
         break;
+    }
     case UI_MSG_EVENTS_DONE:
         c->events_in_flight -= (uint32_t)msg.u64;
         break;
@@ -356,6 +401,147 @@ static bool surface_has_work(ui_core *c, const ui_core_surface *s) {
     const ui_scene_root *root = ui_scene_root_of(&c->scene, s->handle);
     return s->force_draw || s->resized_pending || s->config_changed ||
            (root && (root->dirty || root->animating));
+}
+
+// ---- Preparation (core/prepare.h) --------------------------------------------------------
+
+static bool pending_ready(const struct ui_pending_cmds *p) {
+    return !p->prep || ui_prep_ready(p->prep);
+}
+
+// Received buffers count as work only once the first can be applied.
+static bool head_ready(const ui_core *c) {
+    return c->pending_count && pending_ready(&c->pending[0]);
+}
+
+// Keeps each root's scale current: applied text adopts the shaping prepared at it.
+static void sync_scales(ui_core *c) {
+    for (uint32_t i = 0; i < UI_MAX_SURFACES; i++) {
+        ui_core_surface *s = &c->surfaces[i];
+        ui_scene_root *root = ui_handle_is_null(s->handle) ? NULL : ui_scene_root_of(&c->scene, s->handle);
+        if (root && s->configured) root->scale = (float)s->config.scale_120 / 120.f;
+    }
+}
+
+// The distinct scales of the configured surfaces: text is prepared at each of them.
+static uint32_t surface_scales(const ui_core *c, float *out) {
+    uint32_t n = 0;
+    for (uint32_t i = 0; i < UI_MAX_SURFACES; i++) {
+        const ui_core_surface *s = &c->surfaces[i];
+        if (ui_handle_is_null(s->handle) || !s->configured) continue;
+        float scale = (float)s->config.scale_120 / 120.f;
+        bool seen = false;
+        for (uint32_t k = 0; k < n && !seen; k++) seen = out[k] == scale;
+        if (!seen) out[n++] = scale;
+    }
+    return n;
+}
+
+// The head step of a buffer with fonts: every existing paragraph is shaped again.
+static void head_step(ui_core *c, ui_prep_buffer *head) {
+    sync_scales(c);
+    ui_scene *s = &c->scene;
+    ui_prep_paragraph *paras = malloc((s->handles.live ? s->handles.live : 1) * sizeof *paras);
+    ui_prep_buffer **preps = malloc(c->pending_count * sizeof *preps);
+    uint32_t para_count = 0, prep_count = 0;
+    for (uint32_t slot = 0; paras && slot < s->handles.used; slot++) {
+        const ui_node *n = &s->nodes[slot];
+        if (!s->handles.alive[slot] || !n->text || !n->text->source) continue;
+        paras[para_count++] = (ui_prep_paragraph){ui_scene_handle_of(s, slot), n->text->source,
+                                                  s->roots[n->root].scale};
+    }
+    for (uint32_t i = 0; preps && i < c->pending_count; i++) {
+        if (c->pending[i].prep) preps[prep_count++] = c->pending[i].prep;
+    }
+    // Without memory for the lists, fonts are still registered; text left out is shaped
+    // on the core when laid out.
+    ui_prep_head_step(head, preps, prep_count, paras, para_count);
+    free(paras);
+    free(preps);
+}
+
+// Starts received buffers once font discovery is ready, and runs the head step of a head
+// buffer with fonts. Runs before and after a frame, never inside its apply phase, so when a
+// head step happens relative to frames is the same under both schedulers.
+static void advance_prep(ui_core *c) {
+    if (!c->pending_count || !ui_preparer_discovery_ready(c->preparer)) return;
+    float scales[UI_MAX_SURFACES];
+    uint32_t n = surface_scales(c, scales);
+    for (uint32_t i = 0; i < c->pending_count; i++) {
+        ui_prep_buffer *b = c->pending[i].prep;
+        if (b && !b->started) ui_prep_start(b, scales, n);
+    }
+    ui_prep_buffer *head = c->pending[0].prep;
+    if (head && ui_prep_idle(head) && ui_prep_needs_head_step(head)) head_step(c, head);
+}
+
+// A buffer whose fonts changed the registered faces was applied: its reshaped paragraphs
+// replace the old shaping, all in this frame.
+static void fonts_applied(ui_core *c, ui_prep_buffer *b) {
+    c->text.generation = b->generation;
+    for (uint32_t i = 0; i < b->reshape_count; i++) {
+        ui_prep_reshape *r = &b->reshapes[i];
+        ui_node *n = r->ok ? ui_scene_node(&c->scene, r->node) : NULL;
+        if (n && n->text && n->text->source == r->source &&
+            c->scene.roots[n->root].scale == r->scale)
+            ui_paragraph_adopt_shaped(n->text, &r->shaped);
+    }
+    ui_scene_fonts_changed(&c->scene);
+}
+
+// Applies every buffer from the head on that is ready, in order; the first that isn't, and
+// all after it, wait for a later frame.
+static void apply_ready(ui_core *c, uint64_t now) {
+    sync_scales(c);
+    uint32_t done = 0;
+    for (; done < c->pending_count && pending_ready(&c->pending[done]); done++) {
+        struct ui_pending_cmds *p = &c->pending[done];
+        if (p->deferred) {
+            uint64_t waited = ui_monotonic_ns() - c->head_wait_since;
+            c->stats.buffers_deferred++;
+            if (waited > c->stats.max_head_wait_ns) c->stats.max_head_wait_ns = waited;
+            if (waited > 100000000u)
+                UI_DEBUG_REPORT(c->log, MODULE, "a command buffer waited %.1f ms for preparation",
+                                (double)waited / 1e6);
+            c->head_wait_since = 0;
+        }
+        uint64_t before = c->scene.stats.applied;
+        c->applying = p->prep;
+        if (ui_scene_apply_prepared(&c->scene, p->data, p->size, now, p->prep ? &p->prep->scene : NULL) != UI_OK)
+            UI_ERROR(c->log, MODULE, "rejected a malformed command buffer");
+        c->applying = NULL;
+        c->stats.commands_applied += c->scene.stats.applied - before;
+        if (p->prep && p->prep->fonts_changed) fonts_applied(c, p->prep);
+        if (p->prep) {
+            // Its glyphs stay in the glyph cache until every surface has drawn once.
+            c->unreleased_seq = p->prep->seq;
+            c->unreleased_epoch = c->epoch + 1;
+        }
+        free_pending(c, done);
+    }
+    if (!done) return;
+    memmove(c->pending, c->pending + done, (c->pending_count - done) * sizeof *c->pending);
+    c->pending_count -= done;
+}
+
+// Notes a frame that the head buffer missed while preparing.
+static void note_deferred(ui_core *c) {
+    if (!c->pending_count || c->pending[0].deferred) return;
+    c->pending[0].deferred = true;
+    c->head_wait_since = ui_monotonic_ns();
+}
+
+// Glyphs prepared for the newest applied buffer may leave the glyph cache once every surface
+// has drawn since it applied (or has nothing to draw).
+static void release_prepared_glyphs(ui_core *c) {
+    if (!c->unreleased_seq) return;
+    for (uint32_t i = 0; i < UI_MAX_SURFACES; i++) {
+        const ui_core_surface *s = &c->surfaces[i];
+        if (ui_handle_is_null(s->handle)) continue;
+        if (s->last_epoch < c->unreleased_epoch && surface_has_work(c, s)) return;
+    }
+    ui_glyph_cache_release(c->glyphs, c->unreleased_seq);
+    c->unreleased_seq = 0;
 }
 
 // Queues the atlas changes made so far for the render actor. False only when memory ran out;
@@ -457,7 +643,7 @@ static void frame(ui_core *c) {
 
     // Nothing to apply and no ready surface with work: every ready surface is idle, and
     // skipping costs no apply, animate or GPU work.
-    bool busy = c->pending_count > 0;
+    bool busy = head_ready(c);
     for (uint32_t i = 0; i < UI_MAX_SURFACES && !busy; i++) {
         ui_core_surface *s = &c->surfaces[i];
         if (!ui_handle_is_null(s->handle) && s->frame_ready && surface_has_work(c, s)) busy = true;
@@ -472,14 +658,7 @@ static void frame(ui_core *c) {
         }
 
         UI_HOOK_PHASE_BEGIN(c->hooks, UI_PHASE_APPLY, main, frame_id);
-        for (uint32_t i = 0; i < c->pending_count; i++) {
-            uint64_t before = c->scene.stats.applied;
-            if (ui_scene_apply(&c->scene, c->pending[i].data, c->pending[i].size, now) != UI_OK)
-                UI_ERROR(c->log, MODULE, "rejected a malformed command buffer");
-            c->stats.commands_applied += c->scene.stats.applied - before;
-            free(c->pending[i].data);
-        }
-        c->pending_count = 0;
+        apply_ready(c, now);
         c->stats.commands_dropped = c->scene.stats.dropped;
         c->stats.buffers_rejected = c->scene.stats.rejected;
         UI_HOOK_PHASE_END(c->hooks, UI_PHASE_APPLY, main, frame_id);
@@ -508,6 +687,8 @@ static void frame(ui_core *c) {
         }
     }
     if (busy) ui_atlas_end_frame(c->atlas);
+    note_deferred(c);
+    release_prepared_glyphs(c);
     c->stats.text_invalid_sequences = c->scene.stats.text_invalid;
     ui_atlas_stats as;
     ui_atlas_get_stats(c->atlas, &as);
@@ -517,6 +698,12 @@ static void frame(ui_core *c) {
     c->stats.atlas_updates = as.updates;
     c->stats.atlas_pages = as.pages;
     c->stats.glyphs_cached = as.glyphs;
+    c->stats.glyphs_rasterized_on_core = as.rasterized - as.from_cache;
+    c->stats.text_shaped_on_core = c->text.shapes;
+    ui_preparer_stats ps;
+    ui_preparer_get_stats(c->preparer, &ps);
+    c->stats.texts_prepared = ps.texts;
+    c->stats.glyphs_prepared = ps.glyphs;
     UI_HOOK_PHASE_END(c->hooks, UI_PHASE_COMMIT, main, frame_id);
     if (drew) ui_signal_notify(&c->render->signal);
 }
@@ -529,7 +716,7 @@ static void wake_idle(ui_core *c) {
         ui_core_surface *s = &c->surfaces[i];
         if (ui_handle_is_null(s->handle) || !s->configured) continue;
         if (s->frame_ready || s->awaiting_frame) continue;
-        if (c->pending_count == 0 && !surface_has_work(c, s)) continue;
+        if (!head_ready(c) && !surface_has_work(c, s)) continue;
         s->awaiting_frame = true;
         c->platform->vt->surface_request_frame(s->platform);
     }
@@ -553,10 +740,27 @@ static void flush_events(ui_core *c) {
 void ui_core_step(void *self) {
     ui_core *c = self;
     drain(c);
+    advance_prep(c);
     fire_timers(c);
     frame(c);
+    advance_prep(c);
     wake_idle(c);
     flush_events(c);
+}
+
+void ui_core_receive(ui_core *c) {
+    drain(c);
+    advance_prep(c);
+}
+
+bool ui_core_preparing(const ui_core *c) {
+    if (!ui_preparer_discovery_ready(c->preparer)) return true;
+    for (uint32_t i = 0; i < c->pending_count; i++) {
+        const ui_prep_buffer *b = c->pending[i].prep;
+        if (b && (!b->started || !ui_prep_idle(b))) return true;
+    }
+    // A head that still needs its head step gets it at the end of this core step.
+    return c->pending_count && c->pending[0].prep && ui_prep_needs_head_step(c->pending[0].prep);
 }
 
 uint64_t ui_core_wait_timeout_ns(ui_core *c) {
@@ -585,7 +789,7 @@ bool ui_core_frames_done(const ui_core *c) {
 }
 
 bool ui_core_idle(const ui_core *c) {
-    if (c->events_in_flight || c->events.op_count) return false;
+    if (c->events_in_flight || c->events.op_count || ui_core_preparing(c)) return false;
     for (uint32_t i = 0; i < UI_MAX_SURFACES; i++) {
         const ui_core_surface *s = &c->surfaces[i];
         if (ui_handle_is_null(s->handle)) continue;

@@ -18,6 +18,7 @@
 #include <stdint.h>
 
 #include "text/font_registry.h"
+#include "text/glyph_cache.h"
 #include "text/raster.h"
 
 #define UI_ATLAS_SUBPIXEL_BINS 4
@@ -27,12 +28,6 @@ typedef enum ui_atlas_format {
     UI_ATLAS_R8 = 0,   // coverage
     UI_ATLAS_RGBA8,    // reserved for color glyphs
 } ui_atlas_format;
-
-typedef struct ui_glyph_key {
-    ui_font_key font;
-    uint32_t glyph;
-    uint32_t bin;      // horizontal subpixel bin, 0..UI_ATLAS_SUBPIXEL_BINS-1
-} ui_glyph_key;
 
 // A cached glyph. width or height 0: nothing to draw (spaces, rejected glyphs).
 typedef struct ui_atlas_glyph {
@@ -49,7 +44,8 @@ typedef struct ui_atlas_desc {
 typedef struct ui_atlas_stats {
     uint32_t glyphs;       // cached now
     uint32_t pages;        // allocated now
-    uint64_t rasterized;   // total glyphs rasterized
+    uint64_t rasterized;   // glyphs added (rasterized here or copied from the glyph cache)
+    uint64_t from_cache;   // of those, copied from the glyph cache (prepared by a worker)
     uint64_t evicted;
     uint64_t rejected;     // larger than a page, or no space left
     uint64_t updates;      // updates produced
@@ -87,9 +83,13 @@ void ui_atlas_destroy(ui_atlas *a);
 // unfinished display lists; UINT64_MAX if none is in flight).
 void ui_atlas_begin_frame(ui_atlas *a, uint64_t epoch, uint64_t protect_epoch);
 
-// The glyph for `key`, rasterizing and packing it on first use, and marks it used this
-// epoch. NULL on allocation failure; a glyph that cannot be placed is cached as empty
-// (and counted as rejected) so it is not retried every frame.
+// Glyphs missing from the atlas are looked up in `cache` (may be NULL) before being
+// rasterized here. The cache must outlive the atlas.
+void ui_atlas_set_glyph_cache(ui_atlas *a, ui_glyph_cache *cache);
+
+// The glyph for `key`, packing it on first use (from the glyph cache, else rasterized now),
+// and marks it used this epoch. NULL on allocation failure; a glyph that cannot be placed
+// is cached as empty (and counted as rejected) so it is not retried every frame.
 const ui_atlas_glyph *ui_atlas_get(ui_atlas *a, ui_raster *raster, ui_font *font,
                                    ui_glyph_key key);
 

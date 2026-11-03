@@ -38,7 +38,8 @@ static ui_result add_group(ui_paragraph *p, ui_text_context *c, const ui_layout_
     float carets[MAX_LIGATURE_PARTS];
     bool have_carets = false;
     if (parts > 1 && glyphs == 1) {
-        ui_font *font = ui_font_registry_font_by_key(c->fonts, run->font);
+        ui_font *font = run->sized_font;
+        if (!font) font = ui_font_registry_font_by_key(c->fonts, run->font);
         have_carets = font && ui_font_ligature_carets(font, first->glyph, rtl, carets,
                                                       parts - 1) == parts - 1;
     }

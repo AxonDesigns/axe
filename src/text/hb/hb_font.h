@@ -1,7 +1,8 @@
 // Font faces, sized font instances, shaping and glyph outlines. This module is the only code
 // that includes hb.h; nothing HarfBuzz-specific crosses this header, so replacing HarfBuzz
-// touches one directory. Thread: whichever owns the objects (the core thread); objects are
-// not shared between threads.
+// touches one directory. Thread: faces and fonts are immutable once created, so any number
+// of threads may use them at once (HarfBuzz objects are made immutable); a ui_shaper is used
+// by one thread at a time.
 #pragma once
 
 #include <stdbool.h>
