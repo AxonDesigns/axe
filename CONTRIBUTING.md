@@ -17,9 +17,26 @@ Node.js and npm are only for that second step: the build calls the tools' native
 cmake --preset debug && cmake --build --preset debug && ctest --preset debug
 ```
 
-The presets are `debug`, `release`, `asan` (ASan + UBSan) and `fuzz` (libFuzzer + ASan +
-UBSan). Tests run headless on lavapipe. Before committing, the debug, release and asan
-suites must all pass.
+The presets are `debug`, `release`, `asan` (ASan + UBSan), `tsan` (ThreadSanitizer) and
+`fuzz` (libFuzzer + ASan + UBSan). Tests run headless on lavapipe. Before committing, the
+debug, release and asan suites must all pass; for a change to threading, preparation or
+anything shared between threads, so must tsan.
+
+### ThreadSanitizer
+
+The core, the render thread, the logic thread and the preparation workers share data, and a
+race between them shows up under ASan only when the timing happens to expose it. TSan
+reports a race on every run, so CI runs the whole suite under the `tsan` preset.
+
+- **The shim:** glibc's C11 threads call pthreads internally, where TSan doesn't see them.
+  The build force-includes `tools/tsan/c11_shim.h` into every C file, which maps
+  `thrd_*`, `mtx_*` and `cnd_*` onto pthreads. A new C11 threads function the code starts
+  using needs mapping there too.
+- **The build is optimized** (RelWithDebInfo): at `-O0` the golden tests took minutes each.
+- **The driver is lavapipe:** the test preset points the Vulkan loader at it. TSan crashes
+  inside NVIDIA's proprietary driver.
+- **Suppressions** (`tools/tsan/tsan.supp`) are for third-party code only (Mesa's
+  `lp_fence_destroy`). A race in our code is fixed, never suppressed.
 
 ## TypeScript
 

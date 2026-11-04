@@ -1,4 +1,6 @@
-# Linux CI: builds the debug and asan presets and runs every test headless on lavapipe, and
+# Linux CI: builds the debug, asan and tsan presets and runs every test headless on lavapipe
+# (tsan: ThreadSanitizer, which catches data races on every run, not only when the timing
+# exposes them; tools/tsan/), and
 # runs each libFuzzer target from its seed corpus (the fuzz preset's tests). Longer fuzzing
 # runs nightly in fuzz.yml. bench-callgrind guards the benchmarks' instruction counts, idl
 # checks the wire IDL's generated code and evolution rules, and actionlint checks the
@@ -34,7 +36,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        preset: [debug, asan, fuzz]
+        preset: [debug, asan, tsan, fuzz]
     steps:
       - uses: actions/checkout@v4
         with:

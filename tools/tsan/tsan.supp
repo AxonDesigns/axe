@@ -1,0 +1,6 @@
+# ThreadSanitizer suppressions for the tsan test preset: races inside third-party code we
+# don't build with TSan and can't fix. Never suppress a race in our own code here; fix it.
+#
+# Mesa's llvmpipe (lavapipe, the CI driver) destroys a fence's mutex and condition variable
+# while its rasterizer threads may still touch them (lp_fence.c).
+race:lp_fence_destroy

@@ -62,9 +62,28 @@ visibly snapped when it stopped. There were two causes.
     TSan reports the race on every run.
   - With the fix: 0 of 20 ASan runs, TSan clean apart from Mesa's known `lp_fence_destroy`.
     The TS example's case: 0 of 24.
-- **TSan** is still a local build, not a preset or a CI job; it needs the shim that maps
-  C11 threads onto pthreads (M1 decisions). It found this race on every run, where ASan
-  needed luck. A TSan CI job would catch this class of bug reliably.
+- **TSan found it on every run, where ASan needed luck,** so it became a preset and a CI
+  job (next section).
+
+### ThreadSanitizer in CI
+- **A `tsan` preset and CI matrix entry** run the whole suite under ThreadSanitizer with
+  `halt_on_error=1`: any race fails its test.
+- **The C11 shim is committed** (`tools/tsan/c11_shim.h`). `cmake/Sanitizers.cmake`
+  force-includes it into every C file when `UI_SANITIZE` contains `thread`. It maps
+  `thrd_create`/`thrd_join`, `mtx_*` and `cnd_*` onto pthreads, which TSan intercepts
+  (M1 decisions: glibc's C11 functions call pthreads out of TSan's sight). C++ (HarfBuzz)
+  doesn't get it, and Rust (wgpu-native) isn't instrumented at all.
+- **RelWithDebInfo, not Debug.** At `-O0` `text_golden` took 662 s under TSan; at `-O2`,
+  14 s. The whole suite runs in about 90 s locally (4 jobs).
+- **lavapipe only:** the test preset sets `VK_DRIVER_FILES` to lavapipe's ICD (both file
+  names distributions use), since TSan segfaults inside NVIDIA's proprietary driver.
+  `script_host` crashed that way locally before. CI has only lavapipe anyway.
+- **Suppressions:** one, Mesa's `lp_fence_destroy` (llvmpipe destroys a fence's mutex
+  while its threads may still touch it). Races in our code are fixed, not suppressed.
+- **First run:** the whole suite passes with no reports in our code.
+- **Proved:** with the head step's old order put back, the preset failed
+  `font_loading` 3 times out of 3, reporting `data race ... core.c:482 in head_step`. With
+  the fix it passes.
 
 ## Milestone 3a: language binding plumbing
 

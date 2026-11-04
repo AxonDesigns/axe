@@ -34,6 +34,15 @@
       }
     },
     {
+      "name": "tsan",
+      "displayName": "Optimized + ThreadSanitizer",
+      "inherits": "base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "UI_SANITIZE": "thread"
+      }
+    },
+    {
       "name": "fuzz",
       "displayName": "libFuzzer + ASan + UBSan",
       "inherits": "base",
@@ -48,6 +57,7 @@
     { "name": "debug", "configurePreset": "debug" },
     { "name": "release", "configurePreset": "release" },
     { "name": "asan", "configurePreset": "asan" },
+    { "name": "tsan", "configurePreset": "tsan" },
     { "name": "fuzz", "configurePreset": "fuzz" }
   ],
   "testPresets": [
@@ -67,6 +77,16 @@
         "LSAN_OPTIONS": "suppressions=${sourceDir}/tools/lsan.supp:print_suppressions=0",
         "UBSAN_OPTIONS": "print_stacktrace=1:halt_on_error=1",
         "VK_LOADER_DISABLE_DYNAMIC_LIBRARY_UNLOADING": "1"
+      }
+    },
+    {
+      "name": "tsan",
+      "inherits": "base",
+      "configurePreset": "tsan",
+      "environment": {
+        "TSAN_OPTIONS": "halt_on_error=1:second_deadlock_stack=1:suppressions=${sourceDir}/tools/tsan/tsan.supp",
+        "VK_DRIVER_FILES": "/usr/share/vulkan/icd.d/lvp_icd.json:/usr/share/vulkan/icd.d/lvp_icd.x86_64.json",
+        "VK_ICD_FILENAMES": "/usr/share/vulkan/icd.d/lvp_icd.json:/usr/share/vulkan/icd.d/lvp_icd.x86_64.json"
       }
     },
     {
