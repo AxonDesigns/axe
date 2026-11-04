@@ -69,8 +69,14 @@ typedef struct run_desc {
     size_t bundle_size;
     ui_scheduler_kind scheduler;
     int frames;         // after the first, each 10 ms of the paused clock later
-    uint64_t long_task_ns;
+    uint64_t long_task_ns; // 0: none reported (see run)
 } run_desc;
+
+// Long tasks are measured in wall time, which a test doesn't control: under ThreadSanitizer
+// and a loaded machine, evaluating a small app or building 4,000 ops took 51 to 73 ms, past
+// the 50 ms default, and tests expecting no hooks failed (docs/decisions.md, milestone
+// 3a.2). So tests get no long-task reports unless they ask, with a threshold of their own.
+#define NO_LONG_TASKS 1000000000000ull
 
 static void run(const run_desc *rd, capture *c) {
     memset(c, 0, sizeof *c);
@@ -80,7 +86,7 @@ static void run(const run_desc *rd, capture *c) {
         .bundle = rd->bundle ? rd->bundle : rd->src,
         .bundle_size = rd->bundle ? rd->bundle_size : strlen(rd->src),
         .bundle_name = "test.js",
-        .long_task_ns = rd->long_task_ns,
+        .long_task_ns = rd->long_task_ns ? rd->long_task_ns : NO_LONG_TASKS,
         .internal = &internal,
     };
     ui_app_desc desc = {
@@ -252,6 +258,17 @@ static void test_long_task(void) {
     CHECK(i >= 0 && c.durations[i] >= 20 * MS);
 }
 
+// Regression (milestone 3a.2): a slow task is not a hook unless a test asks for long tasks.
+// 60 ms of work stands in for a machine slower than the default threshold allows.
+static void test_slow_task_not_reported(void) {
+    const char *src = "import { wall } from 'axe:test';\n"
+                      "const end = wall() + 60; while (wall() < end);\n";
+    capture c;
+    run(&(run_desc){.src = src}, &c);
+    CHECK(c.hook_count == 0);
+    if (test_failures) dump(&c);
+}
+
 static void test_leak_report(void) {
     const char *src = "import { reportLeak, debug } from 'axe:host';\n"
                       "import { record } from 'axe:test';\n"
@@ -365,6 +382,7 @@ int main(void) {
     RUN(test_errors_reported);
     RUN(test_load_errors);
     RUN(test_long_task);
+    RUN(test_slow_task_not_reported);
     RUN(test_leak_report);
     RUN(test_commands);
     RUN(test_text_globals);

@@ -69,18 +69,28 @@ jobs:
           path: build/${{ matrix.preset }}/cargo
           key: ${{ steps.setup.outputs.cargo-key }}
 
+      # Sanitizer reports go to each test's output: the CI log shows failing tests' output,
+      # LastTest.log keeps every test's (passing ones too, for reports from runs that still
+      # passed), and the JUnit file each test's result and output. Failed tests' output is
+      # kept whole (CTest truncates it otherwise), so a long report survives.
       - name: Test
-        run: ctest --preset ${{ matrix.preset }}
+        run: >
+          ctest --preset ${{ matrix.preset }}
+          --output-junit "${{ github.workspace }}/build/${{ matrix.preset }}/ctest-results.xml"
+          --test-output-size-failed 16777216
 
-      - name: Upload test artifacts
+      - name: Upload test and sanitizer logs
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: test-artifacts-${{ matrix.preset }}
+          name: test-logs-${{ matrix.preset }}
           path: |
-            build/${{ matrix.preset }}/Testing/Temporary/LastTest.log
+            build/${{ matrix.preset }}/Testing/Temporary/LastTest*.log
+            build/${{ matrix.preset }}/ctest-results.xml
             build/${{ matrix.preset }}/tests/**/*.png
             build/${{ matrix.preset }}/fuzz/crash-*
+            build/${{ matrix.preset }}/fuzz/leak-*
+            build/${{ matrix.preset }}/fuzz/timeout-*
           if-no-files-found: ignore
 
   # The benchmark guard: instruction counts of the CPU benchmark cases under Callgrind,
