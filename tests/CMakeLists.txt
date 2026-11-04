@@ -301,10 +301,12 @@ set_tests_properties(tsx_snapshots PROPERTIES DEPENDS axe-tsx)
 if(UI_BUILD_EXAMPLES)
     add_test(NAME layout_cards_equivalence
              COMMAND ${CMAKE_COMMAND} -DC=$<TARGET_FILE:layout_cards> -DTS=$<TARGET_FILE:layout_cards_ts>
+                     -DTSX=$<TARGET_FILE:layout_cards_tsx>
                      -DOUT=${CMAKE_CURRENT_BINARY_DIR}/equivalence "-DTIMES=0;1.3;2.6;4.1;6.2;12.4"
                      -P ${CMAKE_CURRENT_SOURCE_DIR}/ts/equivalence.cmake)
     add_test(NAME layout_cards_equivalence_dark_rtl
              COMMAND ${CMAKE_COMMAND} -DC=$<TARGET_FILE:layout_cards> -DTS=$<TARGET_FILE:layout_cards_ts>
+                     -DTSX=$<TARGET_FILE:layout_cards_tsx>
                      -DOUT=${CMAKE_CURRENT_BINARY_DIR}/equivalence-dark-rtl "-DTIMES=0;3.3"
                      "-DARGS=--dark;--rtl" -P ${CMAKE_CURRENT_SOURCE_DIR}/ts/equivalence.cmake)
     add_test(NAME spring_rect_ts COMMAND spring_rect_ts --headless --at 5 --strict

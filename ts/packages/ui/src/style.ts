@@ -15,7 +15,7 @@ import {
   type TokenDecl,
   type ValidColor,
 } from "@axe/core";
-import { entries, slotSetEntries, slotSetStyles, sugarProp, type StyleEntry } from "@axe/core/internal";
+import { entries, slotSetEntries, slotSetStylesRaw, sugarProp, type StyleEntry } from "@axe/core/internal";
 import type {
   AutoValue,
   ColorValue,
@@ -242,23 +242,52 @@ function sameValue(a: StyleValue | undefined, b: StyleValue): boolean {
   return true;
 }
 
-/** @internal A binding's body for a node's style prop: writes set_styles when the list of styles
- * changes, and set_props with the overrides that changed (unset for those that went). */
+/** @internal A style binding's state: what it last wrote. */
+export interface StyleState {
+  ids: number[];
+  overrides: Map<number, StyleValue> | null; // null: none
+  readonly defaults: Style | undefined;
+}
+
+/** @internal */
+export function styleState(defaults: Style | undefined): StyleState {
+  return { ids: [], overrides: null, defaults };
+}
+
+// Writes set_styles when the list of styles changes, and set_props with the overrides that
+// changed (unset for those that went).
+function applyStyleValue(slot: number, v: unknown, st: StyleState): void {
+  const defaults = st.defaults;
+  // The common case, one style and no inline styles: no arrays or maps but the ids written.
+  if (v instanceof Style && !st.overrides) {
+    const ids = st.ids, n = defaults ? 2 : 1;
+    if (ids.length === n && ids[n - 1] === v.id && (!defaults || ids[0] === defaults.id)) return;
+    st.ids = defaults ? [defaults.id, v.id] : [v.id];
+    slotSetStylesRaw(slot, st.ids);
+    return;
+  }
+  const nextIds: number[] = defaults ? [defaults.id] : [];
+  const inline: StyleEntry[] = [];
+  collect(v, nextIds, inline);
+  if (nextIds.length !== st.ids.length || nextIds.some((id, i) => id !== st.ids[i])) slotSetStylesRaw(slot, nextIds);
+  st.ids = nextIds;
+  if (!inline.length && !st.overrides) return;
+  const next = new Map<number, StyleValue>();
+  for (const e of inline) next.set(e.property, e.value);
+  const changed: StyleEntry[] = [];
+  for (const [p, val] of next) if (!sameValue(st.overrides?.get(p), val)) changed.push({ property: p, value: val });
+  if (st.overrides) for (const p of st.overrides.keys()) if (!next.has(p)) changed.push({ property: p, value: unset });
+  if (changed.length) slotSetEntries(slot, changed);
+  st.overrides = next.size ? next : null;
+}
+
+/** @internal A style Binding's run (`this` is the binding). */
+export function styleRun(this: { slot: number; read: () => unknown; state: StyleState }): void {
+  applyStyleValue(this.slot, this.read(), this.state);
+}
+
+/** @internal A binding's body for a node's style prop (elements.ts's View and Text). */
 export function styleBinding(slot: number, read: () => unknown, defaults: Style | undefined): () => void {
-  let ids: number[] = [];
-  let overrides = new Map<number, StyleValue>();
-  return () => {
-    const nextIds: number[] = defaults ? [defaults.id] : [];
-    const inline: StyleEntry[] = [];
-    collect(read(), nextIds, inline);
-    if (nextIds.length !== ids.length || nextIds.some((id, i) => id !== ids[i])) slotSetStyles(slot, nextIds);
-    ids = nextIds;
-    const next = new Map<number, StyleValue>();
-    for (const e of inline) next.set(e.property, e.value);
-    const changed: StyleEntry[] = [];
-    for (const [p, v] of next) if (!sameValue(overrides.get(p), v)) changed.push({ property: p, value: v });
-    for (const p of overrides.keys()) if (!next.has(p)) changed.push({ property: p, value: unset });
-    if (changed.length) slotSetEntries(slot, changed);
-    overrides = next;
-  };
+  const st = styleState(defaults);
+  return () => applyStyleValue(slot, read(), st);
 }

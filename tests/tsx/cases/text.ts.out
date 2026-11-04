@@ -1,14 +1,19 @@
 // Paragraphs: constant ones go in the template; one binding for a dynamic one; a one-off call
 // for a local one. Spans are parts of the paragraph.
 import { Span, Text, View } from "@axe/ui";
-import { Span as _$Span, applyText as _$applyText, bindText as _$bindText, instance as _$instance, template as _$template } from "@axe/ui/jsx-runtime";
+import { Span as _$Span, applyPlainText as _$applyPlainText, bindText as _$bindText, instance as _$instance, template as _$template } from "@axe/ui/jsx-runtime";
 const _tmpl$1 = /*#__PURE__*/ _$template([{ p: -1 }, { p: 0, t: 1, props: () => ({ size: 14, weight: 600, children: ["Static ", GREETING, " text, across lines."] }) }, { p: 0, t: 1 }, { p: 0, t: 1 }, { p: 0, t: 1, props: () => ({ children: [] }) }]);
+const _tmpl$2 = /*#__PURE__*/ _$template([{ p: -1, t: 1, props: () => ({ ...OPTIONS, weight: 700, children: ["constant"] }) }]);
 
 const GREETING = "Hello";
 
 export function Texts(props: { name: () => string; n: number }) {
   const local = props.n * 2;
   return (
-    _$instance(_tmpl$1, (_n) => { _$bindText(_n[2], () => ({ children: ["Hi, ", _$Span({ weight: 700, children: [props.name()] }), "!"] })); _$applyText(_n[3], { children: [local, " items"] }); })
+    _$instance(_tmpl$1, (_n) => { _$bindText(_n[2], () => ({ children: ["Hi, ", _$Span({ weight: 700, children: [props.name()] }), "!"] })); _$applyPlainText(_n[3], [local, " items"]); })
   );
 }
+
+// A module-level spread is constant props: the Text stays a template node.
+const OPTIONS = { families: ["Noto Sans"], size: 12 } as const;
+export const spread = _$instance(_tmpl$2);

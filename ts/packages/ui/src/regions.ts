@@ -32,9 +32,12 @@ export class Region {
   next: Entry | null = null;
   first: Entry | null = null;
   last: Entry | null = null;
+  /** A region holding one node and nothing else keeps it here, with no entry: most of them
+   * (a row, a component's output) are just that. */
+  only = NO_SLOT;
   /** The node after this region, when whoever placed it knows (For, while it mounts a new row
-   * among empty ones): saves walking past them. */
-  anchor: number | undefined = undefined;
+   * among empty ones): saves walking past them. Added when used. */
+  declare anchor?: number | undefined;
 
   /** `up`: the enclosing region, or null for a region directly in a parent's children (then
    * `after` is what follows it there: a node, another such region, or NO_SLOT for the end). */
@@ -54,18 +57,28 @@ export class Region {
   /** A new node at the end of this region. */
   createNode(): number {
     const slot = slotCreate(this.parent, nodeAfter(this));
-    this.link(new NodeEntry(slot, this));
+    this.adopt(slot);
     return slot;
   }
 
   /** Records `slot`, a node just created at the end of this region (by a template instance),
    * as its last node. */
   adopt(slot: number): void {
+    if (this.only === NO_SLOT && !this.first) {
+      this.only = slot;
+      return;
+    }
     this.link(new NodeEntry(slot, this));
   }
 
   /** @internal Appends `e` (a fresh entry of this region). */
   link(e: Entry): void {
+    if (this.only !== NO_SLOT) {
+      // No longer a lone node: it becomes the first entry.
+      const lone = new NodeEntry(this.only, this);
+      this.only = NO_SLOT;
+      this.first = this.last = lone;
+    }
     e.prev = this.last;
     e.next = null;
     if (this.last) this.last.next = e;
@@ -100,6 +113,10 @@ export class Region {
 
   /** Destroys every node in the region (nested regions' too) and empties it. */
   clear(): void {
+    if (this.only !== NO_SLOT) {
+      slotDestroy(this.only);
+      this.only = NO_SLOT;
+    }
     for (let e = this.first; e; e = e.next) {
       if (e instanceof NodeEntry) slotDestroy(e.slot);
       else e.clear();
@@ -115,6 +132,7 @@ export class Region {
 
   /** The region's top-level nodes, in order (nested regions' included). */
   nodes(out: number[] = []): number[] {
+    if (this.only !== NO_SLOT) out.push(this.only);
     for (let e = this.first; e; e = e.next) {
       if (e instanceof NodeEntry) out.push(e.slot);
       else e.nodes(out);
@@ -131,6 +149,7 @@ export class Region {
 /** The first node in `e`, or NO_SLOT if it holds none. */
 export function firstNode(e: Entry): number {
   if (e instanceof NodeEntry) return e.slot;
+  if (e.only !== NO_SLOT) return e.only;
   for (let c = e.first; c; c = c.next) {
     const s = firstNode(c);
     if (s !== NO_SLOT) return s;

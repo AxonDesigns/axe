@@ -4,12 +4,12 @@
 
 import type { JsxElement, Element, SpanElement } from "./elements.js";
 import { insert as insertDynamic, mountInto, textOptions, gatherText, type Paragraph, type TextProps } from "./elements.js";
-import { renderEffect } from "./reactive.js";
+import { Binding, renderEffect, startBinding } from "./reactive.js";
 import { Region } from "./regions.js";
-import { styleBinding } from "./style.js";
+import { styleBinding, styleRun, styleState, type StyleState } from "./style.js";
 import { themeDefaults } from "./theme.js";
 import { Node } from "@axe/core";
-import { slotSetState, slotSetText, slotSetTokens, slotUnsetTokens } from "@axe/core/internal";
+import { slotSetState, slotSetText, slotSetTextPlain, slotSetTokens, slotUnsetTokens } from "@axe/core/internal";
 import type { TokenDecl, TextOptions } from "@axe/core";
 
 export { template, instance, type Template, type TemplateNode } from "./template.js";
@@ -20,7 +20,7 @@ export { mergeProps } from "./props.js";
  * the node is a Text (its theme default differs). */
 export function bindStyle(slot: number, read: () => unknown, text?: 1): void {
   const d = themeDefaults();
-  renderEffect(styleBinding(slot, read, text ? d?.Text : d?.View));
+  startBinding(new Binding<StyleState>(styleRun, slot, read, styleState(text ? d?.Text : d?.View)));
 }
 
 /** A node's style that isn't constant at module level but doesn't change (a local style). */
@@ -59,6 +59,54 @@ export function bindText(slot: number, read: () => TextProps): void {
     gatherText(props.children, p);
     slotSetText(slot, p.text, textOptions(props, p.spans) as TextOptions);
   });
+}
+
+// A paragraph of plain parts (strings, numbers, nothing), or null if a part is anything else
+// (a Span made by an expression).
+function plainText(v: unknown): string | null {
+  if (typeof v === "string") return v;
+  if (typeof v === "number") return String(v);
+  if (v === null || v === undefined || typeof v === "boolean") return "";
+  if (Array.isArray(v)) {
+    let out = "";
+    for (const part of v) {
+      const s = plainText(part);
+      if (s === null) return null;
+      out += s;
+    }
+    return out;
+  }
+  if (typeof v === "function") return plainText((v as () => unknown)());
+  return null;
+}
+
+function setPlain(slot: number, v: unknown, plain: string | null = plainText(v)): string {
+  const text = plain;
+  if (text !== null) {
+    slotSetTextPlain(slot, text);
+    return text;
+  }
+  const p: Paragraph = { text: "", spans: [] };
+  gatherText(v, p);
+  slotSetText(slot, p.text, textOptions({}, p.spans) as TextOptions);
+  return p.text;
+}
+
+function plainRun(this: Binding<string | null>): void {
+  const v = this.read();
+  const text = plainText(v);
+  if (text !== null && text === this.state) return;
+  this.state = setPlain(this.slot, v, text);
+}
+
+/** A Text with no options and no Spans, bound: its text, written only when it changes. */
+export function bindPlainText(slot: number, read: () => unknown): void {
+  startBinding(new Binding<string | null>(plainRun, slot, read, null));
+}
+
+/** A Text with no options and no Spans, set once. */
+export function applyPlainText(slot: number, value: unknown): void {
+  setPlain(slot, value);
 }
 
 /** A Text's paragraph that doesn't change but isn't the same for every instance. */

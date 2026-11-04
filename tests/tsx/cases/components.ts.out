@@ -2,7 +2,7 @@
 // components too, and JSX inside their callbacks compiles as well.
 import { For, Show, Text, View } from "@axe/ui";
 import { Card } from "./basic";
-import { applyText as _$applyText, createComponent as _$createComponent, insert as _$insert, instance as _$instance, mergeProps as _$mergeProps, region as _$region, template as _$template } from "@axe/ui/jsx-runtime";
+import { applyPlainText as _$applyPlainText, createComponent as _$createComponent, insert as _$insert, instance as _$instance, mergeProps as _$mergeProps, region as _$region, template as _$template } from "@axe/ui/jsx-runtime";
 const _tmpl$1 = /*#__PURE__*/ _$template([{ p: -1, t: 1, props: () => ({ children: ["inside"] }) }]);
 const _tmpl$2 = /*#__PURE__*/ _$template([{ p: -1, t: 1, props: () => ({ children: ["closed"] }) }]);
 const _tmpl$3 = /*#__PURE__*/ _$template([{ p: -1, t: 1 }]);
@@ -11,6 +11,6 @@ const _tmpl$4 = /*#__PURE__*/ _$template([{ p: -1 }]);
 export function List(props: { items: () => string[]; open: () => boolean }) {
   const extra = { title: "x" };
   return (
-    _$instance(_tmpl$4, (_n) => { const _r1 = _$region(_n[0], null); const _r2 = _$region(_n[0], _r1); const _r3 = _$region(_n[0], _r2); const _r4 = _$region(_n[0], _r3); _$insert(_r4, _$createComponent(Card, { title: "static", count: () => 1 })); _$insert(_r3, _$createComponent(Card, { get title() { return props.items()[0]!; }, count: () => props.items().length, get children() { return _$instance(_tmpl$1); } })); _$insert(_r2, _$createComponent(Card, _$mergeProps(extra, { count: () => 2 }))); _$insert(_r1, _$createComponent(Show, { get when() { return props.open(); }, fallback: _$instance(_tmpl$2), get children() { return _$createComponent(For, { get each() { return props.items(); }, get children() { return (item: string) => _$instance(_tmpl$3, (_n) => { _$applyText(_n[0], { children: [item] }); }); } }); } })); })
+    _$instance(_tmpl$4, (_n) => { const _r1 = _$region(_n[0], null); const _r2 = _$region(_n[0], _r1); const _r3 = _$region(_n[0], _r2); const _r4 = _$region(_n[0], _r3); _$insert(_r4, _$createComponent(Card, { title: "static", count: () => 1 })); _$insert(_r3, _$createComponent(Card, { get title() { return props.items()[0]!; }, count: () => props.items().length, get children() { return _$instance(_tmpl$1); } })); _$insert(_r2, _$createComponent(Card, _$mergeProps(extra, { count: () => 2 }))); _$insert(_r1, _$createComponent(Show, { get when() { return props.open(); }, fallback: _$instance(_tmpl$2), get children() { return _$createComponent(For, { get each() { return props.items(); }, get children() { return (item: string) => _$instance(_tmpl$3, (_n) => { _$applyPlainText(_n[0], item); }); } }); } })); })
   );
 }

@@ -114,7 +114,7 @@ export class ComponentElement<P> implements Mountable {
     const r = region.child();
     const o = new Owner(getOwner());
     o.name = this.fn.name || "Anonymous";
-    o.onDisposeNodes = () => r.remove();
+    o.nodes = r;
     runWithOwner(o, () => {
       try {
         mountInto(r, this.fn(this.props));

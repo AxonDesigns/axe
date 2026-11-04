@@ -421,6 +421,16 @@ export function slotSetEntries(slot: number, list: readonly StyleEntry[]): void 
   commands.setProps(slotHandle(slot), list as StyleEntry[]);
 }
 
+/** The node's text, every field from its styles (setText(text, {})), written lean. */
+export function slotSetTextPlain(slot: number, text: string): void {
+  if (!commands.setTextPlain(slot, generation[slot]!, text)) setText(slotHandle(slot), text, {});
+}
+
+/** The node's style list, written lean. */
+export function slotSetStylesRaw(slot: number, ids: readonly number[]): void {
+  commands.setStylesRaw(slot, generation[slot]!, ids);
+}
+
 export function slotSetTokens(slot: number, decls: readonly TokenDecl[]): void {
   const { tokens, tokenValues } = tokenArrays(decls);
   commands.setTokenOverrides(slotHandle(slot), tokens, tokenValues);
@@ -462,10 +472,10 @@ export function slotAllocTree(parents: ArrayLike<number>, parent: SlotParent, be
  * instantiate_template naming them. */
 export function slotInstantiate(template: number, parents: ArrayLike<number>, parent: SlotParent, before: number): number[] {
   const slots = slotAllocTree(parents, parent, before);
-  const nodes = new Array<{ node: Handle }>(slots.length);
-  for (let i = 0; i < slots.length; i++) nodes[i] = { node: slotHandle(slots[i]!) };
   try {
-    commands.instantiateTemplate(template, parentHandle(parent), before === NONE ? NULL_HANDLE : slotHandle(before), nodes);
+    const p = parentHandle(parent);
+    commands.instantiateRaw(template, p.index, p.generation, before === NONE ? 0 : before,
+                            before === NONE ? 0 : generation[before]!, slots, generation);
   } catch (e) {
     for (let i = slots.length - 1; i >= 0; i--) {
       unlink(slots[i]!);

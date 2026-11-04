@@ -15,7 +15,7 @@ export function mount(App: Component<Record<string, never>>, surface: Surface): 
   const owner = new Owner(null);
   owner.name = "mount";
   const region = new Region(surface, null);
-  owner.onDisposeNodes = () => region.clear();
+  owner.nodes = region;
   runWithOwner(owner, () => {
     try {
       mountInto(region, createComponent(App, {}));

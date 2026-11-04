@@ -250,3 +250,21 @@ test("springs and the older ops", async () => {
   expect(l.presentationInSurface.x).toBeCloseTo(50, 0.01);
   n.destroy();
 });
+
+test("lean set_text and set_styles encode as the general encoders do", () => {
+  const n = Node.create(surface());
+  const slot = n.handle.index;
+  for (const s of ["", "abc", "héllo · ✓", "😀 x", "lone \ud800 surrogate", "x".repeat(5000)]) {
+    const general = encodeAlone(() => setText(n.handle, s, {}));
+    const lean = encodeAlone(() => expect(commands.setTextPlain(slot, n.handle.generation, s)).toBe(true));
+    expect(Array.from(lean)).toEqual(Array.from(general));
+  }
+  // Too long for the lean path's reservation: it declines and writes nothing.
+  const before = commands.size;
+  expect(commands.setTextPlain(slot, n.handle.generation, "x".repeat(30000))).toBe(false);
+  expect(commands.size).toBe(before);
+  const style = Style.define({ decls: { opacity: number(0.5) } });
+  expect(Array.from(encodeAlone(() => commands.setStylesRaw(slot, n.handle.generation, [style.id, style.id]))))
+    .toEqual(Array.from(encodeAlone(() => n.setStyles(style, style))));
+  n.destroy();
+});

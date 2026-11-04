@@ -1,7 +1,7 @@
 // Context (docs/ui.md, "Context"): a value a component provides to everything mounted below it.
 // use() reads it once, where it is called; a value that changes goes in a signal inside it.
 
-import { getOwner } from "./reactive.js";
+import { contextOf, getOwner } from "./reactive.js";
 import type { Element } from "./elements.js";
 
 export interface ProviderProps<T> {
@@ -22,7 +22,7 @@ export function context<T>(defaultValue: T, name = "context"): Context<T> {
   function Provider(props: ProviderProps<T>): Element {
     const o = getOwner();
     if (!o) throw new Error(`${name}.Provider rendered outside a component`);
-    o.context = Object.create(o.context) as Record<symbol, unknown>;
+    o.context = Object.create(contextOf(o)) as Record<symbol, unknown>;
     o.context[id] = props.value;
     return props.children;
   }
@@ -32,6 +32,6 @@ export function context<T>(defaultValue: T, name = "context"): Context<T> {
 
 /** The value of `ctx` here: the nearest Provider's above, or its default. */
 export function use<T>(ctx: Context<T>): T {
-  const c = getOwner()?.context;
+  const c = contextOf(getOwner());
   return c && ctx.id in c ? (c[ctx.id] as T) : ctx.defaultValue;
 }

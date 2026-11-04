@@ -154,11 +154,15 @@ class Instance implements Mountable {
                before === NO_SLOT ? null : slotHandle(before));
     }
     for (let i = 0; i < slots.length; i++) if (t.parents[i]! < 0) region.adopt(slots[i]!);
-    v.refs++;
-    if (getOwner()) onCleanup(() => {
-      v.refs--;
-      release(t, v);
-    });
+    // Only a theme's variant is ever released: the others need no count (nor a cleanup per
+    // instance).
+    if (v.theme && getOwner()) {
+      v.refs++;
+      onCleanup(() => {
+        v.refs--;
+        release(t, v);
+      });
+    }
     this.setup?.(slots);
   }
 }

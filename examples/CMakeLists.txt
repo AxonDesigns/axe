@@ -29,3 +29,6 @@ axe_ts_app(spring_rect_ts ENTRY ${CMAKE_CURRENT_SOURCE_DIR}/spring_rect/main.ts
            TITLE "Axe — spring_rect (TypeScript)")
 axe_ts_app(layout_cards_ts ENTRY ${CMAKE_CURRENT_SOURCE_DIR}/layout_cards/main.ts
            WIDTH 980 HEIGHT 640 SCALE 150 TITLE "Axe — layout_cards (TypeScript)")
+# And in TSX, with signals and components (docs/ui.md).
+axe_ts_app(layout_cards_tsx ENTRY ${CMAKE_CURRENT_SOURCE_DIR}/layout_cards/main.tsx
+           WIDTH 980 HEIGHT 640 SCALE 150 TITLE "Axe — layout_cards (TSX)")

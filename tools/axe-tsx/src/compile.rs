@@ -71,6 +71,8 @@ pub struct Compiler<'s, 'a> {
     next_region: usize,
     /// Inside a Text's content: a Span is a value there.
     in_text: u32,
+    /// Spans compiled so far (a Text with none, and no options, is plain text).
+    spans: u32,
 }
 
 impl<'s, 'a> Compiler<'s, 'a> {
@@ -98,6 +100,7 @@ impl<'s, 'a> Compiler<'s, 'a> {
             next_template: 1,
             next_region: 1,
             in_text: 0,
+            spans: 0,
         }
     }
 
@@ -166,8 +169,17 @@ impl<'s, 'a> Compiler<'s, 'a> {
 
     // ---- Elements -----------------------------------------------------------------------------
 
+    /// Spreads of module-level values are constant props; any other spread makes the element a
+    /// component call instead of a template node.
+    fn local_spread(&self, el: &JSXElement<'a>) -> bool {
+        el.opening_element.attributes.iter().any(|a| match a {
+            JSXAttributeItem::SpreadAttribute(s) => self.class(&s.argument) != Class::Module,
+            JSXAttributeItem::Attribute(_) => false,
+        })
+    }
+
     pub fn element(&mut self, el: &JSXElement<'a>) -> String {
-        let spread = el.opening_element.attributes.iter().any(|a| matches!(a, JSXAttributeItem::SpreadAttribute(_)));
+        let spread = self.local_spread(el);
         match self.builtin(&el.opening_element.name) {
             Some(Builtin::Span) if self.in_text > 0 => {
                 let mut class = Class::Module;
@@ -328,7 +340,19 @@ impl<'s, 'a> Compiler<'s, 'a> {
         let text_arg = if text { ", 1" } else { "" };
         let mut options: Vec<(String, String, Class)> = Vec::new();
         for a in &el.opening_element.attributes {
-            let JSXAttributeItem::Attribute(attr) = a else { continue }; // spreads go the component way
+            let attr = match a {
+                JSXAttributeItem::Attribute(attr) => attr,
+                // A module-level spread (local ones went the component way): constant props.
+                JSXAttributeItem::SpreadAttribute(sp) => {
+                    let v = self.expr(&sp.argument);
+                    if text {
+                        options.push(("...".into(), v, Class::Module));
+                    } else {
+                        t.nodes[i].props.push(format!("...{v}"));
+                    }
+                    continue;
+                }
+            };
             let key = Self::attr_key(&attr.name);
             let (v, class) = self.attr_value(&attr.value);
             match key.as_str() {
@@ -409,7 +433,7 @@ impl<'s, 'a> Compiler<'s, 'a> {
                     }
                 }
                 JSXChild::Element(el) => {
-                    let spread = el.opening_element.attributes.iter().any(|a| matches!(a, JSXAttributeItem::SpreadAttribute(_)));
+                    let spread = self.local_spread(el);
                     match self.builtin(&el.opening_element.name) {
                         Some(Builtin::Span) => self.error(el.span.start, "a Span must be inside <Text> (docs/ui.md, \"Text\")"),
                         Some(_) if !spread && t.nodes.len() < MAX_NODES => {
@@ -462,12 +486,29 @@ impl<'s, 'a> Compiler<'s, 'a> {
     fn text_node(&mut self, t: &mut Tpl, i: usize, el: &JSXElement<'a>, options: Vec<(String, String, Class)>) {
         let mut class = options.iter().map(|o| o.2).max().unwrap_or(Class::Module);
         let mut parts = Vec::new();
+        let spans_before = self.spans;
         self.in_text += 1;
         for child in &el.children {
             self.text_part(child, &mut parts, &mut class, false);
         }
         self.in_text -= 1;
-        let opts: Vec<String> = options.iter().map(|(k, v, _)| format!("{}: {v}", Self::prop_key(k))).collect();
+        // No options and no Span: plain text, its parts joined (a part that turns out to be a
+        // Span at run time takes the general path there).
+        if options.is_empty() && self.spans == spans_before && class != Class::Module {
+            let value = if parts.len() == 1 { parts[0].clone() } else { format!("[{}]", parts.join(", ")) };
+            if class == Class::Dynamic {
+                let bind = self.helper("bindPlainText");
+                t.setup.push(format!("{bind}(_n[{i}], () => {value});"));
+            } else {
+                let apply = self.helper("applyPlainText");
+                t.setup.push(format!("{apply}(_n[{i}], {value});"));
+            }
+            return;
+        }
+        let opts: Vec<String> = options
+            .iter()
+            .map(|(k, v, _)| if k == "..." { format!("...{v}") } else { format!("{}: {v}", Self::prop_key(k)) })
+            .collect();
         if class == Class::Module {
             t.nodes[i].props.extend(opts);
             t.nodes[i].props.push(format!("children: [{}]", parts.join(", ")));
@@ -523,6 +564,7 @@ impl<'s, 'a> Compiler<'s, 'a> {
 
     /// A Span as a value in a paragraph.
     fn span_value(&mut self, el: &JSXElement<'a>, class: &mut Class, _direct: bool) -> String {
+        self.spans += 1;
         let mut fields = Vec::new();
         for a in &el.opening_element.attributes {
             match a {

@@ -3,7 +3,7 @@
 // what it created.
 
 import { ComponentElement, createComponent, mountInto, type Component, type Element, type Mountable } from "./elements.js";
-import { Owner, computed, dispose, getOwner, handleError, renderEffect, runWithOwner, signal, untrack, type Signal } from "./reactive.js";
+import { Owner, computed, dispose, disposeOwned, getOwner, handleError, renderEffect, runWith2, runWithOwner, signal, untrack, type Signal } from "./reactive.js";
 import { MOUNT, NO_SLOT, Region, firstNode, nodeAfter } from "./regions.js";
 import { splitProps } from "./props.js";
 
@@ -149,13 +149,20 @@ export interface ForProps<T> {
   readonly children: (item: T, index: () => number) => Element;
 }
 
-interface Row<T> {
-  readonly owner: Owner;
-  readonly region: Region;
-  readonly key: unknown;
-  item: T;
-  index: Signal<number> | null;
-  old: number; // its position in the previous list
+// A row of For is its own owner, carrying what the row needs: one object per row, not three.
+class Row<T> extends Owner {
+  old = -1; // its position in the previous list
+  constructor(
+    parent: Owner | null,
+    readonly region: Region,
+    readonly key: unknown,
+    public item: T,
+    public index: Signal<number> | null,
+    readonly children: ForProps<T>["children"],
+  ) {
+    super(parent);
+    this.nodes = region;
+  }
 }
 
 /** Indices (into `seq`) of a longest strictly increasing subsequence of `seq`, ignoring -1. */
@@ -179,6 +186,24 @@ export function longestIncreasing(seq: readonly number[]): Set<number> {
   return out;
 }
 
+// A row's content, under its owner. A row that is one component runs it right there, in the
+// row's owner and region: a component of its own would add an owner and a region per row.
+function mountRowContent<T>(row: Row<T>, i: number): void {
+  try {
+    const el = row.children(row.item, row.index ?? (() => i));
+    if (el instanceof ComponentElement) {
+      row.name = el.fn.name || "Anonymous";
+      mountInto(row.region, el.fn(el.props));
+    } else {
+      mountInto(row.region, el);
+    }
+  } catch (e) {
+    row.region.clear();
+    disposeOwned(row);
+    handleError(e, row, "a row of For");
+  }
+}
+
 class ForElement<T> implements Mountable {
   constructor(readonly props: ForProps<T>) {}
 
@@ -193,22 +218,13 @@ class ForElement<T> implements Mountable {
 
     // A row's region goes in place first (empty); its content is mounted later, front to back.
     const newRow = (item: T, key: unknown, i: number, before: Region | null): Row<T> => {
-      const o = new Owner(owner);
       const r = new Region(rowsRegion.parent, rowsRegion);
       rowsRegion.place(r, before);
-      o.onDisposeNodes = () => r.remove();
-      return { owner: o, region: r, key, item, index: wantsIndex ? signal(i) : null, old: -1 };
+      return new Row(owner, r, key, item, wantsIndex ? signal(i) : null, props.children);
     };
     const mountRow = (row: Row<T>, i: number): void => {
-      runWithOwner(row.owner, () => {
-        try {
-          mountInto(row.region, props.children(row.item, row.index ?? (() => i)));
-        } catch (e) {
-          handleError(e, row.owner, "a row of For");
-        }
-      });
+      runWith2(row, mountRowContent, row, i);
     };
-
     renderEffect(() => {
       const items = props.each || [];
       const keyOf = props.key;
@@ -233,7 +249,7 @@ class ForElement<T> implements Mountable {
           if (row) kept++;
         }
         // Rows left over are gone.
-        for (const list of byKey.values()) for (const r of list) dispose(r.owner);
+        for (const list of byKey.values()) for (const r of list) dispose(r);
         if (items.length && fallback) {
           dispose(fallback);
           fallback = null;
@@ -279,8 +295,9 @@ class ForElement<T> implements Mountable {
         if (items.length === 0 && props.fallback !== undefined && !fallback) {
           fallback = new Owner(owner);
           const fb = fallback;
-          fb.onDisposeNodes = () => fallbackRegion.clear();
-          runWithOwner(fb, () => mountInto(fallbackRegion, props.fallback));
+          const r = fallbackRegion.child();
+          fb.nodes = r;
+          runWithOwner(fb, () => mountInto(r, props.fallback));
         }
       });
     });
@@ -323,7 +340,7 @@ class IndexElement<T> implements Mountable {
         for (let i = rows.length; i < items.length; i++) {
           const o = new Owner(owner);
           const r = rowsRegion.child();
-          o.onDisposeNodes = () => r.remove();
+          o.nodes = r;
           const item = signal(items[i]!);
           rows.push({ owner: o, item });
           runWithOwner(o, () => {
@@ -337,8 +354,9 @@ class IndexElement<T> implements Mountable {
         if (items.length === 0 && props.fallback !== undefined && !fallback) {
           fallback = new Owner(owner);
           const fb = fallback;
-          fb.onDisposeNodes = () => fallbackRegion.clear();
-          runWithOwner(fb, () => mountInto(fallbackRegion, props.fallback));
+          const r = fallbackRegion.child();
+          fb.nodes = r;
+          runWithOwner(fb, () => mountInto(r, props.fallback));
         } else if (items.length > 0 && fallback) {
           dispose(fallback);
           fallback = null;

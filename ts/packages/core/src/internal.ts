@@ -16,6 +16,8 @@ export {
   slotSetState,
   slotSetStyles,
   slotSetText,
+  slotSetTextPlain,
+  slotSetStylesRaw,
   slotSetTokens,
   slotUnsetTokens,
   type SlotParent,

@@ -41,25 +41,28 @@ const MAX_ROUNDS = 100;
 
 /** What disposes things: a component instance, a control-flow branch, a computation, or a root.
  * Disposing one disposes its children (newest first), runs its cleanups (in reverse order) and,
- * for the one disposed first, removes the nodes it created (`onDisposeNodes`). */
+ * for the one disposed first, removes the nodes it created (`nodes`). */
 export class Owner {
+  // The rarely used fields are added when needed: QuickJS pays for each field of each object,
+  // and a long list has an owner per row.
   /** Children, in creation order; disposed ones are left in place until compaction. */
-  owned: AnyOwner[] | null = null;
+  declare owned?: AnyOwner[] | null;
   /** How many of `owned` are disposed. */
-  dead = 0;
-  cleanups: (() => void)[] | null = null;
+  declare dead?: number;
+  declare cleanups?: (() => void)[] | null;
+  /** Set by an error boundary: takes errors thrown below it. */
+  declare onError?: ((error: unknown) => void) | null;
+  /** For error reports: a component's name. */
+  declare name?: string | null;
   /** Context values: an object whose prototype chain is the owners' (context.ts). */
   context: Record<symbol, unknown> | null;
   flags = 0;
-  /** Set by an error boundary: takes errors thrown below it. */
-  onError: ((error: unknown) => void) | null = null;
-  /** Removes the nodes this owner put in the scene (set by the code that mounted them). */
-  onDisposeNodes: (() => void) | null = null;
-  /** For error reports: a component's name. */
-  name: string | null = null;
+  /** Where this owner's nodes are (a region, set by the code that mounted them): removed with
+   * it. A field rather than a closure, at one per row of a long list. */
+  nodes: { remove(): void } | null = null;
 
   constructor(readonly parent: AnyOwner | null) {
-    this.context = parent ? parent.context : null;
+    this.context = contextOf(parent);
     adopt(this, parent);
   }
 
@@ -69,6 +72,12 @@ export class Owner {
 }
 
 type AnyOwner = Owner | Computation;
+
+/** The context values in effect under `o`: its own, or the nearest owner's above. */
+export function contextOf(o: AnyOwner | null): Record<symbol, unknown> | null {
+  for (; o; o = o.parent) if (o.context !== undefined) return o.context;
+  return null;
+}
 
 function adopt(child: AnyOwner, parent: AnyOwner | null): void {
   if (!parent) return;
@@ -109,6 +118,25 @@ export function runWithOwner<T>(owner: Owner | null, fn: () => T): T {
   }
 }
 
+/** @internal runWithOwner without a closure: `fn(a, b)` under `owner`, untracked. */
+export function runWith2<A, B, T>(owner: Owner | null, fn: (a: A, b: B) => T, a: A, b: B): T {
+  const prevOwner = currentOwner, prevListener = listener;
+  currentOwner = owner;
+  listener = null;
+  try {
+    return fn(a, b);
+  } finally {
+    currentOwner = prevOwner;
+    listener = prevListener;
+  }
+}
+
+/** @internal Disposes what `o` owns (children, then cleanups), keeping `o`. */
+export function disposeOwned(o: Owner): void {
+  if (o.owned) disposeList(o, o.owned);
+  runCleanups(o);
+}
+
 /** Runs `fn` with a new root owner and returns its result; `fn` gets the function that disposes
  * it. Roots aren't owned by anything: dispose them yourself (mount() makes one). */
 export function root<T>(fn: (dispose: () => void) => T): T {
@@ -146,7 +174,8 @@ function unlinkChild(o: AnyOwner): void {
     list.pop();
     return;
   }
-  if (++p!.dead > 16 && p!.dead * 2 > list.length) {
+  const dead = (p!.dead = (p!.dead ?? 0) + 1);
+  if (dead > 16 && dead * 2 > list.length) {
     p!.owned = list.filter((c) => !(c.flags & DISPOSED));
     p!.dead = 0;
   }
@@ -161,15 +190,15 @@ function teardown(o: AnyOwner, removeNodes: boolean): void {
   if (list) disposeList(o, list);
   runCleanups(o);
   if (o instanceof Computation) unlinkSources(o, null);
-  else o.onDisposeNodes = null;
+  else o.nodes = null;
 }
 
 function removeNodesOf(o: AnyOwner): void {
-  if (o instanceof Owner && o.onDisposeNodes) {
-    const remove = o.onDisposeNodes;
-    o.onDisposeNodes = null;
+  if (o instanceof Owner && o.nodes) {
+    const nodes = o.nodes;
+    o.nodes = null;
     try {
-      remove();
+      nodes.remove();
     } catch (e) {
       report(e, o, "removing nodes");
     }
@@ -250,7 +279,6 @@ class Link {
 interface Source {
   version: number;
   observers: Link | null;
-  observersTail: Link | null;
   /** The run that last tracked it (runId), so a run reading it twice links it once. */
   trackedIn: number;
 }
@@ -259,10 +287,12 @@ let nextId = 1;
 
 /** A binding or an effect (and, as Memo, a computed). */
 class Computation {
-  owned: AnyOwner[] | null = null;
-  dead = 0;
-  cleanups: (() => void)[] | null = null;
-  context: Record<symbol, unknown> | null;
+  // Added when needed (most bindings own nothing and clean nothing up): QuickJS pays for each
+  // field of each object. A computation has no context of its own: lookups go to its parent.
+  declare owned?: AnyOwner[] | null;
+  declare dead?: number;
+  declare cleanups?: (() => void)[] | null;
+  declare context?: undefined;
   flags: number;
   sources: Link | null = null;
   /** The last value, or the error (HAS_ERROR) a computed's readers get. */
@@ -277,7 +307,6 @@ class Computation {
     readonly parent: AnyOwner | null,
   ) {
     this.flags = kind | DIRTY;
-    this.context = parent ? parent.context : null;
     adopt(this, parent);
   }
 }
@@ -286,7 +315,6 @@ class Computation {
 class Memo extends Computation implements Source {
   version = 0;
   observers: Link | null = null;
-  observersTail: Link | null = null;
   trackedIn = 0;
 
   constructor(
@@ -315,10 +343,11 @@ function track(s: Source): void {
   if (prev) prev.nextSource = l;
   else c.sources = l;
   cursor = l;
-  l.prevObserver = s.observersTail;
-  if (s.observersTail) s.observersTail.nextObserver = l;
-  else s.observers = l;
-  s.observersTail = l;
+  // At the head of the observers: the order doesn't matter (the flush orders by creation), and a
+  // source then needs no tail pointer.
+  l.nextObserver = s.observers;
+  if (s.observers) s.observers.prevObserver = l;
+  s.observers = l;
 }
 
 function detach(l: Link): void {
@@ -326,7 +355,6 @@ function detach(l: Link): void {
   if (l.prevObserver) l.prevObserver.nextObserver = l.nextObserver;
   else s.observers = l.nextObserver;
   if (l.nextObserver) l.nextObserver.prevObserver = l.prevObserver;
-  else s.observersTail = l.prevObserver;
   l.prevObserver = l.nextObserver = null;
 }
 
@@ -444,64 +472,57 @@ export interface Signal<T> {
   peek(): T;
 }
 
-class SignalNode<T> implements Source {
-  version = 0;
-  observers: Link | null = null;
-  observersTail: Link | null = null;
-  trackedIn = 0;
-  constructor(
-    public value: T,
-    readonly equals: false | ((a: T, b: T) => boolean) | undefined,
-    readonly name: string | undefined,
-  ) {}
+// A signal is its getter: the function carries the source's fields itself (one object per
+// signal, not two), and set, update and peek are shared functions, not three closures each.
+interface SignalFn<T> extends Source {
+  (): T;
+  value: T;
+  equals?: false | ((a: T, b: T) => boolean);
+  label?: string;
 }
 
-// Every signal's getter has this prototype, so set, update and peek aren't three closures per
-// signal: they find the node through the getter.
-const NODE = Symbol("signal");
-type Getter<T> = (() => T) & { [NODE]: SignalNode<T> };
-const signalProto: object = Object.create(Function.prototype, {
-  set: {
-    value(this: Getter<unknown>, value: unknown): void {
-      write(this[NODE], value);
-    },
-  },
-  update: {
-    value(this: Getter<unknown>, fn: (v: unknown) => unknown): void {
-      const n = this[NODE];
-      write(n, fn(n.value));
-    },
-  },
-  peek: {
-    value(this: Getter<unknown>): unknown {
-      return this[NODE].value;
-    },
-  },
-});
+// Shared by every signal, as properties: changing a getter's prototype instead would cost
+// QuickJS a shape of its own per signal (about 200 bytes).
+function signalSet(this: SignalFn<unknown>, value: unknown): void {
+  write(this, value);
+}
+function signalUpdate(this: SignalFn<unknown>, fn: (v: unknown) => unknown): void {
+  write(this, fn(this.value));
+}
+function signalPeek(this: SignalFn<unknown>): unknown {
+  return this.value;
+}
 
 // A factory, so the getter is an anonymous function: a named one would cost a __name call per
 // signal (esbuild's --keep-names).
-function getter<T>(node: SignalNode<T>): Getter<T> {
-  return (() => {
-    if (listener) track(node);
-    return node.value;
-  }) as Getter<T>;
+function getter<T>(): SignalFn<T> {
+  const g = (() => {
+    if (listener) track(g);
+    return g.value;
+  }) as SignalFn<T>;
+  return g;
 }
 
 /** A new signal holding `initial`. */
 export function signal<T>(initial: T, options?: SignalOptions<T>): Signal<T> {
-  const node = new SignalNode(initial, options?.equals, options?.name);
-  const get = getter(node);
-  Object.setPrototypeOf(get, signalProto);
-  get[NODE] = node;
-  return get as unknown as Signal<T>;
+  const g = getter<T>() as SignalFn<T> & { set: unknown; update: unknown; peek: unknown };
+  g.set = signalSet;
+  g.update = signalUpdate;
+  g.peek = signalPeek;
+  g.value = initial;
+  g.version = 0;
+  g.observers = null;
+  g.trackedIn = 0;
+  if (options?.equals !== undefined) g.equals = options.equals;
+  if (options?.name !== undefined) g.label = options.name;
+  return g as unknown as Signal<T>;
 }
 
-function write<T>(node: SignalNode<T>, value: T): void {
+function write<T>(node: SignalFn<T>, value: T): void {
   const eq = node.equals;
   if (eq !== false && (eq ? eq(node.value, value) : Object.is(node.value, value))) return;
   if (debug && listener && (listener.flags & KIND) === COMPUTED)
-    console.warn(`a computed wrote signal${node.name ? ` "${node.name}"` : ""}: computeds should only read`);
+    console.warn(`a computed wrote signal${node.label ? ` "${node.label}"` : ""}: computeds should only read`);
   node.value = value;
   node.version++;
   for (let l = node.observers; l; l = l.nextObserver) mark(l.target, DIRTY);
@@ -538,7 +559,28 @@ export function effect(fn: () => void): void {
 /** @internal A binding: runs `fn` now, and again at the end of any turn in which something it
  * read changed, before effects. A binding that read nothing is dropped after its first run. */
 export function renderEffect<T>(fn: (prev: T | undefined) => T): void {
-  const c = new Computation(fn, RENDER, currentOwner);
+  start(new Computation(fn, RENDER, currentOwner));
+}
+
+/** @internal A binding carrying its data: `fn` runs with `this` the binding, so a binding needs
+ * no closure (and no captured variables) of its own. Start it with startBinding. */
+export class Binding<S = unknown> extends Computation {
+  constructor(
+    fn: (this: Binding<S>) => void,
+    public slot: number,
+    public read: () => unknown,
+    public state: S,
+  ) {
+    super(fn as (prev: unknown) => unknown, RENDER, currentOwner);
+  }
+}
+
+/** @internal Runs a binding now; as renderEffect, it is dropped if it read nothing. */
+export function startBinding(b: Binding<never> | Binding<unknown>): void {
+  start(b as Computation);
+}
+
+function start(c: Computation): void {
   if (c.flags & DISPOSED) return;
   run(c);
   // Static: nothing can make it run again. Keep it only for what it owns.
@@ -570,6 +612,12 @@ export function tracking(): boolean {
 let queue: Computation[] = [];
 let flushing = false;
 
+// Writes usually reach bindings in creation order already: then no sort is needed.
+function ordered(batch: Computation[]): boolean {
+  for (let i = 1; i < batch.length; i++) if (byKindThenAge(batch[i - 1]!, batch[i]!) > 0) return false;
+  return true;
+}
+
 const byKindThenAge = (a: Computation, b: Computation) => (a.flags & KIND) - (b.flags & KIND) || a.id - b.id;
 
 /** @internal Runs queued bindings and effects until none remain (tests use it through nextTurn;
@@ -587,7 +635,7 @@ export function flush(): void {
       }
       const batch = queue;
       queue = [];
-      if (batch.length > 1) batch.sort(byKindThenAge);
+      if (batch.length > 1 && !ordered(batch)) batch.sort(byKindThenAge);
       for (const c of batch) {
         c.flags &= ~QUEUED;
         if (!(c.flags & DISPOSED)) update(c);

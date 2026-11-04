@@ -20,3 +20,7 @@ export function Texts(props: { name: () => string; n: number }) {
     </View>
   );
 }
+
+// A module-level spread is constant props: the Text stays a template node.
+const OPTIONS = { families: ["Noto Sans"], size: 12 } as const;
+export const spread = <Text {...OPTIONS} weight={700}>constant</Text>;
