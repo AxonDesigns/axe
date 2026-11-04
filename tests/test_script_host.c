@@ -52,7 +52,7 @@ static void setup(void *user, ui_js *js) {
 }
 
 static void on_trace(void *user, const ui_trace_event *ev) {
-    if (ev->kind < UI_TRACE_SCRIPT_EXCEPTION) return;
+    if (ev->kind < UI_TRACE_SCRIPT_EXCEPTION || ev->kind > UI_TRACE_SCRIPT_LEAK) return; // script events only
     capture *c = user;
     mtx_lock(&c->lock);
     if (c->hook_count < 64) {

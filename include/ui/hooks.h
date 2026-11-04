@@ -15,7 +15,7 @@
 extern "C" {
 #endif
 
-#define UI_HOOKS_VERSION 1u // 1: script events, `text` and `duration_ns` (milestone 3a)
+#define UI_HOOKS_VERSION 2u // 1: script events, `text` and `duration_ns` (milestone 3a); 2: COMMANDS_APPLIED (3b)
 #define UI_HOOKS_MAX_SUBSCRIBERS 8u
 
 typedef struct ui_app ui_app;
@@ -48,6 +48,10 @@ typedef enum ui_trace_kind {
     UI_TRACE_SCRIPT_REJECTION, // a promise rejected with no handler at a microtask checkpoint
     UI_TRACE_SCRIPT_LONG_TASK, // a task ran longer than the threshold; duration_ns says how long
     UI_TRACE_SCRIPT_LEAK,      // debug builds: a subtree became unreachable without destroy()
+    // Since version 2: a command buffer applied in frame `frame_id` (of the app's first surface,
+    // `surface`); `time_ns` is when the logic thread sent it. With PRESENTED for that frame, the
+    // time from a turn's writes to the screen.
+    UI_TRACE_COMMANDS_APPLIED,
 } ui_trace_kind;
 
 typedef struct ui_trace_event {

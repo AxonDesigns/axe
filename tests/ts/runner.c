@@ -39,7 +39,7 @@ typedef struct runner {
 } runner;
 
 static void on_trace(void *user, const ui_trace_event *ev) {
-    if (ev->kind < UI_TRACE_SCRIPT_EXCEPTION) return;
+    if (ev->kind < UI_TRACE_SCRIPT_EXCEPTION || ev->kind > UI_TRACE_SCRIPT_LEAK) return; // script events only
     runner *r = user;
     mtx_lock(&r->lock);
     if (r->hook_count < MAX_HOOKS) {

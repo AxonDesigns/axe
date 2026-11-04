@@ -119,7 +119,7 @@ jobs:
         run: cmake --preset release
 
       - name: Build
-        run: cmake --build --preset release --target bench_layout bench_text bench_script
+        run: cmake --build --preset release --target bench_layout bench_text bench_script bench_ui
 
       - name: Save vendored crates
         if: always() && steps.setup.outputs.vendor-key != '' && steps.setup.outputs.vendor-hit != 'true'

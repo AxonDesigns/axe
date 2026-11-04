@@ -83,6 +83,7 @@ struct ui_core {
         size_t size;
         ui_prep_buffer *prep;    // NULL: nothing to prepare (or no memory to)
         bool deferred;           // a frame passed while it waited at the head
+        uint64_t sent_ns;        // when the logic thread sent it (0: unknown)
     } *pending;
     uint32_t pending_count, pending_capacity;
     uint64_t head_wait_since;    // monotonic ns: when the head buffer first missed a frame

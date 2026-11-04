@@ -52,3 +52,10 @@ target_compile_definitions(bench_ui PRIVATE _DEFAULT_SOURCE AXE_SOURCE_DIR="${PR
 target_link_libraries(bench_ui PRIVATE ui m)
 add_dependencies(bench_ui bench_ui_bundles)
 ui_target_warnings(bench_ui)
+add_executable(bench_ui_live bench_ui_live.c)
+target_include_directories(bench_ui_live PRIVATE ${PROJECT_SOURCE_DIR}/src)
+target_compile_definitions(bench_ui_live PRIVATE _DEFAULT_SOURCE AXE_SOURCE_DIR="${PROJECT_SOURCE_DIR}"
+    UI_LIST10K_AXBC="${CMAKE_CURRENT_BINARY_DIR}/apps/list10k.axbc")
+target_link_libraries(bench_ui_live PRIVATE ui m)
+add_dependencies(bench_ui_live bench_ui_bundles)
+ui_target_warnings(bench_ui_live)

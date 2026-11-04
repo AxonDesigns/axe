@@ -1,5 +1,6 @@
 // Benchmark B2 (bench/bench_ui.c): 10,000 rows mounted through For, then a stream of updates:
-// each turn writes 100 items' signals (a label and a flag). A reorder moves 50 rows. Frozen
+// each turn writes 100 items' signals (a label and a flag). A reorder moves 50 rows. With
+// `-- --stream` (bench/bench_ui_live.c) it writes 100 items on every frame by itself. Frozen
 // (CONTRIBUTING.md, "Bench apps").
 
 import { For, Text, View, app, mount, signal, style, token, type Signal } from "@axe/ui";
@@ -13,7 +14,10 @@ const S = {
   cold: style({ width: 8, height: 8, cornerRadius: 4, backgroundColor: "#c8ccd4" }),
 };
 
-const N = 10000;
+// 10,000 rows; `-- --rows=N` for another count (bench_ui_live, to tell the core's cost of a
+// large scene from the stream's).
+const rowsArg = app.args.find((a) => a.startsWith("--rows="));
+const N = rowsArg ? Number(rowsArg.slice(7)) : 10000;
 interface Item {
   readonly id: number;
   readonly label: Signal<string>;
@@ -44,13 +48,21 @@ app.onSurface((s) => mount(App, s));
 
 const g = globalThis as Record<string, unknown>;
 /** One turn's updates: 100 items' labels and flags. */
-g["benchUpdate"] = (k: number) => {
+const update = (k: number) => {
   for (let j = 0; j < 100; j++) {
     const it = items[(k * 100 + j * 97) % N]!;
     it.label.set(`Item ${it.id} · ${k}`);
     it.hot.update((h) => !h);
   }
 };
+g["benchUpdate"] = update;
+
+// The live run: 100 items on every frame.
+if (app.args.includes("--stream")) {
+  let k = 0;
+  app.onSurface((s) => s.onFrame(() => update(k++)));
+}
+
 /** Moves 50 rows to other places. */
 g["benchReorder"] = (k: number) => {
   const next = [...list.peek()];

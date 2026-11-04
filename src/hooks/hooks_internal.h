@@ -23,6 +23,7 @@ void ui_hooks_emit(ui_hooks *h, ui_trace_kind kind, ui_phase phase, ui_handle su
 void ui_hooks_emit_presented(ui_hooks *h, ui_handle surface, uint64_t frame_id,
                              uint64_t present_ns, uint64_t refresh_ns);
 void ui_hooks_emit_script(ui_hooks *h, ui_trace_kind kind, const char *text, uint64_t duration_ns);
+void ui_hooks_emit_at(ui_hooks *h, ui_trace_kind kind, ui_handle surface, uint64_t frame_id, uint64_t time_ns);
 
 #ifndef UI_HOOKS_ENABLED
 #define UI_HOOKS_ENABLED 1
@@ -43,7 +44,13 @@ void ui_hooks_emit_script(ui_hooks *h, ui_trace_kind kind, const char *text, uin
     do {                                                                                       \
         if (UI_HOOK_ACTIVE(h)) ui_hooks_emit_script((h), (kind), (text), (duration_ns));        \
     } while (0)
+#define UI_HOOK_AT(h, kind, surface, frame, time_ns)                                            \
+    do {                                                                                       \
+        if (UI_HOOK_ACTIVE(h)) ui_hooks_emit_at((h), (kind), (surface), (frame), (time_ns));     \
+    } while (0)
 #else
+#define UI_HOOK_AT(h, kind, surface, frame, time_ns)                                            \
+    ((void)sizeof(h), (void)sizeof(surface), (void)sizeof(frame), (void)sizeof(time_ns))
 #define UI_HOOK_SCRIPT(h, kind, text, duration_ns)                                              \
     ((void)sizeof(h), (void)sizeof(text), (void)sizeof(duration_ns))
 // sizeof marks the arguments as used without evaluating them: no code is generated.

@@ -3,6 +3,124 @@
 Choices the architecture document leaves open, recorded as they are made. Newest
 milestone first.
 
+## Milestone 3b.2: the TSX transform, templates and the language benchmarks
+
+### Toolchain and dependencies
+- **oxc 0.157.0 on Rust 1.97** (3b.1 moved the whole build to 1.97). axe-tsx uses the parser,
+  the AST and its visitor, scopes (`oxc_semantic`) and `oxc_sourcemap`: 90 crates, all
+  permissive. `self_cell` is Apache-2.0 OR GPL-2.0-only, taken as Apache-2.0
+  (third_party/VERSIONS.md).
+- **One vendor directory,** `third_party/rust-vendor`, for both lockfiles (`cargo vendor
+  --sync`); CI's cache keys cover both.
+- **No LTO** for axe-tsx. The developer machine ran out of memory twice during 3b.2: once, a
+  test looping forever (below); and it has 15 GiB with a browser and the desktop taking much of
+  it. Builds there are capped (`CMAKE_BUILD_PARALLEL_LEVEL=4`, `CARGO_BUILD_JOBS=2`), and new
+  tests run under a cgroup memory cap.
+
+### The transform
+- **Splicing, not regenerating.** axe-tsx keeps the source outside JSX as it is, types included
+  (esbuild strips them next), and replaces each outermost JSX expression. The source map maps
+  copied text line by line and generated text to the JSX it replaced.
+- **Classification** (docs/ui.md, "How TSX compiles"):
+  - constant: literals, module-level bindings, static members of module-level objects, and
+    spreads of these;
+  - local: no call or member access, but a local binding;
+  - dynamic: calls, member accesses off locals, tagged templates.
+
+  Functions are values. A static member of a module-level object (`S.card`) is read when the
+  template is defined, which assumes it isn't a getter that changes.
+- **A step before esbuild, not a plugin.** esbuild plugins need its JS or Go API, and builds
+  run its native binary without Node. CMake mirrors an app's directory through axe-tsx when it
+  holds TSX, then bundles the mirror. Package internals in tests go through the `@axe/ui/src/*`
+  path, so a mirrored test shares the package's modules.
+- **The leaf-text rule** is split three ways:
+  - the type checker rejects strings in a View (TypeScript gives every JSX expression one type,
+    `JSX.Element`, a brand that both a View's and a Text's children accept);
+  - the transform reports misnesting it can see;
+  - the runtime reports the rest.
+- **Snapshots:** `tests/tsx/cases`, compared by `tools/axe-tsx/snapshots.py`
+  (`tsx_snapshots`).
+
+### Templates
+- **Expanded on receipt, not applied in the scene.** The core rewrites each buffer's instances
+  into their ops when it receives the buffer (docs/templates.md). Preparation, the scene and
+  every check see plain ops, so equivalence holds by construction.
+  - This replaces the plan's all-or-nothing check of an instance's handles: an instance is
+    exactly its ops, bad handles included.
+  - `test_template` checks the expansion byte for byte against hand-written ops: fixed
+    templates and 300 random ones.
+- **Wire:** ops 21–23 are new. Master's reader skips them (two fixtures). fuzz_commands expands
+  as the core does; 5 minutes on 4 workers, about 460,000 inputs, clean.
+- **In @axe/ui,** templates are defined lazily, once per theme in effect. A theme's variant is
+  destroyed once no instance and no provider uses it (the user's choice); the themeless one
+  stays, and its instances keep no count.
+- **Constant inline styles** go into the template's `set_props` (the user's choice: inline
+  styles are overrides).
+
+### layout_cards in TSX
+`layout_cards_equivalence` compares C, TypeScript and TSX: byte-identical at every time, under
+both schedulers, and in dark right-to-left mode. `For` moves the fewest rows, so a shuffle
+moves the same cards the imperative version does.
+
+### The language benchmarks
+- **The apps:** frozen TSX apps under `bench/apps`:
+  - `screen1k`: 60 cards of 16 nodes, 300 paragraphs, 3 bindings a card;
+  - `list10k`: a View, a bound label and a bound badge per row; `--stream` writes 100 items a
+    frame, `--rows=N` sets the count;
+  - `text1k`: 1,000 bound texts.
+- **`bench_ui`** times the JS side of turns on the CPU, and its `--heap` mode takes the heap
+  apart. **`bench_ui_live`** runs `list10k` in a window.
+- **The hooks API is at version 2:** `UI_TRACE_COMMANDS_APPLIED` reports the frame that
+  applied a buffer and when the logic thread sent it, which, with `PRESENTED`, gives the update
+  delay.
+- **The live runs** are in a headless sway (no window on screen) at a fixed rate. Its reported
+  refresh isn't reliable when frames are slow, so the frame timings come from the trace.
+- **Results against the agreed thresholds:** see docs/ui.md, "Benchmarks". The update path
+  passes: the 100-write turn at p50 1.5 and p99 2.1 ms, 1,000 text updates in 7.2 ms, and the
+  update delay at p99 1.75 frames. These fail:
+  - the 10,000-row mount (about 450 ms against 300);
+  - the heap per row (3.3 KB against 2);
+  - dropped frames with 10,000 rows. The core's frame for 30,000 nodes takes about 40 ms (the
+    display list and its encoding), whatever JS does; with 1,000 rows, 60 Hz holds with no
+    misses.
+
+### Making the runtime leaner
+The first measurements: mount 836 ms, 6.7 KB a row, the 100-write turn at p50 4.3 ms, 1,000
+texts at 25 ms. The measured QuickJS costs:
+
+| Cost | Size or time |
+| --- | --- |
+| A closure with one captured variable | about 200 B |
+| An empty object | about 140 B |
+| An object of 5 fields | about 200 B |
+| A short string | about 60 B |
+| A property write | about 0.1 us |
+| `setPrototypeOf` on an object | about 200 B more (the shape is unshared) |
+
+What changed:
+- **Text.**
+  - Plain text (no options or Spans) gets a lean binding, written only on change.
+  - `set_text` is encoded natively into a worst-case reservation, then the op is shrunk.
+- **Raw writers** for `set_styles` and `instantiate_template`.
+- **Bindings** are objects with a shared run function (no closure each), with a fast path for
+  one style.
+- **For rows.** A row is its owner, and a one-component row runs in place.
+- **Owners** keep their region in a field.
+- **A region with one node** keeps it in a field.
+- **A signal** is its own getter, its methods assigned rather than inherited.
+- **Fields.** Rarely used owner and computation fields are added lazily, and sources keep no
+  observer tail.
+- **Named closures.** None on hot paths: with `--keep-names` each costs a `__name` call.
+- **Tried, no gain:** `useDefineForClassFields: false`.
+
+### Bugs found on the way
+- **An import cycle** (elements -> theme -> template -> elements) left the template module's
+  class keyed by an undefined `MOUNT`. `MOUNT` moved to `regions.ts`, which imports nothing of
+  the package.
+- **A test helper looped forever** on `slotChildren(-1)`, filling an array until the machine ran
+  out of memory. `slotChildren` now refuses a slot without a node, and axe-test-js limits the
+  JS heap to 512 MiB.
+
 ## Milestone 3b.1: signals and components
 
 ### The user's choices in review

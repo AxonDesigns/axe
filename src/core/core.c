@@ -368,7 +368,7 @@ static void handle(ui_core *c, ui_msg msg) {
         ui_prep_buffer *prep = NULL;
         if (ui_scene_validate(msg.ptr, msg.size) == UI_OK)
             prep = ui_prep_create(c->preparer, msg.ptr, msg.size);
-        c->pending[c->pending_count++] = (struct ui_pending_cmds){msg.ptr, msg.size, prep, false};
+        c->pending[c->pending_count++] = (struct ui_pending_cmds){msg.ptr, msg.size, prep, false, msg.u64};
         break;
     }
     case UI_MSG_EVENTS_DONE:
@@ -599,7 +599,7 @@ static void prep_applied(ui_core *c, ui_prep_buffer *b) {
 
 // Applies every buffer from the head on that is ready, in order; the first that isn't, and
 // all after it, wait for a later frame.
-static void apply_ready(ui_core *c, uint64_t now) {
+static void apply_ready(ui_core *c, uint64_t now, ui_handle main, uint64_t frame_id) {
     sync_scales(c);
     uint32_t done = 0;
     for (; done < c->pending_count; done++) {
@@ -626,6 +626,7 @@ static void apply_ready(ui_core *c, uint64_t now) {
             UI_ERROR(c->log, MODULE, "rejected a malformed command buffer");
         c->applying = NULL;
         c->stats.commands_applied += c->scene.stats.applied - before;
+        UI_HOOK_AT(c->hooks, UI_TRACE_COMMANDS_APPLIED, main, frame_id, p->sent_ns);
         if (p->prep) prep_applied(c, p->prep);
         if (p->prep) {
             // Its glyphs stay in the glyph cache until every surface has drawn once.
@@ -821,7 +822,7 @@ static void frame(ui_core *c) {
         }
 
         UI_HOOK_PHASE_BEGIN(c->hooks, UI_PHASE_APPLY, main, frame_id);
-        apply_ready(c, now);
+        apply_ready(c, now, main, frame_id);
         c->stats.commands_dropped = c->scene.stats.dropped;
         c->stats.buffers_rejected = c->scene.stats.rejected;
         UI_HOOK_PHASE_END(c->hooks, UI_PHASE_APPLY, main, frame_id);

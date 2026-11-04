@@ -105,9 +105,12 @@ across a few runs.
 
 ### Bench apps
 
-Benchmarks that run an app use one under `bench/apps/`, never an example. `bench/apps/cards`
-(the startup, memory and first-frame cases of `bench_script`) is a frozen copy of the
-TypeScript `layout_cards` as of milestone 3a.
+Benchmarks that run an app use one under `bench/apps/`, never an example:
+- `bench/apps/cards`, used by the startup, memory and first-frame cases of `bench_script`, is a
+  frozen copy of the TypeScript `layout_cards` as of milestone 3a;
+- `screen1k`, `list10k` and `text1k`, used by the language benchmarks in `bench_ui` and
+  `bench_ui_live` ([`docs/ui.md`](docs/ui.md), "Benchmarks"), are TSX apps frozen in milestone
+  3b.
 
 - **Examples change freely**, to show what is new; nothing measures them.
 - **Bench apps change only on purpose**: to measure something new, or because the API they

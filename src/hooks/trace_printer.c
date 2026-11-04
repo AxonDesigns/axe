@@ -144,6 +144,8 @@ static void on_trace(void *user, const ui_trace_event *ev) {
     case UI_TRACE_SCRIPT_LONG_TASK:
     case UI_TRACE_SCRIPT_LEAK:
         break; // the script host logs these itself
+    case UI_TRACE_COMMANDS_APPLIED:
+        break; // per buffer: bench_ui_live measures with it
     case UI_TRACE_PREPARE_BEGIN:
         prepare_begin_ns = ev->time_ns;
         break;

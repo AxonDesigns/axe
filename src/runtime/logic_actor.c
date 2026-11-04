@@ -41,7 +41,7 @@ static void flush(ui_logic *l) {
     uint8_t *bytes;
     size_t size;
     if (ui_cmd_writer_take(l->writer, &bytes, &size) != UI_OK) return;
-    send(l, (ui_msg){.type = UI_MSG_CMD_BUFFER, .ptr = bytes, .size = size});
+    send(l, (ui_msg){.type = UI_MSG_CMD_BUFFER, .ptr = bytes, .size = size, .u64 = ui_monotonic_ns()});
 }
 
 static ui_result logic_start(void *self) {
@@ -79,7 +79,8 @@ static void logic_step(void *self) {
             uint8_t *cmds = NULL;
             size_t size = 0;
             if (l->host) ui_script_host_turn(l->host, msg.ptr, msg.size, &cmds, &size);
-            if (cmds) send(l, (ui_msg){.type = UI_MSG_CMD_BUFFER, .ptr = cmds, .size = size});
+            // u64: when it was sent, for the hook API's COMMANDS_APPLIED.
+            if (cmds) send(l, (ui_msg){.type = UI_MSG_CMD_BUFFER, .ptr = cmds, .size = size, .u64 = ui_monotonic_ns()});
         } else if (l->desc.on_events) {
             ui_result r = l->desc.on_events(l->desc.user, msg.ptr, msg.size, l->writer);
             if (r != UI_OK) UI_ERROR(l->log, MODULE, "logic failed: %s", ui_result_str(r));

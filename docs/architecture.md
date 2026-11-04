@@ -479,4 +479,4 @@ The vertical slice is a thin cut through phases 1 to 4 on Wayland: one window, a
 - [ ] Numeric targets for input latency, startup, memory and size, set after the slice. Frame and latency requirements are decided (see Performance).
 - [x] Decided: pushes may interrupt interactive pops (see Routing).
 - [x] Decided: X11 is supported from the first release, without layer-shell.
-- [ ] Thresholds for the three language benchmarks, set before the slice runs them.
+- [x] Decided: the language benchmarks' thresholds were set in milestone 3b before they ran; results and their reading are in [ui.md](ui.md), "Benchmarks" (TypeScript on QuickJS-ng stays).

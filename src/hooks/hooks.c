@@ -35,6 +35,11 @@ void ui_hooks_emit_presented(ui_hooks *h, ui_handle surface, uint64_t frame_id,
     dispatch(h, &ev);
 }
 
+void ui_hooks_emit_at(ui_hooks *h, ui_trace_kind kind, ui_handle surface, uint64_t frame_id, uint64_t time_ns) {
+    ui_trace_event ev = {.kind = kind, .surface = surface, .frame_id = frame_id, .time_ns = time_ns};
+    dispatch(h, &ev);
+}
+
 void ui_hooks_emit_script(ui_hooks *h, ui_trace_kind kind, const char *text, uint64_t duration_ns) {
     ui_trace_event ev = {.kind = kind, .time_ns = ui_monotonic_ns(), .text = text, .duration_ns = duration_ns};
     dispatch(h, &ev);

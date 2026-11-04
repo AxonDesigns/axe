@@ -161,6 +161,8 @@ axe_ts_app(layout_cards_ts ENTRY ${CMAKE_CURRENT_SOURCE_DIR}/layout_cards/main.t
            WIDTH 980 HEIGHT 640 SCALE 150 TITLE "layout_cards")
 ```
 
+An entry in TSX (`main.tsx`) goes through `axe-tsx` first ([`ui.md`](ui.md), "Building").
+
 This builds an executable, `axe-run` with the app built in:
 
 - **Debug builds** read the bundle's source from the build tree, so re-bundling needs no
