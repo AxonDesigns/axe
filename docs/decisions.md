@@ -34,6 +34,38 @@ visibly snapped when it stopped. There were two causes.
   was regenerated: a box mid-animation, now with crisp 1 px borders and text at its resting
   offset.
 
+### A use-after-free in the head step
+- **Found** while checking the snapping fix. `layout_cards_equivalence` failed once in
+  three ASan runs: the TypeScript example, threaded scheduler, at 6.2 s. Reproduced about
+  1 in 24 runs by running that case alone.
+- **The race,** found with ThreadSanitizer: the head step read `tp->shaped_source` while a
+  worker replaced it.
+  - The head step of a buffer that loads fonts first registered them
+    (`ui_prep_register_fonts`). Its own text had been shaped before the fonts existed, so
+    registering sent those items back to the workers.
+  - The very next loop read what each item was shaped as, to check its values, while
+    `shape_item` was releasing and replacing it on a worker.
+  - When the text took values from the node's styles, the shaped source was one derived
+    for the node, and the worker's release freed it. The TS example's text does take its
+    values from styles; the C example registers its font at startup, not in a buffer.
+  - It could also submit a second job for an item already being shaped, when the check
+    found its values wrong.
+- **The fix is ordering.** The head step checks its text first, while the buffer's jobs
+  are provably idle (it only runs then), and registers fonts after. An item sent back for
+  new values isn't done, so registering doesn't send it twice. If the fonts land while it
+  is shaped, `shape_item` sees the new generation under the lock and shapes again.
+- **Test:** `test_font_loading`'s `test_load_font_with_text`. Under the threaded
+  scheduler, four buffers each load a new font and set 48 paragraphs whose size comes from
+  styles, and every paragraph must end up shaped with the fonts as they are. It repeats
+  in six fresh apps.
+  - Against the old order, ASan failed it in 8 of 10 runs with the same use-after-free, and
+    TSan reports the race on every run.
+  - With the fix: 0 of 20 ASan runs, TSan clean apart from Mesa's known `lp_fence_destroy`.
+    The TS example's case: 0 of 24.
+- **TSan** is still a local build, not a preset or a CI job; it needs the shim that maps
+  C11 threads onto pthreads (M1 decisions). It found this race on every run, where ASan
+  needed luck. A TSan CI job would catch this class of bug reliably.
+
 ## Milestone 3a: language binding plumbing
 
 ### The user's choices in review

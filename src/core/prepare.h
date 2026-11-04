@@ -11,10 +11,13 @@
 // text, changes text values or loads fonts has a second step that depends on the scene:
 // when it reaches the head of the queue (every earlier buffer is applied, so the scene can't
 // change until it applies), the core runs it (core.c, head_step):
-//  - its faces are registered (ui_prep_register_fonts); text prepared before is prepared
-//    again in it and in later buffers;
 //  - its own text is prepared again where the values it was shaped with were wrong
-//    (ui_prep_restyle_item: they were guessed from the scene when it was received);
+//    (ui_prep_restyle_item: they were guessed from the scene when it was received). This
+//    comes first: it reads what each item was shaped as, which is only safe while none of
+//    the buffer's jobs runs;
+//  - its faces are registered (ui_prep_register_fonts); text prepared before is prepared
+//    again in it and in later buffers (not text already being prepared again: it sees the
+//    new fonts itself);
 //  - existing paragraphs whose values it changes, or every paragraph after a font load, are
 //    shaped again in its group (ui_prep_reshape_paragraphs).
 // It applies once all of that is done, so the frame that applies it shows every paragraph

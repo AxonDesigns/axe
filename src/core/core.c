@@ -456,23 +456,21 @@ static bool shows_base(const ui_node *n) {
 }
 
 // The head step (core/prepare.h) of pending[at]: with every earlier buffer applied, its
-// fonts are registered, its text is prepared again where the values it was guessed with
-// were wrong, and existing paragraphs whose values it changes (all of them after a font
+// text is prepared again where the values it was guessed with were wrong, its fonts are
+// registered, and existing paragraphs whose values it changes (all of them after a font
 // load) are shaped again, all before it applies. Returns true if that submitted work (the
 // buffer then waits for it).
+//
+// Its text is checked before its fonts register: the check reads what each item was shaped
+// as, which is only safe while none of its jobs runs, and registering fonts sends items
+// shaped before them back to the workers. In that order, an item being prepared again isn't
+// done, so registering doesn't send it twice; if the fonts land while it is shaped, it sees
+// the new generation and shapes again (prepare.c, shape_item).
 static bool head_step(ui_core *c, uint32_t at) {
     sync_scales(c);
     ui_scene *s = &c->scene;
     ui_prep_buffer *head = c->pending[at].prep;
-    ui_prep_buffer **preps = malloc(c->pending_count * sizeof *preps);
-    uint32_t prep_count = 0;
-    for (uint32_t i = at; preps && i < c->pending_count; i++) {
-        if (c->pending[i].prep) preps[prep_count++] = c->pending[i].prep;
-    }
-    // Without memory for the list, fonts are still registered; text left out is shaped on
-    // the core when laid out.
-    bool fonts = ui_prep_register_fonts(head, preps, prep_count), submitted = fonts;
-    free(preps);
+    bool submitted = false;
     ui_preview *pv = ui_preview_create(s, &(ui_preview_buffer){head->data, head->size}, 1);
     for (uint32_t i = 0; pv && i < head->scene.text_count; i++) {
         ui_scene_text_prep *tp = &head->scene.texts[i];
@@ -484,6 +482,16 @@ static bool head_step(ui_core *c, uint32_t at) {
             submitted = true;
         }
     }
+    ui_prep_buffer **preps = malloc(c->pending_count * sizeof *preps);
+    uint32_t prep_count = 0;
+    for (uint32_t i = at; preps && i < c->pending_count; i++) {
+        if (c->pending[i].prep) preps[prep_count++] = c->pending[i].prep;
+    }
+    // Without memory for the list, fonts are still registered; text left out is shaped on
+    // the core when laid out.
+    bool fonts = ui_prep_register_fonts(head, preps, prep_count);
+    submitted |= fonts;
+    free(preps);
     if (fonts || !pv || ui_preview_global(pv)) {
         ui_prep_paragraph *paras = malloc((s->handles.live ? s->handles.live : 1) * sizeof *paras);
         bool *derived = malloc((s->handles.live ? s->handles.live : 1) * sizeof *derived);
