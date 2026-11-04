@@ -239,10 +239,16 @@ have logical names.
   - A node with nothing but a background needs no layer: its alpha is multiplied.
   - Opacity 0 skips the node and its subtree entirely.
 - **Snapping:** a box at rest snaps to whole physical pixels, with its origin and its size
-  each rounded, so a box never changes size depending on where it sits. A box that is
-  moving (its frame or its presentation rect springs), and everything inside it, is drawn
-  at its exact position, and snaps again on the frame the spring settles. Text baselines always snap, so moving text
-  steps vertically by whole pixels.
+  each rounded, so a box never changes size depending on where it sits.
+  - **A moving box** (its frame or its presentation rect springs) glides at subpixel
+    positions, and so does everything inside it. It is drawn at its exact position,
+    shifted by the rounding of where it will rest, so it arrives on that pixel and nothing
+    snaps when the spring settles.
+  - **Content keeps its resting offsets:** what is inside a moving box sits at the offsets
+    it will have at rest, so nothing shifts within it when it lands.
+  - **Text** is a whole number of pixels into its box. Glyphs are placed in quarter pixels
+    horizontally and whole pixels vertically, so text in the slow tail of a move steps in
+    those increments.
 
 ## Ops
 
@@ -312,7 +318,8 @@ Each side has its own width and color, and each corner its own radius, drawn as 
   inner one, anti-aliased over one pixel. A transparent side shows the background.
 - **Widths snap:** at rest a border is a whole number of device pixels, at least one when
   nonzero, and layout uses the snapped width, as browsers do, so a 1 px border is 0.8 px
-  of layout at 1.25×. A moving node draws its border unsnapped.
+  of layout at 1.25×. A moving node keeps the snapped width; only its position goes
+  subpixel, so a border doesn't thicken while it moves.
 - **Transitions:** `transition(border_color)` animates every side's color (a spring each),
   `transition(corner_radius)` every corner (one spring). The longhands have no transitions
   of their own.

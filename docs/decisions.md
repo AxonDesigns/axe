@@ -3,6 +3,37 @@
 Choices the architecture document leaves open, recorded as they are made. Newest
 milestone first.
 
+## After milestone 3a: fixes
+
+### Moving boxes land without a snap
+Reported in `layout_cards`: a card's border looked thicker while it moved, and the card
+visibly snapped when it stopped. There were two causes.
+
+- **Border widths snapped only at rest.** A moving node drew its border unsnapped, so a
+  1 px border at 1.25× drew 1.25 device px, smeared over two pixels. It snapped back to 1
+  when the card stopped. Layout already used the snapped width, so the moving border was
+  also wider than the space layout gave it. Widths now always snap; only a moving box's
+  position is subpixel.
+- **Positions snapped when the spring settled.** A box glided toward its exact resting
+  position (say 520.4 device px), then jumped to the rounded one (520) on the frame its
+  spring stopped, its edges and text sharpening at once.
+  - Now the build tracks where each box rests: its layout rect while a layout animation
+    runs, plus what a frame's spring has left to travel. A box is drawn at its exact
+    position plus its resting position's rounding error, so it arrives on that pixel. At
+    rest this is the old rounding exactly.
+  - Children and text keep their resting offsets inside a moving box, so nothing shifts
+    when it lands.
+  - In captures of a card settling, the landing frame changes nothing.
+- **What remains:** glyphs are placed in quarter pixels horizontally and whole pixels
+  vertically, so text steps in the slow tail of a move. Placing moving text exactly would
+  be a change to how glyphs are positioned.
+- **Tests:** two tests asserted that a child keeps its unsnapped offset from a moving
+  parent (6.25 device px). They now assert its resting offset (6). The `test_paint_golden`
+  case also checks the landing invariant: every moving frame, the box is drawn at its
+  resting pixel plus what it has left to travel. One golden, `anim_content_mid_shrink@125`,
+  was regenerated: a box mid-animation, now with crisp 1 px borders and text at its resting
+  offset.
+
 ## Milestone 3a: language binding plumbing
 
 ### The user's choices in review

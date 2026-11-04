@@ -18,8 +18,8 @@ static const uint32_t spring_components[UI_SPRING_COUNT] = {4, 4, 4, 4, 4, 4, 4,
 struct ui_build_level {
     uint32_t slot;   // the node whose children are being walked (UI_NO_SLOT: the root)
     float x, y;      // its origin, logical px from the surface's
+    float tx, ty;    // where that origin comes to rest (x, y unless it or an ancestor moves)
     float clip[4];   // what its children are clipped to (physical px: x0, y0, x1, y1)
-    bool moving;     // it or an ancestor moves: its children draw unsnapped
     bool layer;      // it opened a layer, closed after its children
 };
 
@@ -1587,16 +1587,29 @@ static void intersect(float out[4], const float c[4], float x0, float y0, float 
     out[3] = fminf(c[3], y1);
 }
 
-// A node moves while its frame or its presentation rect springs; then it, and everything
-// under it, draws where it is instead of snapping to whole pixels.
-static bool moving(const ui_node *n) {
-    return n->anim && (n->anim->springs[UI_SPRING_RECT].active || n->anim->springs[UI_SPRING_LAYOUT].active);
+// Where a node's rect, relative to its parent's, comes to rest: its layout rect while a
+// layout animation runs, and further by what its frame's spring has left to travel.
+static void rest_rect(const ui_node *n, float out[4]) {
+    const ui_node_anim *a = n->anim;
+    memcpy(out, a && a->springs[UI_SPRING_LAYOUT].active ? n->layout.rect : n->rect, 4 * sizeof *out);
+    if (a && a->springs[UI_SPRING_RECT].active) {
+        for (int i = 0; i < 4; i++) out[i] += (float)a->springs[UI_SPRING_RECT].target[i] - n->frame[i];
+    }
 }
 
-// A border at rest is whole physical pixels, at least one, as browsers draw them.
-static float border_px(float width, float scale, bool snap) {
+// Physical px for a logical coordinate `v` whose resting value is `rest`: at rest, the
+// whole pixel; on the way, the exact position shifted by the rest's rounding, so it reaches
+// that pixel without a jump when it settles.
+static float snap_to_rest(float v, float rest, float scale) {
+    return v * scale + (roundf(rest * scale) - rest * scale);
+}
+
+// A border is whole physical pixels, at least one, as browsers draw them and as layout
+// counts it (ui_layout_snap_border). Also while the node moves: only its position goes
+// subpixel then, so the border keeps its weight instead of thickening until it settles.
+static float border_px(float width, float scale) {
     if (!(width > 0)) return 0;
-    return snap ? fmaxf(floorf(width * scale + 1e-3f), 1.f) : width * scale;
+    return fmaxf(floorf(width * scale + 1e-3f), 1.f);
 }
 
 ui_result ui_scene_build(ui_scene *s, ui_handle surface, ui_display_list *dl,
@@ -1605,12 +1618,11 @@ ui_result ui_scene_build(ui_scene *s, ui_handle surface, ui_display_list *dl,
     if (!root) return UI_ERR_STALE_HANDLE;
     float scale = (float)dl->scale_120 / 120.f;
     // Iterative pre-order walk. levels[depth] describes the node whose children are being
-    // visited: their origin, their clip, whether they move, and whether a layer must close
+    // visited: their origin, where it rests, their clip, and whether a layer must close
     // after them.
     if (ui_grow((void **)&s->levels, &s->level_capacity, 1, sizeof *s->levels) != UI_OK)
         return UI_ERR_OUT_OF_MEMORY;
-    s->levels[0] = (ui_build_level){UI_NO_SLOT, 0, 0, {-INFINITY, -INFINITY, INFINITY, INFINITY},
-                                    false, false};
+    s->levels[0] = (ui_build_level){UI_NO_SLOT, 0, 0, 0, 0, {-INFINITY, -INFINITY, INFINITY, INFINITY}, false};
     uint32_t depth = 0, slot = root->first_child;
     ui_result res;
     for (;;) {
@@ -1627,27 +1639,24 @@ ui_result ui_scene_build(ui_scene *s, ui_handle surface, ui_display_list *dl,
             slot = n->next_sibling; // invisible, with its subtree
             continue;
         }
-        float x = up->x + n->rect[0], y = up->y + n->rect[1];
-        bool move = up->moving || moving(n);
-        // At rest, origin and size round separately, so a box keeps its size wherever it
-        // sits; while moving, boxes draw at their exact positions.
-        float px0 = x * scale, py0 = y * scale, pw = n->rect[2] * scale, ph = n->rect[3] * scale;
-        if (!move) {
-            px0 = roundf(px0);
-            py0 = roundf(py0);
-            pw = roundf(pw);
-            ph = roundf(ph);
-        }
+        float x = up->x + n->rect[0], y = up->y + n->rect[1], rest[4];
+        rest_rect(n, rest);
+        float tx = up->tx + rest[0], ty = up->ty + rest[1];
+        // Origin and size round separately, so a box keeps its size wherever it sits. A box
+        // that moves (or whose ancestor does) draws at its exact position, offset by its
+        // resting place's rounding: it glides, and lands on that pixel without a snap.
+        float px0 = snap_to_rest(x, tx, scale), py0 = snap_to_rest(y, ty, scale);
+        float pw = snap_to_rest(n->rect[2], rest[2], scale), ph = snap_to_rest(n->rect[3], rest[3], scale);
         float px1 = px0 + pw, py1 = py0 + ph;
         float clip[4];
         memcpy(clip, up->clip, sizeof clip);
         dl->clip = scissor_of(clip);
-        // Borders per side, in whole device pixels at rest; radii scaled down together so
+        // Borders per side, in whole device pixels; radii scaled down together so
         // adjacent ones fit each side (CSS backgrounds 3, "Overlapping curves").
         float bw[4], rad[4];
         bool border = false;
         for (int i = 0; i < 4; i++) {
-            bw[i] = border_px(n->border_width[i], scale, !move);
+            bw[i] = border_px(n->border_width[i], scale);
             border |= bw[i] > 0 && n->border_color[i][3] > 0;
             rad[i] = n->radius[i] * scale;
         }
@@ -1711,25 +1720,22 @@ ui_result ui_scene_build(ui_scene *s, ui_handle surface, ui_display_list *dl,
         if (n->text && text) {
             // At the anonymous text item's place in the node (layout/layout.h).
             const float *t = n->layout.text;
-            float tx = px0 + t[0] * scale, ty = py0 + t[1] * scale;
-            if (!move) {
-                tx = roundf(tx);
-                ty = roundf(ty);
-            }
+            // A whole number of pixels into the box, which itself lands on whole pixels.
+            float text_x = px0 + roundf(t[0] * scale), text_y = py0 + roundf(t[1] * scale);
             // reflow: the text wraps to the content box as drawn (lines break again; nothing
             // is shaped again). Otherwise it keeps its final layout.
             float width = t[2];
             if (resizing && n->computed.content_animation == UI_CONTENT_REFLOW)
                 width = fmaxf(t[2] + n->rect[2] - n->layout.rect[2], 0);
             dl->clip = scissor_of(inner);
-            res = build_text(n->text, n->text_color, tx, ty, width * scale, scale, inner, dl, text);
+            res = build_text(n->text, n->text_color, text_x, text_y, width * scale, scale, inner, dl, text);
             if (res != UI_OK) return res;
         }
         if (has_children) {
             if (ui_grow((void **)&s->levels, &s->level_capacity, depth + 2, sizeof *s->levels) != UI_OK)
                 return UI_ERR_OUT_OF_MEMORY;
             ui_build_level *l = &s->levels[++depth];
-            *l = (ui_build_level){slot, x, y, {inner[0], inner[1], inner[2], inner[3]}, move, layer};
+            *l = (ui_build_level){slot, x, y, tx, ty, {inner[0], inner[1], inner[2], inner[3]}, layer};
             slot = n->first_child;
             continue;
         }

@@ -356,8 +356,11 @@ static void test_snapping(void) {
         ui_display_list_reset(&dl);
         ui_scene_layout(&s, surface, 320, 160, 1.25f, NULL, t);
         ui_scene_build(&s, surface, &dl, NULL);
-        // The child keeps its exact offset from the parent while both move.
-        CHECK_NEAR(dl.rects[1].x - dl.rects[0].x, 3.3 * 1.25, 1e-3);
+        // The parent is its resting pixel (63) plus what it has left to travel, exactly, so
+        // it glides and lands without a snap; the child keeps its resting offset (67 - 63).
+        float left = s.nodes[ui_handle_slot(a)].rect[0] - 50.3f;
+        CHECK_NEAR(dl.rects[0].x, 63 + left * 1.25f, 1e-3);
+        CHECK_NEAR(dl.rects[1].x - dl.rects[0].x, 4, 1e-3);
         fractional |= dl.rects[0].x != floorf(dl.rects[0].x);
     }
     CHECK(fractional);

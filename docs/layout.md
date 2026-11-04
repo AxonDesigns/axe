@@ -75,8 +75,8 @@ exactly what `set_rect` always did, so code written before layout keeps working.
   spring, are re-expressed relative to the new parent, and the next layout animates it into
   its new place. Moved again mid-flight, it carries on with its velocity. A node moved to
   another surface appears at its new layout rect.
-- **A moving node and its subtree draw unsnapped**, and snap again on the frame the spring
-  settles (`docs/styles.md`).
+- **A moving node and its subtree glide at subpixel positions** and land on whole pixels
+  without a snap when the spring settles (`docs/styles.md`, "Snapping").
 - **Content during the animation:** see below.
 - **Layout itself never waits for an animation.** The layout rect is final at once: the
   next layout, and the measurement op, see it. A spring starts at the animation time of the

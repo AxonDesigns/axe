@@ -167,8 +167,9 @@ static void test_children_follow(void) {
         CHECK(shown(&f, 3)[2] > 50 && shown(&f, 3)[2] < 90);
         ui_display_list_reset(&dl);
         CHECK(ui_scene_build(&f.s, f.surface, &dl, NULL) == UI_OK && dl.rect_count == 2);
-        // While B moves, neither snaps: C stays exactly 5 px (6.25 physical) inside B.
-        CHECK_NEAR(dl.rects[1].x - dl.rects[0].x, 5 * 1.25, 1e-3);
+        // While B moves, C keeps the offset it has at rest (194 - 188 physical px), so
+        // nothing inside B shifts when it lands.
+        CHECK_NEAR(dl.rects[1].x - dl.rects[0].x, 6, 1e-3);
         fractional |= dl.rects[0].x != floorf(dl.rects[0].x);
     }
     CHECK(fractional);
