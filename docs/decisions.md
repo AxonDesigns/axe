@@ -3,6 +3,64 @@
 Choices the architecture document leaves open, recorded as they are made. Newest
 milestone first.
 
+## Milestone 3a.2: merge cleanup
+
+### The TSan failure in script_host
+- **Reproduced:** `test_script_host` from the tsan build, 4 at a time, while the rest of the
+  TSan suite ran in a loop for load, each run's output kept. It failed 5 times in the first
+  35 runs.
+- **Not a race.** ThreadSanitizer reported nothing. `test_commands` (3 runs) and
+  `test_text_globals` (2) failed their `hook_count == 0` checks, because a long-task hook had
+  arrived: under TSan and load, evaluating the app or a turn building 4,000 ops took 51 to
+  73 ms, past the default threshold of 50 ms of wall time.
+- **Fixed in the test harness:** tests get no long-task reports unless they set a threshold
+  (`test_long_task` sets 5 ms). The host's behavior is right: a slow task is a long task.
+- **Regression test:** `test_slow_task_not_reported` spins 60 ms under the harness's default
+  and expects no hooks; it fails with the old harness.
+- **Checked:** after the fix, 1,000 runs under the same load passed, none failing (before
+  it, 5 of 35 failed).
+- **CI** now uploads, when a test fails:
+  - `LastTest.log`, which holds every test's output, sanitizer reports included;
+  - a JUnit file;
+  - fuzz crash, leak and timeout inputs.
+
+  A failed test's output is no longer truncated.
+
+### Benchmarks independent of the examples
+- **`bench/apps/cards`** is a frozen copy of the TypeScript `layout_cards` as of milestone 3a
+  (cf963fc). `bench_script`'s startup, memory and first-frame cases run it instead of the
+  example, whose growth in 3a.1 had moved the startup counts by +21% and +13%.
+- **The startup counts now move only with the framework.** Against the 3a baselines, the
+  startup cases measure +0.55% (bytecode) and +2.79% (source: 3a.1's larger `@axe/core` and
+  `@axe/wire` to compile), in CI's image.
+- **The rule is in CONTRIBUTING.md ("Bench apps").** Examples change freely. Bench apps
+  change only on purpose, with the baselines updated from CI's artifact in a commit of their
+  own.
+
+### C API evolution
+- **`docs/c-api.md`** sets the rules:
+  - structs only gain fields at their end;
+  - a new field's zero keeps the old behavior;
+  - functions keep their signatures;
+  - callers use designated initializers.
+- **Positional initializers are unsupported,** except for four fixed pairs that will never
+  grow, which the headers now mark: `ui_handle`, `ui_rect`, `ui_style_decl` and
+  `ui_token_decl`. The repository writes thousands of `{property, value}` pairs, and they
+  mirror wire records.
+- **Tests:**
+  - `c_api_designated_c11`, `c_api_designated_c17` and `c_api_designated_c23` compile a caller
+    of every descriptor and config struct with `-Wall -Wextra -Wpedantic -Werror
+    -Wmissing-field-initializers`;
+  - `c_api_positional_rejected` expects a positional style block to fail on its missing
+    `tokens` field.
+- **The repository's own** positional `ui_text_span_desc` and `ui_time_source` initializers
+  are designated now.
+
+### CI on a branch
+- **A manual run** (`workflow_dispatch`) has no base commit, so the `idl` job compared nothing.
+  It now uses the branch's merge base with master for the evolution rules and the
+  older-reader check.
+
 ## Milestone 3a.1: token scopes
 
 ### The user's choices in review
