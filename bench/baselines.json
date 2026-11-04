@@ -1,27 +1,28 @@
 {
   "threshold_percent": 2,
-  "reason": "Milestone 3a adds bench_script's four CPU cases (script_dispatch, script_encode, startup_bytecode, startup_source); the other cases are unchanged",
+  "reason": "Milestone 3a.1/3a.2: token scopes (bench_layout/scope added; startup_source +2.86% for the larger @axe/core and @axe/wire bundle, intended); startup cases run the frozen bench/apps/cards",
   "source": {
-    "run_id": 41724216260,
+    "run_id": 41861768340,
     "run_attempt": 1,
     "workflow": "ci",
     "event": "workflow_dispatch",
-    "ref": "m3a",
-    "commit": "a4f0777e29ae52eefc5985ec77ba3e1feb958677",
-    "url": "https://github.com/AxonDesigns/axe/actions/runs/41724216260"
+    "ref": "m3a.1-token-scopes",
+    "commit": "035dfdc55c5be3d85c8c7fdfc4bf6727bd1865b6",
+    "url": "https://github.com/AxonDesigns/axe/actions/runs/41861768340"
   },
   "counts": {
     "bench_layout/full_cold": 95100610,
     "bench_layout/full_warm": 41165845,
-    "bench_layout/incremental": 5885265,
-    "bench_layout/inherited": 4616441,
-    "bench_layout/token": 5494150,
-    "bench_script/script_dispatch": 36241281,
-    "bench_script/script_encode": 476195302,
-    "bench_script/startup_bytecode": 14312255,
-    "bench_script/startup_source": 36374783,
+    "bench_layout/incremental": 5885267,
+    "bench_layout/inherited": 4642170,
+    "bench_layout/scope": 3345805,
+    "bench_layout/token": 5444135,
+    "bench_script/script_dispatch": 36289746,
+    "bench_script/script_encode": 476442835,
+    "bench_script/startup_bytecode": 14431247,
+    "bench_script/startup_source": 37414572,
     "bench_text/raster": 24977607,
     "bench_text/relayout": 6048054,
-    "bench_text/shape": 65491685
+    "bench_text/shape": 65514473
   }
 }
