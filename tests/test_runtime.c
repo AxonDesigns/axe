@@ -266,7 +266,7 @@ static uint64_t fake_source(void *user) {
 static void test_clock_controls(void) {
     fake_now = 1000;
     ui_clock c;
-    ui_clock_init(&c, (ui_time_source){fake_source, NULL}, true);
+    ui_clock_init(&c, (ui_time_source){.now_ns = fake_source}, true);
     fake_now = 5000;
     CHECK_EQ_INT(ui_clock_at(&c, fake_now), 0); // paused
     ui_clock_step(&c, 250);

@@ -340,7 +340,7 @@ static void test_styled_text(void) {
                                    {UI_STYLE_LINE_HEIGHT, ui_number(1.25f)}},
           4);
     ui_cmd_create_node(f.w, node(2), node(1));
-    ui_text_span_desc span = {0, 1, {.weight = 700, .size = 40}, UI_TEXT_SET_WEIGHT}; // size from the node
+    ui_text_span_desc span = {.start = 0, .end = 1, .style = {.weight = 700, .size = 40}, .set = UI_TEXT_SET_WEIGHT}; // size from the node
     ui_text_desc t = {.text = "Styled", .length = 6, .spans = &span, .span_count = 1}; // nothing set
     CHECK(ui_cmd_set_text(f.w, node(2), &t) == UI_OK);
     frame(&f);

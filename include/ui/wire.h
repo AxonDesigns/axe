@@ -14,7 +14,7 @@
 extern "C" {
 #endif
 
-// A rectangle in logical pixels.
+// A rectangle in logical pixels. Fixed pair (docs/c-api.md): never gains a field.
 typedef struct ui_rect {
     float x, y, width, height;
 } ui_rect;
@@ -161,6 +161,8 @@ static inline ui_value ui_inherit(void) { return (ui_value){.kind = UI_VALUE_INH
 static inline ui_value ui_initial(void) { return (ui_value){.kind = UI_VALUE_INITIAL}; }
 #endif
 
+// A declaration: a property and its value. Fixed pair (docs/c-api.md): never gains a field,
+// so `{UI_STYLE_WIDTH, ui_px(10)}` is fine. Other structs take designated initializers.
 typedef struct ui_style_decl {
     uint16_t property; // ui_style_prop, or UI_STYLE_TRANSITION(prop)
     ui_value value;
@@ -169,7 +171,7 @@ typedef struct ui_style_decl {
 // A token's value within a scope (docs/styles.md, "Token scopes"): what a node and its
 // descendants read for the token instead of its global value. The value is one a token can
 // hold (another token included); UI_VALUE_UNSET only in ui_cmd_set_token_overrides, where it
-// removes the node's own declaration.
+// removes the node's own declaration. Fixed pair (docs/c-api.md): never gains a field.
 typedef struct ui_token_decl {
     uint32_t token; // not 0
     ui_value value;

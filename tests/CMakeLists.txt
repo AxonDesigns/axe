@@ -312,3 +312,18 @@ add_dependencies(test_stall_js ts_stall_bundle)
 ui_target_warnings(test_stall_js)
 add_test(NAME stall_js COMMAND test_stall_js)
 set_tests_properties(stall_js PROPERTIES ENVIRONMENT "UI_GPU=software" TIMEOUT 120)
+
+# The C API as callers use it (docs/c-api.md): a caller written with designated initializers
+# compiles with -Werror as C11, C17 and C23, and a positional initializer of a grown struct
+# doesn't (it is unsupported).
+set(UI_C_API_FLAGS -Wall -Wextra -Wpedantic -Werror -Wmissing-field-initializers -fsyntax-only
+    -I${PROJECT_SOURCE_DIR}/include)
+foreach(std c11 c17 c23)
+    add_test(NAME c_api_designated_${std}
+             COMMAND ${CMAKE_C_COMPILER} -std=${std} ${UI_C_API_FLAGS} ${CMAKE_CURRENT_SOURCE_DIR}/c_api/designated.c)
+endforeach()
+add_test(NAME c_api_positional_rejected
+         COMMAND ${CMAKE_C_COMPILER} -std=c23 ${UI_C_API_FLAGS} ${CMAKE_CURRENT_SOURCE_DIR}/c_api/positional.c)
+# Fails for the right reason: the warning, made an error (clang and gcc wordings).
+set_tests_properties(c_api_positional_rejected PROPERTIES
+    PASS_REGULAR_EXPRESSION "error: missing .*tokens")

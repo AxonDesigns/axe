@@ -8,7 +8,7 @@ static uint64_t monotonic_source(void *user) {
 }
 
 void ui_clock_init(ui_clock *c, ui_time_source source, bool paused) {
-    c->source = source.now_ns ? source : (ui_time_source){monotonic_source, NULL};
+    c->source = source.now_ns ? source : (ui_time_source){.now_ns = monotonic_source};
     c->paused = paused;
     c->scale = 1.0;
     c->anim_base = 0;

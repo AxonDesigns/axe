@@ -463,7 +463,7 @@ Budgets are enforced in CI with benchmarks from the first milestone. Targets mar
 
 **Raw input** (unaccelerated, full-rate device data: Raw Input on Windows, relative-pointer and pointer-constraints on Wayland, unaccelerated deltas on macOS) is a per-surface opt-in for drawing, games and pointer lock. Regular UI keeps OS-accelerated pointer events, which users expect.
 
-**Public surfaces with a versioning policy:** the TS API, the C package ABI, the automation protocol and the hook API. Each follows semantic versioning, with deprecation periods documented before breaking changes.
+**Public surfaces with a versioning policy:** the TS API, the C package ABI, the automation protocol and the hook API. Each follows semantic versioning, with deprecation periods documented before breaking changes. The C API's source compatibility rules (structs only grow at their end; callers use designated initializers) are in [c-api.md](c-api.md).
 
 ## Roadmap and vertical slice
 

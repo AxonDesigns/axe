@@ -313,7 +313,7 @@ static void test_text_values(void) {
     fixture f;
     setup(&f);
     static const char *const fam[] = {"Noto Sans"};
-    ui_text_span_desc span = {0, 2, {.family = 0, .weight = 700, .size = 14, .color = {1, 0, 0, 1}}, UI_TEXT_SET_SPAN_ALL};
+    ui_text_span_desc span = {.start = 0, .end = 2, .style = {.family = 0, .weight = 700, .size = 14, .color = {1, 0, 0, 1}}, .set = UI_TEXT_SET_SPAN_ALL};
     ui_text_desc t = {.set = UI_TEXT_SET_ALL, .text = "Hi there", .length = 8,
                       .style = {.family = 0, .weight = 400, .size = 14, .color = {0, 0, 1, 1}},
                       .spans = &span, .span_count = 1, .families = fam, .family_count = 1,

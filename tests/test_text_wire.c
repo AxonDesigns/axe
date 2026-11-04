@@ -54,9 +54,9 @@ static void test_basic(void) {
     ui_cmd_writer_create(&w);
     static const char *const languages[] = {"ro", "sr-Cyrl"};
     ui_text_span_desc spans[2] = {
-        {0, 5, {.family = 1, .weight = 700, .slant = UI_TEXT_ITALIC, .size = 20, .color = {1, 0, 0, 1},
-                .language = 2}, UI_TEXT_SET_SPAN_ALL},
-        {6, 11, {.family = UI_TEXT_FAMILY_DEFAULT, .weight = 300, .size = 12, .color = {0, 0, 1, 0.5f}}, UI_TEXT_SET_SPAN_ALL},
+        {.start = 0, .end = 5, .style = {.family = 1, .weight = 700, .slant = UI_TEXT_ITALIC, .size = 20, .color = {1, 0, 0, 1},
+                .language = 2}, .set = UI_TEXT_SET_SPAN_ALL},
+        {.start = 6, .end = 11, .style = {.family = UI_TEXT_FAMILY_DEFAULT, .weight = 300, .size = 12, .color = {0, 0, 1, 0.5f}}, .set = UI_TEXT_SET_SPAN_ALL},
     };
     ui_text_desc d = basic("Hello world", 11);
     d.spans = spans;
@@ -168,7 +168,7 @@ static void test_invalid_utf8(void) {
     ui_cmd_writer_create(&w);
     // "a <FF> b <E2 82> c": two ill-formed subparts; the span covers "b".
     const char text[] = "a\xFF" "b\xE2\x82" "c";
-    ui_text_span_desc span = {2, 3, {.family = 0, .weight = 700, .size = 16, .color = {1, 1, 1, 1}}, UI_TEXT_SET_SPAN_ALL};
+    ui_text_span_desc span = {.start = 2, .end = 3, .style = {.family = 0, .weight = 700, .size = 16, .color = {1, 1, 1, 1}}, .set = UI_TEXT_SET_SPAN_ALL};
     ui_text_desc d = basic(text, sizeof text - 1);
     d.spans = &span;
     d.span_count = 1;
@@ -189,8 +189,8 @@ static void test_validation(void) {
     ui_cmd_writer_create(&w);
     // The writer refuses bad input and stays unchanged.
     ui_text_span_desc spans[2] = {
-        {0, 3, {.family = 0, .weight = 400, .size = 16, .color = {1, 1, 1, 1}}, UI_TEXT_SET_SPAN_ALL},
-        {2, 4, {.family = 0, .weight = 400, .size = 16, .color = {1, 1, 1, 1}}, UI_TEXT_SET_SPAN_ALL},
+        {.start = 0, .end = 3, .style = {.family = 0, .weight = 400, .size = 16, .color = {1, 1, 1, 1}}, .set = UI_TEXT_SET_SPAN_ALL},
+        {.start = 2, .end = 4, .style = {.family = 0, .weight = 400, .size = 16, .color = {1, 1, 1, 1}}, .set = UI_TEXT_SET_SPAN_ALL},
     };
     ui_text_desc d = basic("abcdef", 6);
     d.spans = spans;
@@ -265,7 +265,7 @@ static void test_from_node(void) {
     setup(&s);
     ui_cmd_writer *w;
     ui_cmd_writer_create(&w);
-    ui_text_span_desc span = {0, 2, {.weight = 700, .size = 0}, UI_TEXT_SET_WEIGHT}; // size 0: unset
+    ui_text_span_desc span = {.start = 0, .end = 2, .style = {.weight = 700, .size = 0}, .set = UI_TEXT_SET_WEIGHT}; // size 0: unset
     ui_text_desc d = {.text = "Hi there", .length = 8, .spans = &span, .span_count = 1,
                       .style = {.size = 0, .weight = 0, .color = {0, 1, 0, 1}}, .set = UI_TEXT_SET_COLOR};
     CHECK(ui_cmd_set_text(w, node, &d) == UI_OK);

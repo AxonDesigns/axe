@@ -208,6 +208,15 @@ check locally:
 python3 -I tools/wire/old_reader.py --base origin/master
 ```
 
+## C API
+
+Public structs only gain fields, at their end, and a new field's zero keeps the old behavior;
+functions keep their signatures ([docs/c-api.md](docs/c-api.md)). Callers, the repository's
+own code included, initialize structs with designated initializers: positional ones are
+unsupported, except for the fixed pairs the headers mark (`ui_handle`, `ui_rect`,
+`ui_style_decl`, `ui_token_decl`). Add each new public struct to
+`tests/c_api/designated.c`, which CTest compiles with `-Werror` as C11, C17 and C23.
+
 ## Decisions
 
 Choices the architecture leaves open go in [docs/decisions.md](docs/decisions.md), under

@@ -14,6 +14,7 @@
 extern "C" {
 #endif
 
+// Fixed pair (docs/c-api.md): never gains a field; positional initializers are fine.
 typedef struct ui_handle {
     uint32_t index;      // kind << 28 | slot
     uint32_t generation;

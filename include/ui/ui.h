@@ -1,4 +1,6 @@
-// Umbrella header for the Axe C API.
+// Umbrella header for the Axe C API. Structs only gain fields at their end, so initialize them
+// with designated initializers (`{.decls = d, .count = 2}`); positional initializers are
+// unsupported except for the fixed pairs (docs/c-api.md).
 #pragma once
 
 #include "ui/app.h"
