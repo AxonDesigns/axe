@@ -6,7 +6,13 @@
 // on their inline-start side and buttons rounder start corners (logical properties), so
 // both follow the direction. Resizing the window reflows the grid, animated too.
 //
-//   layout_cards [--no-shuffle] [--no-theme] [--no-direction] [--rtl]   window
+// Token scopes (docs/styles.md): a panel at the top declares every theme token as an alias
+// of the other theme's, so it and its cards show the inverted scheme and flip the other way
+// when the theme switches. A card's hover state re-themes its subtree the same way; every
+// 1.5 s the next card is hovered (input comes later), the panel's included, where the
+// hover's aliases resolve through the panel's scope.
+//
+//   layout_cards [--no-shuffle] [--no-theme] [--no-direction] [--no-hover] [--rtl]   window
 //   layout_cards --headless [--out f.ppm] [--scale N] [--at S] [--dark] [--rtl]
 //                                               offscreen at scale N/120: steps a paused
 //                                               clock to S seconds, then writes a PPM
@@ -23,9 +29,12 @@
 #define SHUFFLE_TIMER 1
 #define THEME_TIMER 2
 #define DIRECTION_TIMER 3
+#define HOVER_TIMER 4
 #define SHUFFLE_NS 2500000000ull
 #define THEME_NS 4000000000ull
 #define DIRECTION_NS 6000000000ull
+#define HOVER_NS 1500000000ull
+#define PANEL_CARDS 2
 
 static const char *const font_files[] = {FONT("NotoSans-VF.ttf")};
 static const char *const families[] = {"Noto Sans, sans-serif"};
@@ -42,16 +51,19 @@ static const char *const PARAGRAPHS[] = {
     "velocity when the target moves again.",
 };
 
-// Theme tokens and the styles that use them.
-enum { T_PAGE = 1, T_CARD, T_BORDER, T_TITLE, T_BODY, T_MUTED, T_ACCENT, T_ACCENT_TEXT, T_COUNT };
-enum { S_PAGE = 1, S_CARD, S_TITLE, S_BODY, S_FOOTER, S_LABEL, S_BUTTON };
+// Theme tokens and the styles that use them. The inverse tokens (T_x + INVERSE) hold the
+// other theme's values, which the panel's scope aliases.
+enum { T_PAGE = 1, T_CARD, T_BORDER, T_TITLE, T_BODY, T_MUTED, T_ACCENT, T_ACCENT_TEXT, T_HOVER, T_COUNT };
+enum { INVERSE = T_COUNT - 1 };
+enum { S_PAGE = 1, S_CARD, S_TITLE, S_BODY, S_FOOTER, S_LABEL, S_BUTTON, S_PANEL };
 
 static const float THEMES[2][T_COUNT][4] = {
     {{0}, {0.93f, 0.94f, 0.96f, 1}, {1, 1, 1, 1}, {0.84f, 0.86f, 0.9f, 1}, {0.1f, 0.11f, 0.14f, 1},
-     {0.3f, 0.32f, 0.36f, 1}, {0.5f, 0.52f, 0.56f, 1}, {0.2f, 0.45f, 0.95f, 1}, {1, 1, 1, 1}},
+     {0.3f, 0.32f, 0.36f, 1}, {0.5f, 0.52f, 0.56f, 1}, {0.2f, 0.45f, 0.95f, 1}, {1, 1, 1, 1},
+     {0.87f, 0.92f, 1, 1}},
     {{0}, {0.07f, 0.08f, 0.1f, 1}, {0.13f, 0.14f, 0.17f, 1}, {0.24f, 0.26f, 0.31f, 1},
      {0.93f, 0.94f, 0.96f, 1}, {0.72f, 0.74f, 0.78f, 1}, {0.55f, 0.57f, 0.62f, 1},
-     {0.38f, 0.62f, 1, 1}, {0.05f, 0.06f, 0.08f, 1}},
+     {0.38f, 0.62f, 1, 1}, {0.05f, 0.06f, 0.08f, 1}, {0.12f, 0.18f, 0.31f, 1}},
 };
 
 typedef struct card {
@@ -61,11 +73,13 @@ typedef struct card {
 
 typedef struct demo {
     ui_handle_allocator *handles;
-    ui_handle surface, page;
+    ui_handle surface, page, panel, heading;
     card cards[MAX_CARDS]; // in display order
-    uint32_t count, next_id, step;
+    card panel_cards[PANEL_CARDS];
+    uint32_t count, next_id, step, hover_step;
+    ui_handle hovered;     // the card hovered now (null: none)
     uint32_t seed;
-    bool dark, rtl, shuffle, theme, direction, armed;
+    bool dark, rtl, shuffle, theme, direction, hover, armed;
 } demo;
 
 static uint32_t next_random(demo *d) {
@@ -73,11 +87,14 @@ static uint32_t next_random(demo *d) {
     return d->seed >> 8;
 }
 
+// Every theme token, then every inverse one (the other theme's values).
 static ui_result set_theme(demo *d, ui_cmd_writer *w) {
     ui_result r = UI_OK;
-    for (int t = T_PAGE; t < T_COUNT && r == UI_OK; t++) {
-        const float *c = THEMES[d->dark][t];
-        r = ui_cmd_set_token(w, (uint32_t)t, ui_rgba(c[0], c[1], c[2], c[3]));
+    for (int inverse = 0; inverse < 2; inverse++) {
+        for (int t = T_PAGE; t < T_COUNT && r == UI_OK; t++) {
+            const float *c = THEMES[d->dark != inverse][t];
+            r = ui_cmd_set_token(w, (uint32_t)(t + inverse * INVERSE), ui_rgba(c[0], c[1], c[2], c[3]));
+        }
     }
     return r;
 }
@@ -94,6 +111,26 @@ static ui_result define(ui_cmd_writer *w, uint32_t id, const ui_style_decl *decl
     return ui_cmd_define_style(w, id, &(ui_style_block_desc){.decls = decls, .count = count}, 1);
 }
 
+// The panel's scope: every theme token is the other theme's. A hovered card's: the card
+// takes the hover color, its border and title the accent (resolved where they are used, so
+// in the panel they are the panel's).
+static const ui_token_decl PANEL_TOKENS[] = {
+    {T_PAGE, {.kind = UI_VALUE_TOKEN, .token = T_PAGE + INVERSE}},
+    {T_CARD, {.kind = UI_VALUE_TOKEN, .token = T_CARD + INVERSE}},
+    {T_BORDER, {.kind = UI_VALUE_TOKEN, .token = T_BORDER + INVERSE}},
+    {T_TITLE, {.kind = UI_VALUE_TOKEN, .token = T_TITLE + INVERSE}},
+    {T_BODY, {.kind = UI_VALUE_TOKEN, .token = T_BODY + INVERSE}},
+    {T_MUTED, {.kind = UI_VALUE_TOKEN, .token = T_MUTED + INVERSE}},
+    {T_ACCENT, {.kind = UI_VALUE_TOKEN, .token = T_ACCENT + INVERSE}},
+    {T_ACCENT_TEXT, {.kind = UI_VALUE_TOKEN, .token = T_ACCENT_TEXT + INVERSE}},
+    {T_HOVER, {.kind = UI_VALUE_TOKEN, .token = T_HOVER + INVERSE}},
+};
+static const ui_token_decl HOVER_TOKENS[] = {
+    {T_CARD, {.kind = UI_VALUE_TOKEN, .token = T_HOVER}},
+    {T_BORDER, {.kind = UI_VALUE_TOKEN, .token = T_ACCENT}},
+    {T_TITLE, {.kind = UI_VALUE_TOKEN, .token = T_ACCENT}},
+};
+
 static ui_result define_styles(ui_cmd_writer *w) {
     const ui_value color_spring = ui_transition(90, 19);
     ui_result r = define(w, S_PAGE, DECLS({UI_STYLE_FLEX_GROW, ui_number(1)},
@@ -105,20 +142,24 @@ static ui_result define_styles(ui_cmd_writer *w) {
                                           {UI_STYLE_ROW_GAP, ui_px(14)}, {UI_STYLE_COLUMN_GAP, ui_px(14)},
                                           {UI_STYLE_BACKGROUND_COLOR, ui_token_ref(T_PAGE)},
                                           {UI_STYLE_TRANSITION(UI_STYLE_BACKGROUND_COLOR), color_spring}));
-    if (r == UI_OK)
-        r = define(w, S_CARD, DECLS({UI_STYLE_WIDTH, ui_px(208)},
-                                    {UI_STYLE_FLEX_DIRECTION, ui_keyword(UI_FLEX_COLUMN)},
-                                    {UI_STYLE_PADDING_TOP, ui_px(14)}, {UI_STYLE_PADDING_RIGHT, ui_px(14)},
-                                    {UI_STYLE_PADDING_BOTTOM, ui_px(12)}, {UI_STYLE_PADDING_LEFT, ui_px(14)},
-                                    {UI_STYLE_ROW_GAP, ui_px(8)}, {UI_STYLE_BORDER_WIDTH, ui_px(1)},
-                                    {UI_STYLE_CORNER_RADIUS, ui_px(10)},
-                                    {UI_STYLE_BACKGROUND_COLOR, ui_token_ref(T_CARD)},
-                                    {UI_STYLE_BORDER_COLOR, ui_token_ref(T_BORDER)},
-                                    {UI_STYLE_BORDER_START_WIDTH, ui_px(4)},
-                                    {UI_STYLE_BORDER_START_COLOR, ui_token_ref(T_ACCENT)},
-                                    {UI_STYLE_TRANSITION(UI_STYLE_BACKGROUND_COLOR), color_spring},
-                                    {UI_STYLE_TRANSITION(UI_STYLE_BORDER_COLOR), color_spring},
-                                    {UI_STYLE_TRANSITION(UI_STYLE_LAYOUT), ui_transition(170, 24)}));
+    ui_style_decl card[] = {{UI_STYLE_WIDTH, ui_px(208)},
+                            {UI_STYLE_FLEX_DIRECTION, ui_keyword(UI_FLEX_COLUMN)},
+                            {UI_STYLE_PADDING_TOP, ui_px(14)}, {UI_STYLE_PADDING_RIGHT, ui_px(14)},
+                            {UI_STYLE_PADDING_BOTTOM, ui_px(12)}, {UI_STYLE_PADDING_LEFT, ui_px(14)},
+                            {UI_STYLE_ROW_GAP, ui_px(8)}, {UI_STYLE_BORDER_WIDTH, ui_px(1)},
+                            {UI_STYLE_CORNER_RADIUS, ui_px(10)},
+                            {UI_STYLE_BACKGROUND_COLOR, ui_token_ref(T_CARD)},
+                            {UI_STYLE_BORDER_COLOR, ui_token_ref(T_BORDER)},
+                            {UI_STYLE_BORDER_START_WIDTH, ui_px(4)},
+                            {UI_STYLE_BORDER_START_COLOR, ui_token_ref(T_ACCENT)},
+                            {UI_STYLE_TRANSITION(UI_STYLE_BACKGROUND_COLOR), color_spring},
+                            {UI_STYLE_TRANSITION(UI_STYLE_BORDER_COLOR), color_spring},
+                            {UI_STYLE_TRANSITION(UI_STYLE_LAYOUT), ui_transition(170, 24)}};
+    ui_style_block_desc card_blocks[] = {
+        {.decls = card, .count = sizeof card / sizeof *card},
+        {.states = UI_STATE_HOVER, .tokens = HOVER_TOKENS, .token_count = sizeof HOVER_TOKENS / sizeof *HOVER_TOKENS},
+    };
+    if (r == UI_OK) r = ui_cmd_define_style(w, S_CARD, card_blocks, 2);
     if (r == UI_OK)
         r = define(w, S_TITLE, DECLS({UI_STYLE_TEXT_COLOR, ui_token_ref(T_TITLE)},
                                      {UI_STYLE_TRANSITION(UI_STYLE_TEXT_COLOR), color_spring}));
@@ -142,6 +183,22 @@ static ui_result define_styles(ui_cmd_writer *w) {
                                       {UI_STYLE_TEXT_COLOR, ui_token_ref(T_ACCENT_TEXT)},
                                       {UI_STYLE_TRANSITION(UI_STYLE_BACKGROUND_COLOR), color_spring},
                                       {UI_STYLE_TRANSITION(UI_STYLE_TEXT_COLOR), color_spring}));
+    // The panel: a full row of the page, in the inverted scheme (its scope), whose own
+    // colors read the same tokens as the page's and cards'.
+    ui_style_decl panel[] = {{UI_STYLE_WIDTH, ui_percent(100)},
+                             {UI_STYLE_FLEX_WRAP, ui_keyword(UI_FLEX_WRAP)},
+                             {UI_STYLE_ALIGN_ITEMS, ui_keyword(UI_FLEX_START)},
+                             {UI_STYLE_PADDING_TOP, ui_px(16)}, {UI_STYLE_PADDING_RIGHT, ui_px(16)},
+                             {UI_STYLE_PADDING_BOTTOM, ui_px(16)}, {UI_STYLE_PADDING_LEFT, ui_px(16)},
+                             {UI_STYLE_ROW_GAP, ui_px(12)}, {UI_STYLE_COLUMN_GAP, ui_px(14)},
+                             {UI_STYLE_CORNER_RADIUS, ui_px(14)}, {UI_STYLE_BORDER_WIDTH, ui_px(1)},
+                             {UI_STYLE_BACKGROUND_COLOR, ui_token_ref(T_PAGE)},
+                             {UI_STYLE_BORDER_COLOR, ui_token_ref(T_BORDER)},
+                             {UI_STYLE_TRANSITION(UI_STYLE_BACKGROUND_COLOR), color_spring},
+                             {UI_STYLE_TRANSITION(UI_STYLE_BORDER_COLOR), color_spring}};
+    ui_style_block_desc panel_block = {.decls = panel, .count = sizeof panel / sizeof *panel, .tokens = PANEL_TOKENS,
+                                       .token_count = sizeof PANEL_TOKENS / sizeof *PANEL_TOKENS};
+    if (r == UI_OK) r = ui_cmd_define_style(w, S_PANEL, &panel_block, 1);
     return r;
 }
 
@@ -160,13 +217,13 @@ static ui_result node(demo *d, ui_cmd_writer *w, ui_handle *out, ui_handle paren
     return r;
 }
 
-// A new card, appended to the page and then moved before `before` (null: stays last).
-static ui_result add_card(demo *d, ui_cmd_writer *w, uint32_t at) {
+// A card's nodes, appended to `parent`.
+static ui_result make_card(demo *d, ui_cmd_writer *w, card *out, ui_handle parent) {
     card c = {.id = d->next_id++};
     char title[32], label[16];
     snprintf(title, sizeof title, "Card %u", c.id);
     snprintf(label, sizeof label, "#%03u", c.id);
-    ui_result r = node(d, w, &c.node, d->page, S_CARD);
+    ui_result r = node(d, w, &c.node, parent, S_CARD);
     if (r == UI_OK) r = node(d, w, &c.title, c.node, S_TITLE);
     if (r == UI_OK) r = text(w, c.title, title, 16, 650);
     if (r == UI_OK) r = node(d, w, &c.body, c.node, S_BODY);
@@ -176,6 +233,14 @@ static ui_result add_card(demo *d, ui_cmd_writer *w, uint32_t at) {
     if (r == UI_OK) r = text(w, c.label, label, 12, 400);
     if (r == UI_OK) r = node(d, w, &c.button, c.footer, S_BUTTON);
     if (r == UI_OK) r = text(w, c.button, "Open", 12, 600);
+    *out = c;
+    return r;
+}
+
+// A new card, appended to the page and then moved before `before` (null: stays last).
+static ui_result add_card(demo *d, ui_cmd_writer *w, uint32_t at) {
+    card c;
+    ui_result r = make_card(d, w, &c, d->page);
     if (r != UI_OK) return r;
     if (at < d->count) r = ui_cmd_move_node(w, c.node, d->page, d->cards[at].node);
     memmove(&d->cards[at + 1], &d->cards[at], (d->count - at) * sizeof *d->cards);
@@ -186,6 +251,7 @@ static ui_result add_card(demo *d, ui_cmd_writer *w, uint32_t at) {
 
 static ui_result remove_card(demo *d, ui_cmd_writer *w, uint32_t at) {
     card c = d->cards[at];
+    if (ui_handle_eq(c.node, d->hovered)) d->hovered = (ui_handle){0};
     ui_result r = ui_cmd_destroy_node(w, c.node);
     ui_handle all[] = {c.node, c.title, c.body, c.footer, c.label, c.button};
     for (size_t i = 0; i < sizeof all / sizeof *all; i++) ui_handle_free(d->handles, all[i]);
@@ -216,11 +282,28 @@ static ui_result shuffle(demo *d, ui_cmd_writer *w) {
     return move_card(d, w, from, to);
 }
 
+// Hovers the next card in turn (the panel's first), after un-hovering the last.
+static ui_result hover_next(demo *d, ui_cmd_writer *w) {
+    ui_result r = UI_OK;
+    if (!ui_handle_is_null(d->hovered)) r = ui_cmd_set_state(w, d->hovered, UI_STATE_HOVER, 0);
+    uint32_t i = d->hover_step++ % (PANEL_CARDS + d->count);
+    d->hovered = i < PANEL_CARDS ? d->panel_cards[i].node : d->cards[i - PANEL_CARDS].node;
+    if (r == UI_OK) r = ui_cmd_set_state(w, d->hovered, UI_STATE_HOVER, UI_STATE_HOVER);
+    return r;
+}
+
 static ui_result create(demo *d, ui_cmd_writer *w) {
     ui_result r = set_theme(d, w);
     if (r == UI_OK) r = define_styles(w);
     if (r == UI_OK) r = node(d, w, &d->page, d->surface, S_PAGE);
     if (r == UI_OK) r = set_direction(d, w);
+    // The panel first: a heading and its own cards, in the inverted scheme.
+    if (r == UI_OK) r = node(d, w, &d->panel, d->page, S_PANEL);
+    if (r == UI_OK) r = node(d, w, &d->heading, d->panel, S_TITLE);
+    if (r == UI_OK)
+        r = ui_cmd_set_props(w, d->heading, &(ui_style_decl){UI_STYLE_WIDTH, ui_percent(100)}, 1);
+    if (r == UI_OK) r = text(w, d->heading, "A panel in the other theme: its scope aliases every token", 15, 650);
+    for (uint32_t i = 0; i < PANEL_CARDS && r == UI_OK; i++) r = make_card(d, w, &d->panel_cards[i], d->panel);
     for (uint32_t i = 0; i < 10 && r == UI_OK; i++) r = add_card(d, w, d->count);
     return r;
 }
@@ -248,6 +331,7 @@ static ui_result on_events(void *user, const void *events, size_t size, ui_cmd_w
                 if (d->theme && (r = ui_cmd_set_timer(w, THEME_TIMER, now + THEME_NS)) != UI_OK) return r;
                 if (d->direction && (r = ui_cmd_set_timer(w, DIRECTION_TIMER, now + DIRECTION_NS)) != UI_OK)
                     return r;
+                if (d->hover && (r = ui_cmd_set_timer(w, HOVER_TIMER, now + HOVER_NS)) != UI_OK) return r;
             }
             break;
         case UI_EVENT_TIMER_FIRED:
@@ -258,6 +342,9 @@ static ui_result on_events(void *user, const void *events, size_t size, ui_cmd_w
                 d->dark = !d->dark;
                 r = set_theme(d, w);
                 if (r == UI_OK) r = ui_cmd_set_timer(w, THEME_TIMER, ev.timer_fired.deadline_ns + THEME_NS);
+            } else if (ev.timer_fired.id == HOVER_TIMER) {
+                r = hover_next(d, w);
+                if (r == UI_OK) r = ui_cmd_set_timer(w, HOVER_TIMER, ev.timer_fired.deadline_ns + HOVER_NS);
             } else {
                 d->rtl = !d->rtl;
                 r = set_direction(d, w);
@@ -277,12 +364,13 @@ int main(int argc, char **argv) {
     double at = 0;
     uint32_t scale = 150;
     const char *out = "layout_cards.ppm";
-    demo d = {.seed = 7, .shuffle = true, .theme = true, .direction = true};
+    demo d = {.seed = 7, .shuffle = true, .theme = true, .direction = true, .hover = true};
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--headless")) headless = true;
         else if (!strcmp(argv[i], "--no-shuffle")) d.shuffle = false;
         else if (!strcmp(argv[i], "--no-theme")) d.theme = false;
         else if (!strcmp(argv[i], "--no-direction")) d.direction = false;
+        else if (!strcmp(argv[i], "--no-hover")) d.hover = false;
         else if (!strcmp(argv[i], "--dark")) d.dark = true;
         else if (!strcmp(argv[i], "--rtl")) d.rtl = true;
         else if (!strcmp(argv[i], "--at") && i + 1 < argc) at = atof(argv[++i]);
@@ -290,7 +378,7 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--scale") && i + 1 < argc) scale = (uint32_t)atoi(argv[++i]);
         else {
             fprintf(stderr,
-                    "usage: %s [--no-shuffle] [--no-theme] [--no-direction] [--dark] [--rtl]\n"
+                    "usage: %s [--no-shuffle] [--no-theme] [--no-direction] [--no-hover] [--dark] [--rtl]\n"
                     "       [--headless [--out f.ppm] [--scale N] [--at S]]\n",
                     argv[0]);
             return 2;

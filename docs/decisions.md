@@ -3,6 +3,150 @@
 Choices the architecture document leaves open, recorded as they are made. Newest
 milestone first.
 
+## Milestone 3a.1: token scopes
+
+### The user's choices in review
+- **Strict kinds.** A token's kind is its global value's kind, followed through global
+  aliases, and a declaration must have it. TypeScript matches the core exactly:
+  `Token.create` infers one kind, and a union token type is a compile error. Kind classes
+  wait for a real need.
+- **Local and invalid tokens.** A token never set, or unset, is local: untyped, its
+  declarations taken as they are. A token in a global cycle is invalid: its declarations and
+  references are ignored like an undefined token, with a debug warning.
+- **A new op,** `set_token_overrides` (20), rather than extending `set_props`.
+- **The older-reader check** is a permanent part of CI's `idl` job, for every wire change.
+- **The comparison with CSS custom properties** goes into `docs/styles.md` as proposed.
+
+### Wire
+- **Declarations are parallel arrays:** `u32 tokens[n]`, then `n` style entries of
+  property 0, as `set_token` carries a value. A record of its own would have needed a second
+  copy of the style-value codec, which the generator ties to `style_entry`'s 4-byte header.
+- **Blocks grow from 8 to 12 bytes:** `token_count` (since `m3a.1`) and a reserved `u16`, the
+  declarations after the entries. A block without declarations is still written with the
+  8-byte header and `header_bytes` 0, so buffers that don't use scopes are byte for byte
+  what they were: no fixture, golden or `layout_cards` image changed.
+- **Generator changes**, each with tests:
+  - an appended count is allowed for new variable data after the old, in a record with an
+    original header field;
+  - several arrays can share a count, and the encoders check their lengths;
+  - `header(0)` writes the short header while every appended field is 0;
+  - in TypeScript, the arrays an appended count counts are optional, so `@axe/wire` callers
+    from before still compile;
+  - `--compat-base` lets reserved padding follow an appended field, as the schema check
+    already did;
+  - the op history table lists the appended fields of self-sized records (style blocks).
+- **Two of M1.1's fixtures** (`cmd-f71e5234b684363e`, `cmd-fz347fb8cb9b976ccf`) and
+  `test_wire_compat`'s newer-writer block put a hypothetical newer writer's fields at block
+  offset 8, which this version now owns. They were rewritten so that writer's fields follow
+  this version's (header 16, `token_count` 0). Their dumps changed only in sizes and the
+  header.
+- **C API.** `ui_style_block_desc` gained `tokens` and `token_count` at its end. Positional
+  initializers still compile, but `-Wmissing-field-initializers` now warns about them; the
+  repository's own callers use designated initializers.
+- **The older reader** (`tools/wire/old_reader.py`): `git archive` of the base, its
+  generated codec and `wire_dump.c` compiled with the system C compiler, and the fixtures
+  added since read through it and compared with this version's dumps minus the lines it
+  can't know. A fixture with a block header written as 0 despite declarations fails it.
+
+### Data model
+- **A scope record per node that ever declared a token,** kept (perhaps empty) until the node
+  is destroyed. Every node points at the nearest one, its own or its parent's. Records hold
+  copies of the declarations, not pointers into definitions: previews read them, possibly
+  between a redefinition and the resolution that gathers them again.
+- **Pointers follow the tree at once:** creating a node copies its parent's, a node's first
+  record re-points its subtree, and a move re-points the moved subtree (or re-links its
+  record). These walks are stackless (pre-order over sibling links), since resolution's
+  stack is in use while records are made.
+- **Ownership is a flag on the node.** The first version asked the record for its owner,
+  which read a freed ancestor's record while a subtree was torn down. The fuzzer found it on
+  the first seed run.
+
+### Resolution
+- **Lookup per link:** the records from the nearest out, a filter test each, a binary search
+  on a hit; then the global value. A token's kind is computed only when a declaration is
+  found. Escaping a global cycle takes a declaration of one of its tokens, whose kind check
+  then fails; without one, Floyd's walk finds the cycle.
+- **What a node reads:** its filter holds its entries' own tokens (from the cascade, as in
+  M2.1) and every later link and alias target that computing it followed. `check_resolved`
+  also checks that a fresh computation reads nothing outside the filter.
+- **A scope change** diffs the old and new declarations by value. It queues the subtree's
+  readers of the changed tokens, minus those a scope between hides, and skips a subtree once
+  everything is hidden. The subtree then resolves in tree order. Queuing happens where the
+  cascade is gathered, so `resolve_node`'s common path didn't change.
+- **Moves** queue by filter, the old and new chains' declarations together: more than
+  needed at times, never too few.
+- **Planted bugs** each failed `test_scopes`:
+  - no subtree marking: 35 failed checks;
+  - no re-pointing on a move: 5;
+  - no kind check: 5;
+  - no read recording: 56 (6 after recording moved to later links only);
+  - no ordered walk: 49.
+
+### Previews and preparation
+- **Previews** build temporary scopes for the nodes they compute. These are allocated one by
+  one, because the preview's node table moves when it grows. A node under an ancestor whose
+  declarations differ is computed, not answered from the scene, and so is a scoped node when
+  the buffer changes a token. Declarations make a buffer global (they can reach any text in
+  the subtree).
+- **Preparation missed the new op.** Buffers holding only `set_token_overrides` had no head
+  step, so paragraphs it changed were shaped on the core. `test_prepare`'s scoped variant
+  found it (a different frame, 3 paragraphs shaped on the core); the fuzzer checks previews
+  but doesn't run the preparer.
+
+### TypeScript
+- **`Token<V extends TokenType & OneKind<V>>`.** `OneKind` is an interface whose `kind` is
+  `never` for a union, so the constraint fails for one. A conditional type in the constraint
+  is circular (TS2313); an interface is evaluated lazily. `AnyToken` lists the eight kinds.
+- **`token.with(value)`** makes a declaration, typed by the token. `Token.local<V>()` makes a
+  token with no global value; `node.setTokens` and `node.unsetTokens` set and remove a node's
+  own; style blocks take `tokens`.
+
+### Benchmarks
+- **`bench_layout`'s scope case** switches a panel of 714 cards (5,000 nodes, each reading
+  the background token the panel's scope declares) between two scopes. Over six release runs
+  on 2026-11-04, with a browser and an editor busy: medians 0.41–1.10 ms, best 0.40–0.74 ms
+  (target < 1 ms), 3.35M instructions. With the scope's text color too, which the subtree
+  inherits: medians 1.06–1.94 ms, best 0.70–1.71 ms (reported, not a Callgrind case).
+- **Global token changes didn't get slower.** The first version cost the token case +14% of
+  its instructions and the inherited case +4.9%, so it was reworked:
+  - the single-family test was inlined into the scan;
+  - the common lookup got a straight path (no scope, one link), with the scoped walk out of
+    line;
+  - only links after the first are noted while computing;
+  - the scope work moved into the block that gathers the cascade, with the subtree marked
+    there;
+  - the scene keeps one style view instead of building one per node.
+
+  In CI's image the counts against the baselines are then: token -0.91%, inherited +0.56%,
+  the other layout and text cases unchanged.
+- **The startup cases grew because the example did.** `layout_cards`' first turn now builds
+  a panel, a heading and two more cards (81 nodes instead of 61), sets 18 tokens instead of
+  8 and defines a style more.
+  - startup_bytecode: +20.9%; startup_source: +13.5%.
+  - Before the example changed, the same core and `@axe/core` measured +0.58% and +2.81%
+    (the larger bundle to compile).
+  - The cost is intended: per CONTRIBUTING.md, the baselines are updated from CI's artifact in
+    a commit of their own, with the new scope case's.
+
+### Fuzzing
+- **Seeds:** `seed16` and `seed17` are the blocks and panel fixtures, the panel's split so
+  its second half changes a resolved scene. `seed18` is styled text under nested scopes,
+  with states, own declarations, moves, a cycle and global changes in its second half.
+  There is no dictionary to extend.
+- **`fuzz_commands`** found the ownership use-after-free on the first seed run. Two 5-minute
+  runs on 4 workers followed, about 246,000 and 192,000 inputs, with no findings; the second
+  ran on the final code, its coverage up from 3,126 to 3,222 edges. `fuzz_set_text`, which
+  covers `scene.c` too: 3 minutes on 4 workers, about 871,000 inputs, no findings.
+
+### Example
+- **`layout_cards`** gains nine inverse tokens, a panel whose scope declares each theme token
+  as an alias of its inverse, and a hover block on cards: card, border and title alias the
+  hover and accent tokens. Inside the panel those aliases resolve through the panel's scope.
+- **A timer hovers the cards in turn** every 1.5 s, the panel's first, since input comes in
+  milestone 4; `--no-hover` turns it off.
+- **The TS version follows op for op;** token and style ids match by creation order, and
+  `layout_cards_equivalence` stays byte-identical (both variants).
+
 ## After milestone 3a: fixes
 
 ### Moving boxes land without a snap

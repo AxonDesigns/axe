@@ -236,9 +236,15 @@ Text is shaped beforehand, as the workers do before a buffer applies.
 | Incremental: one paragraph's text changes (target < 1 ms) | 0.68–1.4 ms | 0.46–0.60 ms | 34 computations, 4,419 cache hits |
 | Style resolution after a token every node reads for its background (target < 1 ms) | 0.76–0.90 ms | 0.73–0.88 ms | 10,003 computations, background only |
 | Style resolution after the root's text color changes (inherited by every node) | 1.8–2.0 ms | 1.6–1.9 ms | 10,005 computations, text only |
+| A token scope switched on a panel of 714 cards, every node reading its background token (target < 1 ms) | 0.41–1.10 ms | 0.40–0.74 ms | 5,000 computations, background only |
+| The same scope with its text color too, which the panel's subtree inherits | 1.06–1.94 ms | 0.70–1.71 ms | 5,000 computations |
 
 The resolution cases were measured on 2026-11-03 after M2.1's partial resolution
-([`docs/styles.md`](styles.md), "Resolution"; before it, 6.4 and 5.0 ms). The other
+([`docs/styles.md`](styles.md), "Resolution"; before it, 6.4 and 5.0 ms). The scope cases
+([`docs/styles.md`](styles.md), "Token scopes") were measured on 2026-11-04, over six runs
+with a browser and an editor busy: their instruction counts (3.35M for the switch) are the
+steadier figure. Token scopes left the token and inherited cases at -0.9% and +0.6% of their
+instruction counts. The other
 ranges are over three runs of the benchmark on 2026-11-02, on a Ryzen 5 3400G (4 cores, 8
 threads) while a browser kept about three threads busy, so medians varied by up to 2×; the
 best run of each case is the steadier figure. The incremental case is dominated by the grid: the edited card's height

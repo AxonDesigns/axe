@@ -10,6 +10,9 @@
 //     Target: under 1 ms.
 //  3. Style resolution of all 10,005 nodes after the token their style uses changes.
 //  4. The same, for the root's text color, which every node inherits.
+//  5. Switching a token scope (docs/styles.md, "Token scopes") on a panel of 714 cards:
+//     5,000 nodes, each reading the background token the scope declares. Target: under
+//     1 ms. Then the same with the scope's text color too, which the subtree inherits.
 // Each case is a noinline bench_case_* function holding exactly what is timed, so
 // `bench_layout --callgrind` (each case once) can be measured per case with Callgrind's
 // --toggle-collect (tools/bench/callgrind.py).
@@ -155,6 +158,45 @@ __attribute__((noinline)) static void bench_case_token(ui_scene *s) { ui_scene_r
 
 __attribute__((noinline)) static void bench_case_inherited(ui_scene *s) { ui_scene_resolve(s, 0); }
 
+__attribute__((noinline)) static void bench_case_scope(ui_scene *s) { ui_scene_resolve(s, 0); }
+
+enum { PANEL_CARDS = 714 }; // with the panel and its heading, 5,000 nodes
+
+// Moves the first PANEL_CARDS cards into a panel under the root (after a heading), and defines two scopes for
+// it (styles 4 and 5): each declares token 1 (every node's background); `text` adds token 2,
+// which the panel's text color reads and its subtree inherits. Returns the panel.
+static ui_handle make_panel(ui_scene *s, ui_cmd_writer *w, uint32_t slot) {
+    ui_handle panel = {slot, 1}, grid = {2, 1};
+    ui_handle heading = {slot + 1, 1};
+    ui_cmd_create_node(w, panel, (ui_handle){1, 1});
+    ui_cmd_set_styles(w, panel, (uint32_t[]){1}, 1);
+    ui_cmd_create_node(w, heading, panel);
+    ui_cmd_set_styles(w, heading, (uint32_t[]){1}, 1);
+    for (uint32_t i = 0; i < PANEL_CARDS; i++) ui_cmd_move_node(w, (ui_handle){3 + 7 * i, 1}, panel, (ui_handle){0});
+    (void)grid;
+    for (uint32_t k = 0; k < 2; k++) {
+        ui_token_decl decls[] = {{1, ui_rgba(0.1f, k ? 0.4f : 0.2f, 0.3f, 1)}, {2, ui_rgba(k ? 1 : 0.8f, 1, 1, 1)}};
+        ui_cmd_define_style(w, 4 + k, &(ui_style_block_desc){.tokens = decls, .token_count = 1}, 1);
+        ui_cmd_define_style(w, 6 + k, &(ui_style_block_desc){.tokens = decls, .token_count = 2}, 1);
+    }
+    ui_cmd_set_props(w, panel, &(ui_style_decl){UI_STYLE_TEXT_COLOR, ui_token_ref(2)}, 1);
+    ui_cmd_set_styles(w, panel, (uint32_t[]){1, 4}, 2);
+    apply(s, w);
+    ui_scene_resolve(s, 0);
+    return panel;
+}
+
+// The subtree's size, the panel included.
+static uint32_t subtree_size(const ui_scene *s, uint32_t top) {
+    uint32_t n = 0;
+    for (uint32_t slot = 0; slot < s->handles.used; slot++) {
+        uint32_t up = s->handles.alive[slot] ? slot : UI_NO_SLOT;
+        while (up != UI_NO_SLOT && up != top) up = s->nodes[up].parent;
+        n += up == top;
+    }
+    return n;
+}
+
 int main(int argc, char **argv) {
     bool callgrind = argc > 1 && !strcmp(argv[1], "--callgrind"); // each case once
     ui_font_registry_create(&(ui_font_registry_desc){.log = &quiet}, &fonts);
@@ -237,6 +279,27 @@ int main(int argc, char **argv) {
     printf("inherited     root text color, %u nodes: %.3f ms median, %.3f ms best (%llu node computations)\n",
            nodes, median_ms(res_ns, runs), best_ms(res_ns, runs),
            (unsigned long long)((s.stats.styles_computed - computed_before) / (uint64_t)runs));
+
+    // 5. A token scope switches on a 5,000-node subtree: its background token (every node's),
+    // then with its text color too.
+    ui_handle panel = make_panel(&s, w, s.handles.used);
+    uint32_t in_panel = subtree_size(&s, panel.index);
+    for (int text_too = 0; text_too < 2; text_too++) {
+        computed_before = s.stats.styles_computed;
+        for (int r = 0; r < runs; r++) {
+            uint32_t style = (text_too ? 6u : 4u) + (uint32_t)((r + 1) % 2); // starts with a change
+            ui_cmd_set_styles(w, panel, (uint32_t[]){1, style}, 2);
+            apply(&s, w);
+            t0 = ui_monotonic_ns();
+            if (text_too) ui_scene_resolve(&s, 0);
+            else bench_case_scope(&s);
+            res_ns[r] = ui_monotonic_ns() - t0;
+        }
+        printf("scope         %s, %u-node subtree: %.3f ms median, %.3f ms best (%llu node computations)\n",
+               text_too ? "with its text color" : "switched", in_panel, median_ms(res_ns, runs), best_ms(res_ns, runs),
+               (unsigned long long)((s.stats.styles_computed - computed_before) / (uint64_t)runs));
+        if (callgrind) break; // the case is the switch alone
+    }
 
     ui_cmd_writer_destroy(w);
     ui_scene_destroy(&s);
