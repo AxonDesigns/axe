@@ -29,6 +29,7 @@ add_library(ui STATIC
     core/prepare.c
     core/preview.c
     core/scene.c
+    core/template.c
     core/text_op.c
     core/spring.c
     hooks/hooks.c

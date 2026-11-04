@@ -21,7 +21,8 @@ typedef enum ui_op {
     UI_OP_START_SPRING = 6,
     UI_OP_SET_TIMER = 7,
     UI_OP_SET_TEXT = 8,
-    UI_OP_APPEND_TEXT = 9,            // continues a set_text whose text is longer than one op holds
+    // continues a set_text whose text is longer than one op holds
+    UI_OP_APPEND_TEXT = 9,
     UI_OP_SET_CLIP = 10,
     UI_OP_LOAD_FONT = 11,
     UI_OP_DEFINE_STYLE = 12,
@@ -33,6 +34,9 @@ typedef enum ui_op {
     UI_OP_MOVE_NODE = 18,
     UI_OP_REQUEST_LAYOUT = 19,
     UI_OP_SET_TOKEN_OVERRIDES = 20,
+    UI_OP_DEFINE_TEMPLATE = 21,
+    UI_OP_INSTANTIATE_TEMPLATE = 22,
+    UI_OP_DESTROY_TEMPLATE = 23,
 } ui_op;
 
 typedef enum ui_event_type {

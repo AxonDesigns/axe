@@ -7,6 +7,7 @@
 #include "core/display_list.h"
 #include "core/prepare.h"
 #include "core/scene.h"
+#include "core/template.h"
 #include "text/atlas.h"
 #include "text/paragraph.h"
 #include "hooks/hooks_internal.h"
@@ -97,6 +98,7 @@ struct ui_core {
     ui_jobs *jobs;
     ui_jobs *own_jobs;           // an inline pool, when the desc gave none
     ui_preparer *preparer;
+    ui_templates *templates;     // definitions, in receipt order (core/template.h)
     ui_glyph_cache *glyphs;      // bitmaps rasterized by workers, read by the atlas
     ui_prep_buffer *applying;    // the prepared buffer being applied (load_font results)
     uint64_t unreleased_seq;     // newest applied prepared buffer whose glyphs stay protected

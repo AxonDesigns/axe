@@ -34,6 +34,11 @@ export interface TextSpan {
   readonly style: TextStyle;
 }
 
+/** A node's handle among an instance's nodes. */
+export interface TemplateNode {
+  readonly node: Handle;
+}
+
 export interface StyleEntry {
   readonly property: number;
   readonly value: StyleValue;
@@ -87,6 +92,16 @@ function writeTextSpan(w: CommandWriter, at: number, v: TextSpan): number {
   f32[word + 7] = v.style.color[2]!;
   f32[word + 8] = v.style.color[3]!;
   at += 36;
+  return at;
+}
+
+function writeTemplateNode(w: CommandWriter, at: number, v: TemplateNode): number {
+  const u32 = w.u32, f32 = w.f32;
+  void f32;
+  const word = at >> 2;
+  u32[word + 0] = v.node.index;
+  u32[word + 1] = v.node.generation;
+  at += 8;
   return at;
 }
 
@@ -518,6 +533,61 @@ export class CommandWriter extends WireWriter {
     for (let i = 0; i < tokens.length; i++) this.u32[(at >> 2) + i] = tokens[i]!;
     at += tokens.length * 4;
     for (const x of values) at = writeStyleEntry(this, at, x);
+    void at;
+  }
+
+  /** define_template (21): `u32 id` (not 0), `u16 header_bytes` (12), `u16 node_count` (1–1024), `u16 ops_bytes`, `u16` reserved, then the template's ops: a static subtree to instantiate (see [`docs/templates.md`](templates.md)) */
+  defineTemplate(id: number, nodeCount: number, ops: Uint8Array): void {
+    if (!((id >>> 0) === id && id !== 0)) throw bad("define_template", "id");
+    if (!((nodeCount & 0xffff) === nodeCount && nodeCount >= 1 && nodeCount <= 1024)) throw bad("define_template", "node_count");
+    if (!(ops.length <= 0xffff)) throw bad("define_template", "ops_bytes");
+    if (ops.length % 4) throw bad("define_template", "ops");
+    const opsCount = ops.length;
+    const payload = 12 + ops.length;
+    let at = this.op(21, payload);
+    const u32 = this.u32, f32 = this.f32;
+    void f32;
+    const word = at >> 2;
+    u32[word + 0] = id;
+    u32[word + 1] = (12 | (nodeCount) << 16) >>> 0;
+    u32[word + 2] = (opsCount | (0) << 16) >>> 0;
+    at += 12;
+    if (ops.length > 16) this.u8.set(ops, at);
+    else for (let i = 0; i < ops.length; i++) this.u8[at + i] = ops[i]!;
+    at += ops.length;
+    void at;
+  }
+
+  /** instantiate_template (22): `u32 template`, `u16 header_bytes` (24), `u16 count`, parent handle, `before` handle (null appends), `handle nodes[count]`: the template's ops with these handles for its nodes (see [`docs/templates.md`](templates.md)) */
+  instantiateTemplate(template: number, parent: Handle, before: Handle, nodes: readonly TemplateNode[]): void {
+    if (!((template >>> 0) === template && template !== 0)) throw bad("instantiate_template", "template");
+    if (!(nodes.length <= 0xffff && nodes.length >= 1 && nodes.length <= 1024)) throw bad("instantiate_template", "count");
+    const nodesCount = nodes.length;
+    const payload = 24 + nodes.length * 8;
+    let at = this.op(22, payload);
+    const u32 = this.u32, f32 = this.f32;
+    void f32;
+    const word = at >> 2;
+    u32[word + 0] = template;
+    u32[word + 1] = (24 | (nodesCount) << 16) >>> 0;
+    u32[word + 2] = parent.index;
+    u32[word + 3] = parent.generation;
+    u32[word + 4] = before.index;
+    u32[word + 5] = before.generation;
+    at += 24;
+    for (const x of nodes) at = writeTemplateNode(this, at, x);
+    void at;
+  }
+
+  /** destroy_template (23): `u32 id`: later instances of it are dropped */
+  destroyTemplate(id: number): void {
+    if (!((id >>> 0) === id && id !== 0)) throw bad("destroy_template", "id");
+    const payload = 4;
+    let at = this.op(23, payload);
+    const u32 = this.u32, f32 = this.f32;
+    void f32;
+    const word = at >> 2;
+    u32[word + 0] = id;
     void at;
   }
 

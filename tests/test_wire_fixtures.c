@@ -60,7 +60,7 @@ static void test_fixtures(void) {
     }
     closedir(d);
     printf("%u command and %u event fixtures\n", commands, events);
-    CHECK(commands == 398 && events == 180); // the fixtures are all there
+    CHECK(commands == 400 && events == 180); // the fixtures are all there (3b.2: + cmd-template-*)
 }
 
 // Writes the dump of each fixture given, for a new one (check what it says before committing).

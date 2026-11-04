@@ -271,6 +271,30 @@ typedef struct ui_text_desc {
 // UI_ERR_INVALID_ARGUMENT for out-of-range values or unsorted/overlapping spans.
 ui_result ui_cmd_set_text(ui_cmd_writer *w, ui_handle node, const ui_text_desc *desc);
 
+// ---- Templates ---------------------------------------------------------------------------
+
+// A static subtree defined once and instantiated with one op (docs/templates.md). Write the
+// template's ops with a writer of their own, naming its nodes by local handles
+// (ui_template_node(0) ... ui_template_node(node_count - 1)), each created once and before any
+// op names it, with a null parent for an instance's roots. Templates hold create_node,
+// set_styles, set_props, set_token_overrides, set_text (one op's worth) and set_state.
+
+// The handle of a template's node `index`.
+static inline ui_handle ui_template_node(uint32_t index) { return (ui_handle){index, 1}; }
+
+// Defines (or redefines) template `id` (not 0) from the ops `ops` holds, which are moved into
+// the op: `ops` is left empty and reusable. UI_ERR_INVALID_ARGUMENT for a 0 id, a node count
+// outside 1–1024, or ops that don't fit one op (65,520 bytes). The core checks the ops
+// themselves and drops a template that breaks the rules above.
+ui_result ui_cmd_define_template(ui_cmd_writer *w, uint32_t id, uint32_t node_count, ui_cmd_writer *ops);
+// The template's ops with `nodes[i]` for its node i: the roots created under `parent` (a node,
+// or a surface) and placed before `before` (a child of parent; the null handle appends).
+// `count` must be the template's node count, or the core drops the op.
+ui_result ui_cmd_instantiate_template(ui_cmd_writer *w, uint32_t id, ui_handle parent, ui_handle before,
+                                      const ui_handle *nodes, uint32_t count);
+// Forgets template `id`: later instances of it are dropped. Nodes made from it stay.
+ui_result ui_cmd_destroy_template(ui_cmd_writer *w, uint32_t id);
+
 // Finalizes the header and moves the encoded bytes to the caller, leaving the writer empty
 // and reusable. Ownership: *out_bytes is malloc'd; release it with free().
 ui_result ui_cmd_writer_take(ui_cmd_writer *w, uint8_t **out_bytes, size_t *out_size);

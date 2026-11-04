@@ -110,6 +110,25 @@ static inline uint8_t *ui_wire_text_span_write(uint8_t *p, const ui_wire_text_sp
     return p + UI_WIRE_TEXT_SPAN_SIZE;
 }
 
+// ---- template_node ---------------------------------------------------------------------------
+// A node's handle among an instance's nodes.
+typedef struct ui_wire_template_node {
+    ui_handle node;
+} ui_wire_template_node;
+enum { UI_WIRE_TEMPLATE_NODE_ORIGINAL = 8, UI_WIRE_TEMPLATE_NODE_SIZE = 8 };
+// Reads the fixed part from the first `sent` bytes (at least the original size):
+// fields an older writer didn't send read as 0, fields a newer one appended are skipped.
+static inline void ui_wire_template_node_read(const uint8_t *p, uint32_t sent_unused, ui_wire_template_node *o) {
+    (void)sent_unused;
+    o->node = ui_wire_get_handle(p + 0);
+}
+// Writes the fixed part (UI_WIRE_TEMPLATE_NODE_SIZE bytes) and returns the end. Header and record
+// sizes are this version's; counts and lengths are the caller's.
+static inline uint8_t *ui_wire_template_node_write(uint8_t *p, const ui_wire_template_node *v) {
+    ui_wire_put_handle(p + 0, v->node);
+    return p + UI_WIRE_TEMPLATE_NODE_SIZE;
+}
+
 // ---- style_entry -----------------------------------------------------------------------------
 typedef struct ui_wire_style_entry {
     uint16_t property;
@@ -997,6 +1016,135 @@ const char *ui_wire_set_token_overrides_check(const ui_wire_set_token_overrides 
 // where the caller writes it. UI_ERR_INVALID_ARGUMENT if the op would be too large,
 // UI_ERR_OUT_OF_MEMORY.
 ui_result ui_wire_set_token_overrides_put(ui_wire_buf *b, const ui_wire_set_token_overrides *v, const uint32_t *tokens, uint32_t values_bytes, uint8_t **values);
+
+// ---- define_template -------------------------------------------------------------------------
+// command 21: u32 id (not 0), u16 header_bytes (12), u16 node_count (1–1024), u16 ops_bytes, u16
+// reserved, then the template's ops: a static subtree to instantiate (see
+// [docs/templates.md](templates.md))
+typedef struct ui_wire_define_template {
+    uint32_t id;
+    uint16_t header_bytes;
+    uint16_t node_count; // the nodes the template creates
+    uint16_t ops_bytes;
+} ui_wire_define_template;
+enum { UI_WIRE_DEFINE_TEMPLATE_ORIGINAL = 12, UI_WIRE_DEFINE_TEMPLATE_SIZE = 12 };
+// Reads the fixed part from the first `sent` bytes (at least the original size):
+// fields an older writer didn't send read as 0, fields a newer one appended are skipped.
+static inline void ui_wire_define_template_read(const uint8_t *p, uint32_t sent_unused, ui_wire_define_template *o) {
+    (void)sent_unused;
+    o->id = ui_wire_get_u32(p + 0);
+    o->header_bytes = ui_wire_get_u16(p + 4);
+    o->node_count = ui_wire_get_u16(p + 6);
+    o->ops_bytes = ui_wire_get_u16(p + 8);
+}
+// Writes the fixed part (UI_WIRE_DEFINE_TEMPLATE_SIZE bytes) and returns the end. Header and record
+// sizes are this version's; counts and lengths are the caller's.
+static inline uint8_t *ui_wire_define_template_write(uint8_t *p, const ui_wire_define_template *v) {
+    ui_wire_put_u32(p + 0, v->id);
+    ui_wire_put_u16(p + 4, (uint16_t)UI_WIRE_DEFINE_TEMPLATE_SIZE);
+    ui_wire_put_u16(p + 6, v->node_count);
+    ui_wire_put_u16(p + 8, v->ops_bytes);
+    ui_wire_put_u16(p + 10, (uint16_t)0);
+    return p + UI_WIRE_DEFINE_TEMPLATE_SIZE;
+}
+// Where the variable data starts: the header size it carries (0 stands for the original).
+static inline uint32_t ui_wire_define_template_header_size(const uint8_t *p) {
+    uint32_t n = ui_wire_get_u16(p + 4);
+    return n ? n : UI_WIRE_DEFINE_TEMPLATE_ORIGINAL;
+}
+// Where the variable data of a framed define_template sits.
+typedef struct ui_wire_define_template_tail {
+    const uint8_t *ops; // framed ops (create_node, set_styles, set_props, set_token_overrides, set_text, set_state) naming the template's nodes by local handles
+} ui_wire_define_template_tail;
+static inline void ui_wire_define_template_tail_of(const uint8_t *p, const ui_wire_define_template *h, ui_wire_define_template_tail *t) {
+    uint32_t off = ui_wire_define_template_header_size(p);
+    t->ops = p + off;
+    (void)h;
+}
+// NULL when the op's values are in range, else the name of the first field that isn't (drops in the
+// core, refusals in writers).
+const char *ui_wire_define_template_check(const ui_wire_define_template *v);
+// Appends a define_template op. Counts and lengths in *v must describe the data passed; padding is
+// zeroed. UI_ERR_INVALID_ARGUMENT if the op would be too large, UI_ERR_OUT_OF_MEMORY.
+ui_result ui_wire_define_template_put(ui_wire_buf *b, const ui_wire_define_template *v, const void *ops);
+
+// ---- instantiate_template --------------------------------------------------------------------
+// command 22: u32 template, u16 header_bytes (24), u16 count, parent handle, before handle (null
+// appends), handle nodes[count]: the template's ops with these handles for its nodes (see
+// [docs/templates.md](templates.md))
+typedef struct ui_wire_instantiate_template {
+    uint32_t template;
+    uint16_t header_bytes;
+    uint16_t count;
+    ui_handle parent; // a node, or a surface for root-level nodes
+    ui_handle before; // a child of parent; null appends
+} ui_wire_instantiate_template;
+enum { UI_WIRE_INSTANTIATE_TEMPLATE_ORIGINAL = 24, UI_WIRE_INSTANTIATE_TEMPLATE_SIZE = 24 };
+// Reads the fixed part from the first `sent` bytes (at least the original size):
+// fields an older writer didn't send read as 0, fields a newer one appended are skipped.
+static inline void ui_wire_instantiate_template_read(const uint8_t *p, uint32_t sent_unused, ui_wire_instantiate_template *o) {
+    (void)sent_unused;
+    o->template = ui_wire_get_u32(p + 0);
+    o->header_bytes = ui_wire_get_u16(p + 4);
+    o->count = ui_wire_get_u16(p + 6);
+    o->parent = ui_wire_get_handle(p + 8);
+    o->before = ui_wire_get_handle(p + 16);
+}
+// Writes the fixed part (UI_WIRE_INSTANTIATE_TEMPLATE_SIZE bytes) and returns the end. Header and record
+// sizes are this version's; counts and lengths are the caller's.
+static inline uint8_t *ui_wire_instantiate_template_write(uint8_t *p, const ui_wire_instantiate_template *v) {
+    ui_wire_put_u32(p + 0, v->template);
+    ui_wire_put_u16(p + 4, (uint16_t)UI_WIRE_INSTANTIATE_TEMPLATE_SIZE);
+    ui_wire_put_u16(p + 6, v->count);
+    ui_wire_put_handle(p + 8, v->parent);
+    ui_wire_put_handle(p + 16, v->before);
+    return p + UI_WIRE_INSTANTIATE_TEMPLATE_SIZE;
+}
+// Where the variable data starts: the header size it carries (0 stands for the original).
+static inline uint32_t ui_wire_instantiate_template_header_size(const uint8_t *p) {
+    uint32_t n = ui_wire_get_u16(p + 4);
+    return n ? n : UI_WIRE_INSTANTIATE_TEMPLATE_ORIGINAL;
+}
+// Where the variable data of a framed instantiate_template sits.
+typedef struct ui_wire_instantiate_template_tail {
+    const uint8_t *nodes; // the handles of the template's nodes, by local index
+} ui_wire_instantiate_template_tail;
+static inline void ui_wire_instantiate_template_tail_of(const uint8_t *p, const ui_wire_instantiate_template *h, ui_wire_instantiate_template_tail *t) {
+    uint32_t off = ui_wire_instantiate_template_header_size(p);
+    t->nodes = p + off;
+    (void)h;
+}
+// NULL when the op's values are in range, else the name of the first field that isn't (drops in the
+// core, refusals in writers).
+const char *ui_wire_instantiate_template_check(const ui_wire_instantiate_template *v);
+// Appends a instantiate_template op. Counts and lengths in *v must describe the data passed;
+// padding is zeroed. UI_ERR_INVALID_ARGUMENT if the op would be too large, UI_ERR_OUT_OF_MEMORY.
+ui_result ui_wire_instantiate_template_put(ui_wire_buf *b, const ui_wire_instantiate_template *v, const ui_wire_template_node *nodes);
+
+// ---- destroy_template ------------------------------------------------------------------------
+// command 23: u32 id: later instances of it are dropped
+typedef struct ui_wire_destroy_template {
+    uint32_t id;
+} ui_wire_destroy_template;
+enum { UI_WIRE_DESTROY_TEMPLATE_ORIGINAL = 4, UI_WIRE_DESTROY_TEMPLATE_SIZE = 4 };
+// Reads the fixed part from the first `sent` bytes (at least the original size):
+// fields an older writer didn't send read as 0, fields a newer one appended are skipped.
+static inline void ui_wire_destroy_template_read(const uint8_t *p, uint32_t sent_unused, ui_wire_destroy_template *o) {
+    (void)sent_unused;
+    o->id = ui_wire_get_u32(p + 0);
+}
+// Writes the fixed part (UI_WIRE_DESTROY_TEMPLATE_SIZE bytes) and returns the end. Header and record
+// sizes are this version's; counts and lengths are the caller's.
+static inline uint8_t *ui_wire_destroy_template_write(uint8_t *p, const ui_wire_destroy_template *v) {
+    ui_wire_put_u32(p + 0, v->id);
+    return p + UI_WIRE_DESTROY_TEMPLATE_SIZE;
+}
+// NULL when the op's values are in range, else the name of the first field that isn't (drops in the
+// core, refusals in writers).
+const char *ui_wire_destroy_template_check(const ui_wire_destroy_template *v);
+// Appends a destroy_template op. Counts and lengths in *v must describe the data passed; padding is
+// zeroed. UI_ERR_INVALID_ARGUMENT if the op would be too large, UI_ERR_OUT_OF_MEMORY.
+ui_result ui_wire_destroy_template_put(ui_wire_buf *b, const ui_wire_destroy_template *v);
 
 // ---- frame_committed -------------------------------------------------------------------------
 // event 1: surface handle, u64 frame_id, u64 predicted_present_ns

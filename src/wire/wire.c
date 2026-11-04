@@ -534,3 +534,35 @@ ui_result ui_event_next(ui_event_reader *reader, ui_event *out) {
         }
     }
 }
+
+// ---- Templates ---------------------------------------------------------------------------
+
+ui_result ui_cmd_define_template(ui_cmd_writer *w, uint32_t id, uint32_t node_count, ui_cmd_writer *ops) {
+    if (!id || node_count < 1 || node_count > 1024 || !ops || ops == w) return UI_ERR_INVALID_ARGUMENT;
+    uint32_t bytes = ops->buf.size ? ops->buf.size - UI_WIRE_HEADER_SIZE : 0;
+    if (bytes > UI_WIRE_MAX_OP_SIZE - UI_WIRE_OP_HEADER_SIZE - 12) return UI_ERR_INVALID_ARGUMENT;
+    const uint8_t *data = bytes ? ops->buf.data + UI_WIRE_HEADER_SIZE : NULL;
+    ui_result r = ui_wire_define_template_put(
+        &w->buf, &(ui_wire_define_template){.id = id, .node_count = (uint16_t)node_count, .ops_bytes = (uint16_t)bytes},
+        data);
+    if (r != UI_OK) return r;
+    ops->buf.size = 0;
+    ops->buf.op_count = 0;
+    return UI_OK;
+}
+
+ui_result ui_cmd_instantiate_template(ui_cmd_writer *w, uint32_t id, ui_handle parent, ui_handle before,
+                                      const ui_handle *nodes, uint32_t count) {
+    if (!id || count < 1 || count > 1024 || !nodes) return UI_ERR_INVALID_ARGUMENT;
+    ui_wire_template_node list[1024];
+    for (uint32_t i = 0; i < count; i++) list[i].node = nodes[i];
+    return ui_wire_instantiate_template_put(
+        &w->buf,
+        &(ui_wire_instantiate_template){.template = id, .count = (uint16_t)count, .parent = parent, .before = before},
+        list);
+}
+
+ui_result ui_cmd_destroy_template(ui_cmd_writer *w, uint32_t id) {
+    if (!id) return UI_ERR_INVALID_ARGUMENT;
+    return ui_wire_destroy_template_put(&w->buf, &(ui_wire_destroy_template){.id = id});
+}

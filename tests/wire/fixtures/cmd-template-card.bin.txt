@@ -1,0 +1,5 @@
+commands 752 bytes: valid
+op 21 size 604: id=7 nodes=4 ops_bytes=592
+op 22 size 56: template=7 parent=10000000:1 before=00000000:0 count=4 node=00000001:1 node=00000002:1 node=00000003:1 node=00000004:1
+op 22 size 56: template=7 parent=10000000:1 before=00000001:1 count=4 node=00000005:1 node=00000006:1 node=00000007:1 node=00000008:1
+op 23 size 4: id=7

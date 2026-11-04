@@ -4,12 +4,15 @@
 // into a display list. Covers the framing rules of every op, including payloads from older
 // and newer writers, handle checks, the clip stack and culling. Traps when preparation's
 // preview mispredicts text values, or when resolving only what changed differs from
-// resolving everything. Text is laid out by fuzz_set_text; here it is not drawn.
+// resolving everything. Text is laid out by fuzz_set_text; here it is not drawn. Template
+// instances are expanded first, as the core does on receipt (core/template.h), with one table
+// of definitions per input.
 #include <stdlib.h>
 #include <string.h>
 
 #include "core/preview.h"
 #include "core/scene.h"
+#include "core/template.h"
 #include "wire/gen/wire_gen.h"
 
 int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size);
@@ -52,8 +55,13 @@ static uint8_t *make_buffer(const uint8_t *ops, size_t size, size_t *out_size) {
 }
 
 // Applies a buffer at frame `pass`, resolves, checks, animates, lays out and draws.
-static void run_pass(ui_scene *s, const uint8_t *buf, size_t size, int pass, uint32_t scale_120,
+static void run_pass(ui_scene *s, ui_templates *t, const uint8_t *in, size_t in_size, int pass, uint32_t scale_120,
                      const ui_handle surfaces[2]) {
+    uint8_t *expanded = NULL;
+    size_t expanded_size = 0;
+    ui_templates_expand(t, in, in_size, &expanded, &expanded_size);
+    const uint8_t *buf = expanded ? expanded : in;
+    size_t size = expanded ? expanded_size : in_size;
     // What preparation predicts the buffer makes of every node's text values must be
     // what applying it does (core/preview.h): a wrong prediction shapes on the core.
     bool valid = ui_scene_validate(buf, size) == UI_OK;
@@ -89,6 +97,7 @@ static void run_pass(ui_scene *s, const uint8_t *buf, size_t size, int pass, uin
         ui_scene_measure(s, s->requests[i].node, rects, &surface);
     }
     s->request_count = 0;
+    free(expanded);
 }
 
 // The first byte picks the surfaces' scale (bits 0-2) and a split (bits 3-7): with a split,
@@ -112,6 +121,11 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
                              {(uint32_t)UI_HANDLE_SURFACE << UI_HANDLE_SLOT_BITS | 1, 1}};
     ui_scene_add_root(&s, surfaces[0]);
     ui_scene_add_root(&s, surfaces[1]);
+    ui_templates *t = NULL;
+    if (ui_templates_create(&quiet, &t) != UI_OK) {
+        ui_scene_destroy(&s);
+        return 0;
+    }
     int pass = 0;
     if (split) {
         // The byte offset of the op at the split (framing errors end the walk).
@@ -125,18 +139,19 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
         }
         size_t part_size;
         uint8_t *part = make_buffer(data, at, &part_size);
-        if (part) run_pass(&s, part, part_size, pass++, scale_120, surfaces);
+        if (part) run_pass(&s, t, part, part_size, pass++, scale_120, surfaces);
         free(part);
         part = make_buffer(data + at, body - at, &part_size);
-        if (part) run_pass(&s, part, part_size, pass++, scale_120, surfaces);
+        if (part) run_pass(&s, t, part, part_size, pass++, scale_120, surfaces);
         free(part);
     }
     // Applying twice runs the ops again against the state the first pass left (nodes that
     // now exist, slots whose generation moved on).
     size_t buf_size;
     uint8_t *buf = make_buffer(data, body, &buf_size);
-    for (int i = 0; buf && i < 2; i++) run_pass(&s, buf, buf_size, pass++, scale_120, surfaces);
+    for (int i = 0; buf && i < 2; i++) run_pass(&s, t, buf, buf_size, pass++, scale_120, surfaces);
     ui_scene_destroy(&s);
+    ui_templates_destroy(t);
     free(buf);
     return 0;
 }

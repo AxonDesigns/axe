@@ -328,6 +328,56 @@ ui_result ui_wire_set_token_overrides_put(ui_wire_buf *b, const ui_wire_set_toke
     return UI_OK;
 }
 
+const char *ui_wire_define_template_check(const ui_wire_define_template *v) {
+    if (!(v->id != 0)) return "id";
+    if (!(v->node_count >= 1 && v->node_count <= 1024)) return "node_count";
+    return NULL;
+}
+
+ui_result ui_wire_define_template_put(ui_wire_buf *b, const ui_wire_define_template *v, const void *ops) {
+    if (v->ops_bytes % 4) return UI_ERR_INVALID_ARGUMENT;
+    uint64_t size = UI_WIRE_DEFINE_TEMPLATE_SIZE + (uint64_t)(v->ops_bytes);
+    if (size > UI_WIRE_MAX_PAYLOAD) return UI_ERR_INVALID_ARGUMENT;
+    uint8_t *p = ui_wire_buf_op(b, UI_OP_DEFINE_TEMPLATE, (uint32_t)size);
+    if (!p) return UI_ERR_OUT_OF_MEMORY;
+    p = ui_wire_define_template_write(p, v);
+    if (v->ops_bytes) memcpy(p, ops, v->ops_bytes);
+    p += v->ops_bytes;
+    (void)p;
+    return UI_OK;
+}
+
+const char *ui_wire_instantiate_template_check(const ui_wire_instantiate_template *v) {
+    if (!(v->template != 0)) return "template";
+    if (!(v->count >= 1 && v->count <= 1024)) return "count";
+    return NULL;
+}
+
+ui_result ui_wire_instantiate_template_put(ui_wire_buf *b, const ui_wire_instantiate_template *v, const ui_wire_template_node *nodes) {
+    uint64_t size = UI_WIRE_INSTANTIATE_TEMPLATE_SIZE + (uint64_t)(UI_WIRE_TEMPLATE_NODE_SIZE * (uint32_t)v->count);
+    if (size > UI_WIRE_MAX_PAYLOAD) return UI_ERR_INVALID_ARGUMENT;
+    uint8_t *p = ui_wire_buf_op(b, UI_OP_INSTANTIATE_TEMPLATE, (uint32_t)size);
+    if (!p) return UI_ERR_OUT_OF_MEMORY;
+    p = ui_wire_instantiate_template_write(p, v);
+    for (uint32_t i = 0; i < v->count; i++) p = ui_wire_template_node_write(p, &nodes[i]);
+    (void)p;
+    return UI_OK;
+}
+
+const char *ui_wire_destroy_template_check(const ui_wire_destroy_template *v) {
+    if (!(v->id != 0)) return "id";
+    return NULL;
+}
+
+ui_result ui_wire_destroy_template_put(ui_wire_buf *b, const ui_wire_destroy_template *v) {
+    uint64_t size = UI_WIRE_DESTROY_TEMPLATE_SIZE;
+    if (size > UI_WIRE_MAX_PAYLOAD) return UI_ERR_INVALID_ARGUMENT;
+    uint8_t *p = ui_wire_buf_op(b, UI_OP_DESTROY_TEMPLATE, (uint32_t)size);
+    if (!p) return UI_ERR_OUT_OF_MEMORY;
+    ui_wire_destroy_template_write(p, v);
+    return UI_OK;
+}
+
 ui_result ui_wire_frame_committed_put(ui_wire_buf *b, const ui_wire_frame_committed *v) {
     uint64_t size = UI_WIRE_FRAME_COMMITTED_SIZE;
     if (size > UI_WIRE_MAX_PAYLOAD) return UI_ERR_INVALID_ARGUMENT;
@@ -616,6 +666,35 @@ static bool frame_command_set_token_overrides(const uint8_t *p, uint32_t size) {
     return off <= size;
 }
 
+static bool frame_command_define_template(const uint8_t *p, uint32_t size) {
+    if (size < UI_WIRE_DEFINE_TEMPLATE_ORIGINAL) return false;
+    uint32_t header = ui_wire_define_template_header_size(p);
+    if (header < UI_WIRE_DEFINE_TEMPLATE_ORIGINAL || header % 4 || header > size) return false;
+    ui_wire_define_template h;
+    ui_wire_define_template_read(p, header < UI_WIRE_DEFINE_TEMPLATE_SIZE ? header : UI_WIRE_DEFINE_TEMPLATE_SIZE, &h);
+    uint64_t off = header;
+    if (h.ops_bytes % 4) return false;
+    off += h.ops_bytes;
+    return off <= size;
+}
+
+static bool frame_command_instantiate_template(const uint8_t *p, uint32_t size) {
+    if (size < UI_WIRE_INSTANTIATE_TEMPLATE_ORIGINAL) return false;
+    uint32_t header = ui_wire_instantiate_template_header_size(p);
+    if (header < UI_WIRE_INSTANTIATE_TEMPLATE_ORIGINAL || header % 4 || header > size) return false;
+    ui_wire_instantiate_template h;
+    ui_wire_instantiate_template_read(p, header < UI_WIRE_INSTANTIATE_TEMPLATE_SIZE ? header : UI_WIRE_INSTANTIATE_TEMPLATE_SIZE, &h);
+    uint64_t off = header;
+    off += (uint64_t)h.count * UI_WIRE_TEMPLATE_NODE_SIZE;
+    return off <= size;
+}
+
+static bool frame_command_destroy_template(const uint8_t *p, uint32_t size) {
+    if (size < UI_WIRE_DESTROY_TEMPLATE_ORIGINAL) return false;
+    (void)p;
+    return true;
+}
+
 static bool frame_event_frame_committed(const uint8_t *p, uint32_t size) {
     if (size < UI_WIRE_FRAME_COMMITTED_ORIGINAL) return false;
     (void)p;
@@ -680,6 +759,9 @@ bool ui_wire_command_framed(uint16_t opcode, const uint8_t *payload, uint32_t si
     case UI_OP_MOVE_NODE: return frame_command_move_node(payload, size);
     case UI_OP_REQUEST_LAYOUT: return frame_command_request_layout(payload, size);
     case UI_OP_SET_TOKEN_OVERRIDES: return frame_command_set_token_overrides(payload, size);
+    case UI_OP_DEFINE_TEMPLATE: return frame_command_define_template(payload, size);
+    case UI_OP_INSTANTIATE_TEMPLATE: return frame_command_instantiate_template(payload, size);
+    case UI_OP_DESTROY_TEMPLATE: return frame_command_destroy_template(payload, size);
     default: return true; // unknown: skipped
     }
 }

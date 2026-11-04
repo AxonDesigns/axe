@@ -42,6 +42,9 @@ enum op : u16  c ui_op UI_OP_
   move_node = 18
   request_layout = 19
   set_token_overrides = 20
+  define_template = 21
+  instantiate_template = 22
+  destroy_template = 23
 
 enum event_type : u16  c ui_event_type UI_EVENT_
   frame_committed = 1
@@ -195,6 +198,9 @@ union style_value  by value_kind  c ui_value
   string   string str16 1..1014
 
 # A style declaration: a property (or 0x8000 | property for its transition) and a value.
+record template_node  "A node's handle among an instance's nodes."
+  node  node
+
 record style_entry
   property  u16
   kind      value_kind
@@ -440,6 +446,27 @@ command set_token_overrides = 20  original 12  "node, `u16 header_bytes` (12), `
   tail
   tokens        u32[count]  nonzero
   values        style_entry[count]
+
+command define_template = 21  original 12  "`u32 id` (not 0), `u16 header_bytes` (12), `u16 node_count` (1–1024), `u16 ops_bytes`, `u16` reserved, then the template's ops: a static subtree to instantiate (see [`docs/templates.md`](templates.md))"
+  id            u32  nonzero
+  header_bytes  u16 = header
+  node_count    u16  1..1024  "the nodes the template creates"
+  ops_bytes     u16 = count(ops)
+  reserved      u16
+  tail
+  ops           bytes[ops_bytes]  multiple 4  "framed ops (create_node, set_styles, set_props, set_token_overrides, set_text, set_state) naming the template's nodes by local handles"
+
+command instantiate_template = 22  original 24  "`u32 template`, `u16 header_bytes` (24), `u16 count`, parent handle, `before` handle (null appends), `handle nodes[count]`: the template's ops with these handles for its nodes (see [`docs/templates.md`](templates.md))"
+  template      u32  nonzero
+  header_bytes  u16 = header
+  count         u16 = count(nodes)  1..1024
+  parent        handle  "a node, or a surface for root-level nodes"
+  before        handle  "a child of parent; null appends"
+  tail
+  nodes         template_node[count]  "the handles of the template's nodes, by local index"
+
+command destroy_template = 23  original 4  "`u32 id`: later instances of it are dropped"
+  id            u32  nonzero
 
 # ---- Events (core -> logic) ---------------------------------------------------------------
 

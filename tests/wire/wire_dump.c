@@ -367,6 +367,35 @@ static void dump_op(wire_text *t, const ui_wire_op *op) {
         u(t, "id", v.request_id);
         break;
     }
+    case UI_OP_DEFINE_TEMPLATE: {
+        ui_wire_define_template v;
+        ui_wire_define_template_read(p, ui_wire_define_template_header_size(p), &v);
+        u(t, "id", v.id);
+        u(t, "nodes", v.node_count);
+        u(t, "ops_bytes", v.ops_bytes);
+        break;
+    }
+    case UI_OP_INSTANTIATE_TEMPLATE: {
+        ui_wire_instantiate_template v;
+        ui_wire_instantiate_template_read(p, ui_wire_instantiate_template_header_size(p), &v);
+        ui_wire_instantiate_template_tail tail;
+        ui_wire_instantiate_template_tail_of(p, &v, &tail);
+        u(t, "template", v.template);
+        handle(t, "parent", v.parent);
+        handle(t, "before", v.before);
+        u(t, "count", v.count);
+        for (uint32_t i = 0; i < v.count; i++) {
+            ui_wire_template_node n;
+            ui_wire_template_node_read(tail.nodes + i * UI_WIRE_TEMPLATE_NODE_SIZE, UI_WIRE_TEMPLATE_NODE_SIZE, &n);
+            handle(t, "node", n.node);
+        }
+        break;
+    }
+    case UI_OP_DESTROY_TEMPLATE: {
+        READ(destroy_template, v);
+        u(t, "id", v.id);
+        break;
+    }
     default: out(t, " unknown"); break;
     }
 }

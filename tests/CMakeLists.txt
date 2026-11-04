@@ -193,6 +193,13 @@ target_link_libraries(test_style PRIVATE ui m)
 ui_target_warnings(test_style)
 add_test(NAME style COMMAND test_style)
 
+add_executable(test_template test_template.c)
+target_include_directories(test_template PRIVATE ${PROJECT_SOURCE_DIR}/src)
+target_compile_definitions(test_template PRIVATE _DEFAULT_SOURCE)
+target_link_libraries(test_template PRIVATE ui m)
+ui_target_warnings(test_template)
+add_test(NAME template COMMAND test_template)
+
 # Token scopes: nested, state blocks, use-site aliases, cycles, kinds, moves, transitions.
 add_executable(test_scopes test_scopes.c)
 target_include_directories(test_scopes PRIVATE ${PROJECT_SOURCE_DIR}/src)

@@ -143,6 +143,8 @@ static ui_result init_text(ui_core *c, const ui_text_config *cfg) {
     };
     r = ui_preparer_create(&pd, &c->preparer);
     if (r != UI_OK) return r;
+    r = ui_templates_create(c->log, &c->templates);
+    if (r != UI_OK) return r;
     c->text_contrast = env_float("UI_TEXT_CONTRAST", cfg->contrast > 0 ? cfg->contrast : UI_TEXT_DEFAULT_CONTRAST);
     c->text_gamma = env_float("UI_TEXT_GAMMA", cfg->gamma > 0 ? cfg->gamma : 1.f);
     return UI_OK;
@@ -181,6 +183,7 @@ ui_result ui_core_init(ui_core *c, const ui_core_desc *desc) {
         ui_queue_destroy(&c->from_logic, NULL);
         ui_actor_destroy(&c->actor);
         ui_preparer_destroy(c->preparer); // discovery starts at the first step: no job runs
+        ui_templates_destroy(c->templates);
         ui_atlas_destroy(c->atlas);
         ui_glyph_cache_destroy(c->glyphs);
         ui_text_context_free(&c->text);
@@ -204,6 +207,7 @@ void ui_core_destroy(ui_core *c) {
     free(c->unsent);
     ui_jobs_destroy(c->own_jobs); // inline: never holds queued work
     ui_preparer_destroy(c->preparer);
+    ui_templates_destroy(c->templates);
     ui_atlas_destroy(c->atlas);
     ui_glyph_cache_destroy(c->glyphs);
     ui_raster_free(&c->raster);
@@ -348,9 +352,19 @@ void ui_core_force_frame(ui_core *c) {
 static void handle(ui_core *c, ui_msg msg) {
     switch (msg.type) {
     case UI_MSG_CMD_BUFFER: {
-        // drain() reserved the slot, so a buffer is never refused here. A well-framed buffer
+        // drain() reserved the slot, so a buffer is never refused here. Its template instances
+        // become their ops first, so everything downstream sees plain ops. A well-framed buffer
         // starts preparing now (once font discovery is ready); a malformed one is rejected
         // when applied.
+        uint8_t *expanded;
+        size_t expanded_size;
+        if (ui_templates_expand(c->templates, msg.ptr, msg.size, &expanded, &expanded_size) != UI_OK)
+            UI_ERROR(c->log, MODULE, "out of memory expanding template instances: they are dropped");
+        if (expanded) {
+            free(msg.ptr);
+            msg.ptr = expanded;
+            msg.size = expanded_size;
+        }
         ui_prep_buffer *prep = NULL;
         if (ui_scene_validate(msg.ptr, msg.size) == UI_OK)
             prep = ui_prep_create(c->preparer, msg.ptr, msg.size);

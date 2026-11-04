@@ -85,6 +85,9 @@ the [op history](#op-history) lists appended fields.
 | 18 | `move_node` | node, parent handle (a node, or a surface for a root-level node), `before` handle (a sibling under that parent; null appends) | 24 |
 | 19 | `request_layout` | node, `u32 request_id`: answered by `layout_measured` ([`docs/layout.md`](layout.md), "Measurement") | 12 |
 | 20 | `set_token_overrides` | node, `u16 header_bytes` (12), `u16 count`, `u32 tokens[count]`, then `count` entries (property 0): the node's own token declarations (see [`docs/styles.md`](styles.md), "Token scopes"); `unset` removes one | 12 + variable |
+| 21 | `define_template` | `u32 id` (not 0), `u16 header_bytes` (12), `u16 node_count` (1–1024), `u16 ops_bytes`, `u16` reserved, then the template's ops: a static subtree to instantiate (see [`docs/templates.md`](templates.md)) | 12 + ops |
+| 22 | `instantiate_template` | `u32 template`, `u16 header_bytes` (24), `u16 count`, parent handle, `before` handle (null appends), `handle nodes[count]`: the template's ops with these handles for its nodes (see [`docs/templates.md`](templates.md)) | 24 + nodes |
+| 23 | `destroy_template` | `u32 id`: later instances of it are dropped | 4 |
 <!-- /idl:commands -->
 
 `set_color`, `set_corner_radius` and `set_clip` set the node's overrides of the matching

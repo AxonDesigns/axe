@@ -501,6 +501,14 @@ static bool apply_op(ui_scene *s, const ui_wire_op *op, uint64_t now_ns) {
     if (op->opcode == UI_OP_DEFINE_STYLE || op->opcode == UI_OP_DESTROY_STYLE ||
         op->opcode == UI_OP_SET_TOKEN)
         return apply_style_op(s, op);
+    // Templates are the core's (core/template.h): it expands every instance before a buffer
+    // gets here, and defines and destroys them as it does.
+    if (op->opcode == UI_OP_DEFINE_TEMPLATE || op->opcode == UI_OP_DESTROY_TEMPLATE) return true;
+    if (op->opcode == UI_OP_INSTANTIATE_TEMPLATE) {
+        s->stats.dropped++;
+        UI_DEBUG_REPORT(s->log, MODULE, "dropped instantiate_template: not expanded (core/template.h)");
+        return false;
+    }
     // An unknown op comes from a newer writer and may be any size, even shorter than a
     // handle: drop it before reading anything.
     switch (op->opcode) {
