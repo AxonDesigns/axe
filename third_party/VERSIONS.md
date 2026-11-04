@@ -25,7 +25,7 @@ Vulkan and WGSL) and always in the `release` profile.
 
 | Tool | Version |
 | --- | --- |
-| Rust | 1.93 (`rust-toolchain.toml`, matches wgpu-native's pin) |
+| Rust | 1.97 (`rust-toolchain.toml`: one toolchain for wgpu-native and axe-tsx; wgpu-native pins 1.93 but builds on it) |
 | Clang / Clang++ | 19 or newer (C23, `#embed`); CI pins 22, developed with 22–23. C++ only for HarfBuzz (C++17) |
 | CMake | 3.28 or newer |
 | Node.js | 24 (CI); npm installs the TypeScript tools only, nothing at run time uses Node |

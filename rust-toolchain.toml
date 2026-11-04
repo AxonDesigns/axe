@@ -1,4 +1,6 @@
-# Matches third_party/wgpu-native/rust-toolchain.toml at the pinned tag.
+# One toolchain for every Rust crate in the build: wgpu-native and, from milestone 3b.2,
+# axe-tsx (oxc needs 1.97). wgpu-native's own toolchain file asks for an older one; its
+# crates build on this one too (docs/decisions.md, milestone 3b.1).
 [toolchain]
-channel = "1.93"
+channel = "1.97"
 profile = "minimal"

@@ -2,7 +2,7 @@
 
 ## Build and test
 
-Clang 19 or newer (22 in CI), CMake, Ninja, Rust 1.93, Python 3.10, Node.js 24 with npm, and
+Clang 19 or newer (22 in CI), CMake, Ninja, Rust 1.97, Python 3.10, Node.js 24 with npm, and
 the system packages listed in `.github/actions/setup/action.yml`. Clone with `--recursive`,
 then, once:
 

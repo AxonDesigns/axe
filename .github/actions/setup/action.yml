@@ -14,8 +14,8 @@ inputs:
     description: Clang major version (#embed needs 19 or newer)
     default: "22"
   rust-version:
-    description: Rust toolchain for wgpu-native
-    default: "1.93"
+    description: Rust toolchain for every Rust crate (rust-toolchain.toml)
+    default: "1.97"
 
 outputs:
   vendor-hit:

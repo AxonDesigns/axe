@@ -2,7 +2,14 @@
 
 # Corrosion drives Cargo for wgpu-native. The Rust crate always builds in release:
 # a debug wgpu is too slow to pace frames and is not what we debug here.
-set(Rust_TOOLCHAIN "1.93" CACHE STRING "rustup toolchain (matches rust-toolchain.toml)")
+# One toolchain for every crate: rust-toolchain.toml's channel. Forced, so a build directory
+# configured under an older pin follows the file.
+file(STRINGS "${PROJECT_SOURCE_DIR}/rust-toolchain.toml" _channel REGEX "^channel *= *\"[^\"]+\"")
+string(REGEX REPLACE "^channel *= *\"([^\"]+)\".*" "\\1" _channel "${_channel}")
+if(NOT _channel)
+    message(FATAL_ERROR "rust-toolchain.toml has no channel")
+endif()
+set(Rust_TOOLCHAIN "${_channel}" CACHE STRING "rustup toolchain (from rust-toolchain.toml)" FORCE)
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/corrosion/cmake")
 include(Corrosion)
 
