@@ -274,9 +274,64 @@ The framework writes its own thin platform layer per OS; SDL and GLFW do not cov
 
 **DPI:** per-monitor and fractional scaling; moving between monitors invalidates glyph atlases and cached rasters.
 
-**Also:** clipboard with rich formats, drag and drop in and out, file dialogs (XDG desktop portal on Linux), cursors, system tray and menus.
+**Also:** clipboard with rich formats, drag and drop (next section), file dialogs (XDG desktop portal on Linux), cursors, system tray and menus.
 
 The first slice is tested on GNOME, KDE and a wlroots compositor (Sway).
+
+## Drag and drop
+
+One core-owned drag session serves drags within a surface, between windows of the same app and between apps, with the same API, data model and visuals in all three. It ships in the first release on every desktop platform and shares its data model with the clipboard.
+
+| Scope | Who runs the session | Payload |
+| --- | --- | --- |
+| Within one surface | Core only, no OS session | The in-process value, never serialized |
+| Between surfaces of one app | OS session, recognized as same-process on drop | The in-process value, resolved from a session token |
+| Between apps | OS session | Serialized representations, read on drop |
+
+**Promotion.** A drag starts in the core and is promoted to an OS session as soon as it can leave its surface: when the pointer exits, or at start for sources marked external. Wayland requires this, since the compositor owns the pointer outside the surface, and it keeps one path for our own windows and other apps' windows. Sources confined to their surface (list reorder, sliders, canvas tools) never promote.
+
+**Data model.** A drag carries a list of items; each item offers several representations (MIME types, mapped to UTIs and Windows clipboard formats), using the same offer type as the clipboard.
+
+- **Lazy data.** The source provides bytes only when a target asks on drop, through a request ID completed by an event, the architecture's pattern for async results.
+- **File promises** for content that does not exist yet (an export, a remote file): NSFilePromiseProvider on macOS, FILEDESCRIPTOR/FILECONTENTS on Windows, a temp file offered as text/uri-list on Linux.
+- **Session token.** Every drag also offers a private format naming the session; a target in the same process resolves it to the live value, so moving a model between windows keeps its identity and skips serialization.
+- **Custom types** are registered with a schema: other apps on the framework read them as structured data, everyone else sees the fallbacks (text, URI list, image).
+
+**Operations.** Copy, move, link and ask are negotiated between source and target, with the modifier keys of each OS. A move into another app completes only when the target confirms it (Wayland dnd\_finished, DROPEFFECT\_MOVE, NSDragOperationMove); the source deletes nothing before then.
+
+**Threading.** Hit testing, target highlighting and preview motion run on the core thread at display rate. Drop targets declare accepted types and operations as data, so hover feedback never waits for JS. A target may add an async check in JS; until it answers, the declarative answer stands. Drops and data reads reach logic as ordinary events.
+
+**Gestures.** The drag recognizer joins the gesture arena. Mouse drags start past the OS drag threshold; touch and pen drags start on long-press, so a quick swipe still scrolls. Inner scrollers yield once a drag is recognized.
+
+**Visuals.**
+
+- **Inside a surface** the preview renders in the overlay layer hero flights use, follows predicted pointer positions, lifts with a spring and lands on the target through the presentation-rect mechanism. A cancel springs it back to its origin.
+- **Outside a surface** it becomes the OS drag image: a drag-icon wl\_surface on Wayland, drawn by the render thread so it stays live; an ARGB drag window on X11; IDragSourceHelper on Windows; NSDraggingItem image components on macOS.
+- **Multi-item drags** show a stack with a count badge, and targets can restyle the preview on enter.
+
+**Built-in behaviors.**
+
+- **Edge auto-scroll** in scroll views, faster the deeper the pointer sits in the edge zone, driven by the existing scroll physics.
+- **Spring-loaded targets:** hovering a tab, folder or nav item for 500 ms activates it, pushing a route through the normal transition.
+- **Reorder** in lists and grids with a live gap; siblings move through layout animations.
+- **Tear-off and dock:** dragging a tab out creates a window that follows the pointer (xdg-toplevel-drag-v1 on Wayland, behind a capability query; a framework-moved top-level elsewhere). Dropping it on another window's tab strip docks it.
+- **Cancellation** on Esc, a lost pointer grab, the source surface closing, the target app vanishing or app quit; each ends the session cleanly and animates back where possible.
+- **Several touch drags at once** inside the app; OS sessions are limited to one per seat.
+
+| Platform | Mechanism |
+| --- | --- |
+| Wayland | wl\_data\_device start\_drag with the press serial, data offers with set\_actions, drag-icon surface, xdg-toplevel-drag-v1 for tear-off, FileTransfer portal for sandboxed apps |
+| X11 | Own XDND v5 implementation, copy, move, link and ask actions, ARGB drag window |
+| Windows | OLE IDropTarget per HWND (OleInitialize on the main thread), IDataObject with delayed rendering, DoDragDrop with IDropSource, shell drag-image helpers |
+| macOS | NSDraggingSource and NSDraggingDestination on the content view, NSPasteboardItem data providers, NSFilePromiseProvider, spring-loading |
+
+**Windows DoDragDrop** runs a modal message loop on the main thread. The core keeps stepping from inside that loop, so frames, animations and logic events continue during an outbound drag. This is a known high-effort item, budgeted separately like DirectManipulation. UIPI blocks drops from a normal app into an elevated one; this is documented, not worked around.
+
+**Accessibility and keyboard.** Drag sources and drop targets appear in the semantics tree with pick-up and drop-on actions, so screen-reader and keyboard users get the same operations: pick up, arrow between targets, Enter to drop, Esc to cancel.
+
+**Automation and tests.** The protocol's drag action drives real sessions, headless included. Tests can inject an external data offer to simulate a drop from another app and read what a drag out would offer, so OS drops are covered without an OS. Sessions run on the injectable clock, and the hook API gets drag start, enter, leave, drop and cancel events.
+
+**Security.** Data from other apps is untrusted: size caps per representation, fuzzed decoders, validated file URIs, and no promised data read before the drop.
 
 ## Deferred targets
 
