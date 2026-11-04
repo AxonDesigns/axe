@@ -103,6 +103,18 @@ build/release/bench/bench_layout && build/release/bench/bench_text && build/rele
 Times vary by 10–20% from run to run on a busy desktop. Compare best runs, and quote ranges
 across a few runs.
 
+### Bench apps
+
+Benchmarks that run an app use one under `bench/apps/`, never an example. `bench/apps/cards`
+(the startup, memory and first-frame cases of `bench_script`) is a frozen copy of the
+TypeScript `layout_cards` as of milestone 3a.
+
+- **Examples change freely**, to show what is new; nothing measures them.
+- **Bench apps change only on purpose**: to measure something new, or because the API they
+  use changed. Such a change goes with the baselines updated from CI's artifact, in a commit
+  of its own (below), and says why in its message.
+- **A new benchmark that needs an app** gets its own under `bench/apps/`, frozen from then on.
+
 ### The benchmark guard
 
 CI catches regressions with instruction counts. On the same machine they don't change from

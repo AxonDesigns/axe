@@ -4,12 +4,13 @@
 //     with 3 entries, set_styles, a short set_text, create_node and destroy_node) written
 //     through @axe/core; ops per second and MB per second.
 //  2. Startup: the script host created and its first turn run (the bundle evaluated, the
-//     layout_cards grid built and its commands flushed), from source and from bytecode.
-//  3. Memory: the JS heap after startup, for an empty app and for layout_cards.
+//     cards grid built and its commands flushed), from source and from bytecode. The app is
+//     bench/apps/cards, frozen so the counts move only with the framework.
+//  3. Memory: the JS heap after startup, for an empty app and for the cards app.
 //  4. Event to handler: one turn carrying a frame_committed to a JS frame handler (and back:
 //     the flush), and the per-event cost in a turn carrying 64.
 //  5. Startup to first frame with a GPU: ui_app_create to the first frame showing the
-//     layout_cards grid, from source and from bytecode.
+//     cards grid, from source and from bytecode.
 // Every case prints its median and best run. Cases 1, 2 and 4 run on the CPU alone, each in a
 // noinline bench_case_* function holding exactly what is timed: `bench_script --callgrind`
 // runs them once each and skips the others, so Callgrind can count their instructions
@@ -188,7 +189,7 @@ static void bench_startup(void) {
         mem_cards = heap(h);
         ui_script_host_destroy(h);
     }
-    printf("Startup: host created, layout_cards evaluated and its first turn flushed:\n");
+    printf("Startup: host created, the cards app evaluated and its first turn flushed:\n");
     report("from source", src, RUNS, 0, "");
     report("from bytecode", bc, RUNS, 0, "");
 
@@ -196,7 +197,7 @@ static void bench_startup(void) {
     turn(empty, ev, size);
     printf("Memory: JS heap after the first turn:\n");
     printf("  %-44s %9.1f KiB\n", "an empty app", (double)heap(empty) / 1024);
-    printf("  %-44s %9.1f KiB\n", "layout_cards (10 cards)", (double)mem_cards / 1024);
+    printf("  %-44s %9.1f KiB\n", "cards app (10 cards)", (double)mem_cards / 1024);
     ui_script_host_destroy(empty);
     free(ev);
 }
