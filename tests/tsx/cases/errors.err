@@ -1,0 +1,8 @@
+tests/tsx/cases/errors.tsx:4:24: error: text in a View must be inside <Text>: <Text>loose text</Text> (docs/ui.md, "Text")
+tests/tsx/cases/errors.tsx:5:24: error: text in a View must be inside <Text>: <Text>a string</Text> (docs/ui.md, "Text")
+tests/tsx/cases/errors.tsx:6:24: error: a Span must be inside <Text> (docs/ui.md, "Text")
+tests/tsx/cases/errors.tsx:7:24: error: a Text holds only text and Spans: put other nodes beside it, in a View (docs/ui.md, "Text")
+tests/tsx/cases/errors.tsx:8:32: error: Spans don't nest: close one before opening the next
+tests/tsx/cases/errors.tsx:9:19: error: <div> isn't an element: Axe has no lowercase elements; use View, Text or a component
+tests/tsx/cases/errors.tsx:10:24: error: View has no prop `colour`
+tests/tsx/cases/errors.tsx:11:18: error: a Span must be inside <Text> (docs/ui.md, "Text")

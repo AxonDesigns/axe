@@ -1,0 +1,16 @@
+// Styles: module-level ones and constant inline ones go in the template; a local one is applied
+// once; a dynamic one is a binding. Tokens and states alike.
+import { State, View, style, token, type Signal } from "@axe/ui";
+import { applyStyle as _$applyStyle, bindState as _$bindState, bindStyle as _$bindStyle, bindTokens as _$bindTokens, instance as _$instance, template as _$template } from "@axe/ui/jsx-runtime";
+const _tmpl$1 = /*#__PURE__*/ _$template([{ p: -1, props: () => ({ style: [base, S.selected, { margin: 2 }], state: State.hover }) }, { p: 0, sb: 1 }, { p: 0, sb: 1 }]);
+
+const base = style({ padding: 4 });
+const accent = token("#36f");
+const S = { selected: style({ borderWidth: 2 }) };
+
+export function Styled(props: { on: Signal<boolean>; width: number }) {
+  const mine = style({ gap: 2 });
+  return (
+    _$instance(_tmpl$1, (_n) => { _$bindTokens(_n[0], () => [accent.with("#f63")]); _$applyStyle(_n[1], mine); _$bindStyle(_n[2], () => props.on() ? base : { width: props.width }); _$bindState(_n[2], () => props.on() ? State.selected : 0); })
+  );
+}

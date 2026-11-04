@@ -6,6 +6,9 @@ export {
   slotCreate,
   slotDestroy,
   slotHandle,
+  slotAllocTree,
+  slotInstantiate,
+  slotParentHandle,
   slotMove,
   slotParent,
   slotSetEntries,
@@ -21,3 +24,4 @@ export { entries, tokenArrays, type StyleEntry } from "./style.js";
 export { animationTimeMs, commands, debug, onTurnEnd, onTurnStart, setBeforeFlush } from "./runtime.js";
 export { sugarProp, sugarToken, sugarValue } from "./sugar.js";
 export { Node } from "./node.js";
+export { setText } from "./text.js";

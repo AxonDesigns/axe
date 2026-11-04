@@ -1,0 +1,12 @@
+// Dynamic children keep their place: each region goes before the next static node or region.
+import { Text, View } from "@axe/ui";
+import { insert as _$insert, instance as _$instance, region as _$region, template as _$template } from "@axe/ui/jsx-runtime";
+const _tmpl$1 = /*#__PURE__*/ _$template([{ p: -1, t: 1, props: () => ({ children: ["a"] }) }]);
+const _tmpl$2 = /*#__PURE__*/ _$template([{ p: -1 }]);
+const _tmpl$3 = /*#__PURE__*/ _$template([{ p: -1 }, { p: 0, t: 1, props: () => ({ children: ["middle"] }) }, { p: 0 }]);
+
+export function Mixed(props: { a: () => boolean; b: () => string }) {
+  return (
+    _$instance(_tmpl$3, (_n) => { const _r1 = _$region(_n[0], null); const _r2 = _$region(_n[0], _n[1]); const _r3 = _$region(_n[0], _r2); _$insert(_r3, () => props.a() && _$instance(_tmpl$1)); _$insert(_r2, () => props.b()); _$insert(_r1, () => props.a() ? _$instance(_tmpl$2) : null); })
+  );
+}

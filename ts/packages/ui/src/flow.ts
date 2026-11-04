@@ -2,9 +2,9 @@
 // For and Index. Each branch or row has an owner of its own, so replacing it disposes exactly
 // what it created.
 
-import { ComponentElement, MOUNT, createComponent, mountInto, type Component, type Element, type Mountable } from "./elements.js";
+import { ComponentElement, createComponent, mountInto, type Component, type Element, type Mountable } from "./elements.js";
 import { Owner, computed, dispose, getOwner, handleError, renderEffect, runWithOwner, signal, untrack, type Signal } from "./reactive.js";
-import { NO_SLOT, Region, firstNode, nodeAfter } from "./regions.js";
+import { MOUNT, NO_SLOT, Region, firstNode, nodeAfter } from "./regions.js";
 import { splitProps } from "./props.js";
 
 type Falsy = false | null | undefined | 0 | "";

@@ -33,9 +33,20 @@
       ],
       "@axe/ui": [
         "./packages/ui/src/index.ts"
+      ],
+      "@axe/ui/jsx-runtime": [
+        "./packages/ui/src/jsx-runtime.ts"
+      ],
+      "@axe/ui/src/*": [
+        "./packages/ui/src/*"
+      ],
+      "@axe/tests/*": [
+        "../tests/*"
       ]
     },
-    "resolveJsonModule": true
+    "resolveJsonModule": true,
+    "jsx": "preserve",
+    "jsxImportSource": "@axe/ui"
   },
   "include": [
     "packages/*/src/**/*.ts",
@@ -44,6 +55,14 @@
     "../examples/**/*.ts",
     "../tests/ts/**/*.ts",
     "../bench/**/*.ts",
-    "../tests/ui/*.json"
+    "../tests/ui/*.json",
+    "packages/*/src/**/*.tsx",
+    "packages/*/test/**/*.tsx",
+    "../examples/**/*.tsx",
+    "../tests/**/*.tsx",
+    "../bench/**/*.tsx"
+  ],
+  "exclude": [
+    "../tests/tsx/**"
   ]
 }

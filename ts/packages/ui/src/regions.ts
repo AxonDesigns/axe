@@ -11,6 +11,10 @@ import { NO_SLOT, slotCreate, slotDestroy, slotMove, type SlotParent } from "@ax
 
 export { NO_SLOT };
 
+/** @internal The method an element mounts with (elements.ts). Here, in a module that imports
+ * nothing of @axe/ui, so classes in any module of the package can be keyed by it. */
+export const MOUNT = Symbol("mount");
+
 /** A node in a region. */
 class NodeEntry {
   prev: Entry | null = null;
@@ -52,6 +56,12 @@ export class Region {
     const slot = slotCreate(this.parent, nodeAfter(this));
     this.link(new NodeEntry(slot, this));
     return slot;
+  }
+
+  /** Records `slot`, a node just created at the end of this region (by a template instance),
+   * as its last node. */
+  adopt(slot: number): void {
+    this.link(new NodeEntry(slot, this));
   }
 
   /** @internal Appends `e` (a fresh entry of this region). */

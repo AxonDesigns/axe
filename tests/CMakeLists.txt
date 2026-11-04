@@ -283,13 +283,18 @@ function(axe_ts_test name file)
     add_test(NAME ts_${name} COMMAND axe-test-js "${js}")
     set_tests_properties(ts_${name} PROPERTIES ENVIRONMENT "UI_GPU=software" TIMEOUT 300)
 endfunction()
-file(GLOB _ts_tests CONFIGURE_DEPENDS "${PROJECT_SOURCE_DIR}/ts/packages/*/test/*.test.ts")
+file(GLOB _ts_tests CONFIGURE_DEPENDS "${PROJECT_SOURCE_DIR}/ts/packages/*/test/*.test.ts" "${PROJECT_SOURCE_DIR}/ts/packages/*/test/*.test.tsx")
 foreach(file IN LISTS _ts_tests)
     get_filename_component(name "${file}" NAME_WE)
     axe_ts_test(${name} "${file}")
 endforeach()
 
 add_test(NAME ts_typecheck COMMAND "${AXE_TSC}" -p "${PROJECT_SOURCE_DIR}/ts/tsconfig.json")
+
+# axe-tsx's snapshots (tests/tsx/cases): TSX in, generated code and diagnostics out.
+add_test(NAME tsx_snapshots
+         COMMAND python3 -I "${PROJECT_SOURCE_DIR}/tools/axe-tsx/snapshots.py" --tsx "${CMAKE_BINARY_DIR}/tools/axe-tsx")
+set_tests_properties(tsx_snapshots PROPERTIES DEPENDS axe-tsx)
 
 # The C and TypeScript layout_cards draw byte-identical images at the same times, under both
 # schedulers (the shuffles, theme switches and direction changes included).

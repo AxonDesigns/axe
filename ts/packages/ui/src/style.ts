@@ -208,7 +208,8 @@ export function inlineEntries(input: InlineStyle): StyleEntry[] {
 
 // ---- Applying a style prop ----------------------------------------------------------------------
 
-function collect(v: unknown, ids: number[], inline: StyleEntry[]): void {
+/** @internal Style ids and inline entries of a style prop value, in order. */
+export function collect(v: unknown, ids: number[], inline: StyleEntry[]): void {
   if (v === null || v === undefined || v === false) return;
   if (v instanceof Style) {
     ids.push(v.id);

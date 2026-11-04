@@ -1,5 +1,5 @@
 /build/
-/third_party/wgpu-native-vendor/
+/third_party/rust-vendor/
 *.ppm
 /third_party/chrome-headless-shell/
 __pycache__/

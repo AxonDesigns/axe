@@ -4,8 +4,8 @@
 
 import { app, computed, effect, onCleanup, root, signal, untrack } from "@axe/ui";
 import { Hook, expect, hooks, nextTurn, test } from "@axe/testing";
-import { dispose, getOwner, renderEffect } from "../src/reactive.js";
-import { flush } from "../src/reactive.js";
+import { dispose, getOwner, renderEffect } from "@axe/ui/src/reactive.js";
+import { flush } from "@axe/ui/src/reactive.js";
 
 const exceptions = () => hooks().filter((h) => h.kind === Hook.exception);
 

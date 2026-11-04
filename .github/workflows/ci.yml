@@ -59,7 +59,7 @@ jobs:
         if: always() && steps.setup.outputs.vendor-key != '' && steps.setup.outputs.vendor-hit != 'true'
         uses: actions/cache/save@v4
         with:
-          path: third_party/wgpu-native-vendor
+          path: third_party/rust-vendor
           key: ${{ steps.setup.outputs.vendor-key }}
 
       - name: Save wgpu-native build
@@ -125,7 +125,7 @@ jobs:
         if: always() && steps.setup.outputs.vendor-key != '' && steps.setup.outputs.vendor-hit != 'true'
         uses: actions/cache/save@v4
         with:
-          path: third_party/wgpu-native-vendor
+          path: third_party/rust-vendor
           key: ${{ steps.setup.outputs.vendor-key }}
 
       - name: Save wgpu-native build

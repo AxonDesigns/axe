@@ -28,22 +28,50 @@ foreach(_pkg IN LISTS _ts_packages)
 endforeach()
 
 # What every bundle depends on: the packages' sources and the npm lockfile.
-file(GLOB_RECURSE AXE_TS_PACKAGE_SOURCES CONFIGURE_DEPENDS "${AXE_TS_DIR}/packages/*/src/*.ts")
+file(GLOB_RECURSE AXE_TS_PACKAGE_SOURCES CONFIGURE_DEPENDS "${AXE_TS_DIR}/packages/*/src/*.ts" "${AXE_TS_DIR}/packages/*/src/*.tsx")
 set(AXE_TS_DEPENDS ${AXE_TS_PACKAGE_SOURCES} "${AXE_TS_DIR}/package-lock.json")
 
-# axe_ts_bundle(<output.js> <entry.ts> [DEPENDS files...])
-# Bundles `entry` and everything it imports into one ES module, except the host's modules.
+# axe_ts_bundle(<output.js> <entry.ts|tsx> [ROOT dir] [DEPENDS files...])
+# Bundles `entry` and everything it imports into one ES module, except the host's modules. When
+# the app's sources (ROOT, the entry's directory by default) include TSX, axe-tsx compiles them
+# first into a mirror of ROOT in the build tree (docs/ui.md, "How TSX compiles"), which esbuild
+# bundles; *.check.ts(x) files are type tests and stay out. Imports leaving ROOT must go through
+# package names (tsconfig paths), not relative paths.
 function(axe_ts_bundle output entry)
-    cmake_parse_arguments(ARG "" "" "DEPENDS" ${ARGN})
+    cmake_parse_arguments(ARG "" "ROOT" "DEPENDS" ${ARGN})
     get_filename_component(entry_dir "${entry}" DIRECTORY)
-    file(GLOB_RECURSE local_sources CONFIGURE_DEPENDS "${entry_dir}/*.ts")
+    set(root "${entry_dir}")
+    if(ARG_ROOT)
+        set(root "${ARG_ROOT}")
+    endif()
+    file(GLOB_RECURSE local_sources CONFIGURE_DEPENDS "${root}/*.ts" "${root}/*.tsx")
+    list(FILTER local_sources EXCLUDE REGEX "\\.check\\.tsx?$")
+    set(tsx_sources ${local_sources})
+    list(FILTER tsx_sources INCLUDE REGEX "\\.tsx$")
+    set(bundle_entry "${entry}")
+    set(mirror_depends)
+    if(tsx_sources)
+        get_filename_component(name "${output}" NAME_WE)
+        set(mirror "${CMAKE_CURRENT_BINARY_DIR}/tsx/${name}")
+        file(RELATIVE_PATH rel "${root}" "${entry}")
+        set(bundle_entry "${mirror}/${rel}")
+        set(stamp "${mirror}.stamp")
+        add_custom_command(
+            OUTPUT "${stamp}"
+            COMMAND axe-tsx --root "${root}" --out "${mirror}" ${local_sources}
+            COMMAND "${CMAKE_COMMAND}" -E touch "${stamp}"
+            DEPENDS axe-tsx ${local_sources}
+            COMMENT "Compiling the TSX of ${name}"
+            VERBATIM)
+        set(mirror_depends "${stamp}")
+    endif()
     add_custom_command(
         OUTPUT "${output}"
-        COMMAND "${AXE_ESBUILD}" "${entry}" --bundle --format=esm --platform=neutral --target=es2023
+        COMMAND "${AXE_ESBUILD}" "${bundle_entry}" --bundle --format=esm --platform=neutral --target=es2023
                 --keep-names --external:axe:host --external:axe:test --external:axe:stall --log-level=warning
                 "--tsconfig=${AXE_TS_DIR}/tsconfig.json"
                 "--define:AXE_SOURCE_DIR=\"${PROJECT_SOURCE_DIR}\"" "--outfile=${output}"
-        DEPENDS "${entry}" ${local_sources} ${AXE_TS_DEPENDS} ${ARG_DEPENDS}
+        DEPENDS "${entry}" ${local_sources} ${mirror_depends} ${AXE_TS_DEPENDS} ${ARG_DEPENDS}
         WORKING_DIRECTORY "${AXE_TS_DIR}"
         COMMENT "Bundling ${entry}"
         VERBATIM)

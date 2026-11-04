@@ -5,7 +5,8 @@
   "description": "Signals, components and styles over @axe/core.",
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./jsx-runtime": "./src/jsx-runtime.ts"
   },
   "dependencies": {
     "@axe/core": "0.0.0",

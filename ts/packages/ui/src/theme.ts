@@ -7,6 +7,7 @@ import { Style, type TokenDecl } from "@axe/core";
 import { context, use } from "./context.js";
 import { View, type Element } from "./elements.js";
 import { style, type StyleInput, type StyleProp } from "./style.js";
+import { provideTheme } from "./template.js";
 
 export interface ThemeDefaults {
   readonly View?: Style;
@@ -57,6 +58,7 @@ export interface ThemeProviderProps {
  * theme's default styles for the View and Text elements inside it. */
 export function ThemeProvider(props: ThemeProviderProps): Element {
   const t = props.theme;
+  provideTheme(t);
   return ThemeContext.Provider({
     value: t,
     get children() {

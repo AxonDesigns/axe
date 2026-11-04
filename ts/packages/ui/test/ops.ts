@@ -3,7 +3,7 @@
 import { Op } from "@axe/wire";
 import { app, type Surface } from "@axe/core";
 import { commands } from "@axe/core/internal";
-import { flush } from "../src/reactive.js";
+import { flush } from "@axe/ui/src/reactive.js";
 
 export interface DecodedOp {
   readonly op: string;

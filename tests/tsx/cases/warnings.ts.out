@@ -1,0 +1,16 @@
+// A component destructuring its props reads them once: a warning pointing to the rule.
+import { Text } from "@axe/ui";
+import { applyText as _$applyText, instance as _$instance, template as _$template } from "@axe/ui/jsx-runtime";
+const _tmpl$1 = /*#__PURE__*/ _$template([{ p: -1, t: 1 }]);
+const _tmpl$2 = /*#__PURE__*/ _$template([{ p: -1, t: 1 }]);
+
+export function Greeting({ name }: { name: string }) {
+  return _$instance(_tmpl$1, (_n) => { _$applyText(_n[0], { children: ["Hello ", name] }); });
+}
+
+export const Arrow = ({ label }: { label: string }) => _$instance(_tmpl$2, (_n) => { _$applyText(_n[0], { children: [label] }); });
+
+// Not components: no warning.
+export function helper({ x }: { x: number }) {
+  return x * 2;
+}

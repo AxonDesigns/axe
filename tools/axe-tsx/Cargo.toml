@@ -1,0 +1,25 @@
+[package]
+name = "axe-tsx"
+version = "0.0.0"
+edition = "2024"
+publish = false
+description = "Compiles Axe's TSX into fine-grained @axe/ui calls (docs/ui.md, \"How TSX compiles\")."
+license = "UNLICENSED"
+
+[[bin]]
+name = "axe-tsx"
+path = "src/main.rs"
+
+[dependencies]
+oxc_allocator = "=0.157.0"
+oxc_ast = "=0.157.0"
+oxc_ast_visit = "=0.157.0"
+oxc_parser = { version = "=0.157.0", default-features = false }
+oxc_semantic = "=0.157.0"
+oxc_span = "=0.157.0"
+oxc_syntax = "=0.157.0"
+oxc_sourcemap = "=9.0.0"
+
+[profile.release]
+opt-level = 3
+# No LTO: a build-time tool, and LTO costs memory and link time on the machines that build it.

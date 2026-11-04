@@ -22,3 +22,7 @@ add_executable(axe-run axe-run/main.c)
 target_compile_definitions(axe-run PRIVATE _DEFAULT_SOURCE)
 target_link_libraries(axe-run PRIVATE ui)
 ui_target_warnings(axe-run)
+
+# axe-tsx compiles TSX for the bundler (docs/ui.md, "How TSX compiles"): a Rust tool on oxc,
+# built through Corrosion from the vendored crates, like wgpu-native, and always in release.
+corrosion_import_crate(MANIFEST_PATH ${PROJECT_SOURCE_DIR}/tools/axe-tsx/Cargo.toml PROFILE release LOCKED)

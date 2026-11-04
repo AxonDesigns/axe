@@ -396,8 +396,9 @@ export function slotAlive(slot: number): boolean {
   return alive[slot] === 1;
 }
 
-/** A node's children, in order. */
+/** A node's children, in order. RangeError for a slot that holds no node. */
 export function slotChildren(slot: number): number[] {
+  if (!(slot >= 0 && slot < capacity && alive[slot])) throw new RangeError(`slot ${slot} holds no node`);
   const out: number[] = [];
   for (let c = firstChild[slot]!; c !== NONE; c = nextSibling[c]!) out.push(c);
   return out;
@@ -435,6 +436,49 @@ export function slotSetState(slot: number, mask: number, value: number): void {
 
 export function slotSetText(slot: number, text: string, options: TextOptions): void {
   setText(slotHandle(slot), text, options);
+}
+
+/** Allocates a slot per node of a tree and links them in the mirror, writing no op:
+ * `parents[i]` is node i's parent's index (-1 for a root, which goes under `parent` before
+ * `before`). The slots, in the tree's order. */
+export function slotAllocTree(parents: ArrayLike<number>, parent: SlotParent, before: number): number[] {
+  const n = parents.length;
+  const slots = new Array<number>(n);
+  for (let i = 0; i < n; i++) {
+    const slot = allocSlot();
+    firstChild[slot] = lastChild[slot] = NONE;
+    slots[i] = slot;
+  }
+  const top = typeof parent === "number" ? parent : SURFACE;
+  for (let i = 0; i < n; i++) {
+    const p = parents[i]!;
+    if (p < 0) link(slots[i]!, top, before);
+    else link(slots[i]!, slots[p]!, NONE);
+  }
+  return slots;
+}
+
+/** An instance of template `template` (docs/templates.md): slotAllocTree's slots, and one
+ * instantiate_template naming them. */
+export function slotInstantiate(template: number, parents: ArrayLike<number>, parent: SlotParent, before: number): number[] {
+  const slots = slotAllocTree(parents, parent, before);
+  const nodes = new Array<{ node: Handle }>(slots.length);
+  for (let i = 0; i < slots.length; i++) nodes[i] = { node: slotHandle(slots[i]!) };
+  try {
+    commands.instantiateTemplate(template, parentHandle(parent), before === NONE ? NULL_HANDLE : slotHandle(before), nodes);
+  } catch (e) {
+    for (let i = slots.length - 1; i >= 0; i--) {
+      unlink(slots[i]!);
+      freeSlot(slots[i]!);
+    }
+    throw e;
+  }
+  return slots;
+}
+
+/** The handle ops name a parent by. */
+export function slotParentHandle(parent: SlotParent): Handle {
+  return parentHandle(parent);
 }
 
 export { NONE as NO_SLOT };

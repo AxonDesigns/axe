@@ -1,0 +1,13 @@
+// A component: a template for its static structure, bindings for what reads signals.
+import { Text, View, style, type Element } from "@axe/ui";
+import { bindText as _$bindText, insert as _$insert, instance as _$instance, region as _$region, template as _$template } from "@axe/ui/jsx-runtime";
+const _tmpl$1 = /*#__PURE__*/ _$template([{ p: -1, props: () => ({ style: card }) }, { p: 0, t: 1, props: () => ({ style: title }) }, { p: 0, t: 1 }]);
+
+const card = style({ padding: 8 });
+const title = style({ fontSize: 18 });
+
+export function Card(props: { title: string; count: () => number; children?: Element }) {
+  return (
+    _$instance(_tmpl$1, (_n) => { _$bindText(_n[1], () => ({ children: [props.title] })); _$bindText(_n[2], () => ({ children: ["Count: ", props.count()] })); const _r1 = _$region(_n[0], null); _$insert(_r1, () => props.children); })
+  );
+}

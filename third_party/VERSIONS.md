@@ -6,7 +6,8 @@
 | --- | --- | --- | --- |
 | wgpu-native | v29.0.1.1 (`6aed509`) | git submodule `third_party/wgpu-native` | MIT / Apache-2.0 |
 | webgpu-headers | `673658b` (wgpu-native's submodule) | `third_party/wgpu-native/ffi/webgpu-headers` | BSD-3-Clause |
-| Rust crates for wgpu-native | pinned by its `Cargo.lock` | `tools/vendor-rust.sh` -> `third_party/wgpu-native-vendor/` (gitignored) | permissive (see `cargo deny` config upstream) |
+| Rust crates for wgpu-native | pinned by its `Cargo.lock` | `tools/vendor-rust.sh` -> `third_party/rust-vendor/` (gitignored) | permissive (see `cargo deny` config upstream) |
+| oxc 0.157.0 and its crates, for axe-tsx (build time only) | pinned by `tools/axe-tsx/Cargo.lock` (90 crates) | the same script and directory | MIT, Apache-2.0, BSD-3-Clause, Unicode-3.0 (`self_cell` is Apache-2.0 OR GPL-2.0-only: taken as Apache-2.0) |
 | Corrosion | v0.6.1 (`1499b14`) | copied into `third_party/corrosion` | MIT |
 | HarfBuzz | 15.0.0 (`35f656a`) | git submodule `third_party/harfbuzz`, built by `third_party/harfbuzz.cmake` | Old MIT |
 | QuickJS-ng | v0.18.0 (`d7215b0`) | git submodule `third_party/quickjs-ng`, built by `third_party/quickjs.cmake` (engine only: no `quickjs-libc`, no `qjs`/`qjsc`) | MIT |

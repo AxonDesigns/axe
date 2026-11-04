@@ -4,6 +4,7 @@
 
 import {
   MAX_PAYLOAD,
+  type CommandWriter,
   TextField,
   Utf8OffsetMap,
   encodeUtf8,
@@ -157,7 +158,9 @@ function relabel(s: TextStyle, families: number): TextStyle {
   return s.language ? { ...s, language: s.language + families } : s;
 }
 
-export function setText(node: Handle, text: string, o: TextOptions): void {
+/** Writes `node`'s set_text (and append_text ops) into `commands`, or into `w` (a template's
+ * ops). */
+export function setText(node: Handle, text: string, o: TextOptions, w: CommandWriter = commands): void {
   const bytes = encodeUtf8(text);
   check(bytes.length <= MAX_TEXT, "length (at most 16 MiB)");
   const strings = new Strings();
@@ -205,9 +208,9 @@ export function setText(node: Handle, text: string, o: TextOptions): void {
   const chunk = Math.min(bytes.length, room);
 
   // Text longer than one op continues in append_text ops; all of it applies, or none.
-  const mark = commands.mark();
+  const mark = w.mark();
   try {
-    commands.setText(
+    w.setText(
       {
         node,
         textBytes: bytes.length,
@@ -227,9 +230,9 @@ export function setText(node: Handle, text: string, o: TextOptions): void {
     );
     const max = (MAX_PAYLOAD - 12) & ~3;
     for (let sent = chunk; sent < bytes.length; sent += max)
-      commands.appendText(node, bytes.subarray(sent, Math.min(bytes.length, sent + max)));
+      w.appendText(node, bytes.subarray(sent, Math.min(bytes.length, sent + max)));
   } catch (e) {
-    commands.rollback(mark);
+    w.rollback(mark);
     throw e;
   }
 }

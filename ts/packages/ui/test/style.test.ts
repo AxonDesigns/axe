@@ -26,7 +26,7 @@ import {
 } from "@axe/ui";
 import { expect, test } from "@axe/testing";
 import { sugarProp } from "@axe/core/internal";
-import cases from "../../../../tests/ui/style_sugar_cases.json";
+import cases from "@axe/tests/ui/style_sugar_cases.json";
 import { capture, captureBytes, captureFlush, only, surface } from "./ops.js";
 
 type Case = { property: string; input: unknown; value?: Record<string, unknown>; error?: string };

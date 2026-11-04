@@ -1,0 +1,2 @@
+tests/tsx/cases/warnings.tsx:4:26: warning: Greeting destructures its props: props that change won't update it; read them as props.x where they're used (docs/ui.md, "Props")
+tests/tsx/cases/warnings.tsx:8:23: warning: Arrow destructures its props: props that change won't update it; read them as props.x where they're used (docs/ui.md, "Props")

@@ -29,8 +29,8 @@ import {
 } from "@axe/ui";
 import { Hook, expect, hooks, test } from "@axe/testing";
 import { slotAlive, slotChildren } from "@axe/core/internal";
-import { longestIncreasing } from "../src/flow.js";
-import { flush } from "../src/reactive.js";
+import { longestIncreasing } from "@axe/ui/src/flow.js";
+import { flush } from "@axe/ui/src/reactive.js";
 import { capture, captureFlush, only, surface } from "./ops.js";
 
 const exceptions = () => hooks().filter((h) => h.kind === Hook.exception);

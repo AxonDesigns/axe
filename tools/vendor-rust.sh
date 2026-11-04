@@ -1,7 +1,8 @@
 #!/bin/sh
-# Vendors the Rust crates wgpu-native depends on into third_party/wgpu-native-vendor/
-# (gitignored). Crate versions and checksums are pinned by the submodule's Cargo.lock;
-# builds then run offline against .cargo/config.toml. Re-run after bumping the submodule.
+# Vendors the Rust crates of every Rust build into third_party/rust-vendor/ (gitignored):
+# wgpu-native's, pinned by the submodule's Cargo.lock, and axe-tsx's, pinned by
+# tools/axe-tsx/Cargo.lock. Builds then run offline against .cargo/config.toml. Re-run after
+# bumping the submodule or changing axe-tsx's dependencies.
 set -eu
 root=$(cd "$(dirname "$0")/.." && pwd)
 cd "$root"
@@ -12,5 +13,6 @@ git -C third_party/wgpu-native submodule update --init ffi/webgpu-headers
 cd /
 CARGO_NET_OFFLINE=false cargo +1.97 vendor --locked \
     --manifest-path "$root/third_party/wgpu-native/Cargo.toml" \
-    "$root/third_party/wgpu-native-vendor" > /dev/null
-echo "vendored crates into third_party/wgpu-native-vendor"
+    --sync "$root/tools/axe-tsx/Cargo.toml" \
+    "$root/third_party/rust-vendor" > /dev/null
+echo "vendored crates into third_party/rust-vendor"

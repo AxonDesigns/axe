@@ -3,7 +3,7 @@
 replace-with = "vendored-sources"
 
 [source.vendored-sources]
-directory = "third_party/wgpu-native-vendor"
+directory = "third_party/rust-vendor"
 
 [net]
 offline = true

@@ -258,7 +258,8 @@ int main(int argc, char **argv) {
     runner r = {0};
     mtx_init(&r.lock, mtx_plain);
     ui_script_internal internal = {.setup = setup, .user = &r, .performance_from_animation_clock = true};
-    ui_script_desc script = {.bundle_path = bundle, .internal = &internal};
+    // A runaway test fails on JS's out-of-memory error instead of taking the machine's memory.
+    ui_script_desc script = {.bundle_path = bundle, .internal = &internal, .memory_limit = (size_t)512 << 20};
     static const char *const fonts[] = {AXE_SOURCE_DIR "/tests/fonts/NotoSans-VF.ttf"};
     ui_app_desc desc = {
         .scheduler = scheduler,

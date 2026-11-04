@@ -17,25 +17,43 @@ import {
 } from "@axe/core/internal";
 import type { Style, TokenDecl, TextAlign, TextDirection, TextSlant, ColorString } from "@axe/core";
 import { Owner, dispose, getOwner, handleError, renderEffect, runWithOwner, untrack } from "./reactive.js";
-import { Region } from "./regions.js";
+import { MOUNT, Region } from "./regions.js";
 import { styleBinding, type StyleProp } from "./style.js";
 import { themeDefaults } from "./theme.js";
 
-/** @internal */
-export const MOUNT = Symbol("mount");
+// MOUNT lives in regions.ts, which imports nothing of @axe/ui: modules in an import cycle with
+// this one (theme, template) define classes keyed by it while this one may not be evaluated yet.
+export { MOUNT };
 
 /** Something that creates nodes where it is inserted. */
 export interface Mountable {
   [MOUNT](region: Region): void;
 }
 
+declare const JSX_ELEMENT: unique symbol;
+/** The type of every JSX expression (TypeScript gives them all one type): a View, a Text, a
+ * Span or a component alike. The transform checks what types can't (a node inside a Text, a
+ * Span outside one). */
+export interface JsxElement {
+  readonly [JSX_ELEMENT]: true;
+}
+
 /** What a component returns, and what a View holds: nodes and components, lists of them,
  * functions giving them (dynamic content), and nothing (null, undefined, booleans). No text:
  * text goes in Text. */
-export type Element = Mountable | null | undefined | boolean | readonly Element[] | (() => Element);
+export type Element = Mountable | JsxElement | null | undefined | boolean | readonly Element[] | (() => Element);
 
 /** What a Text holds: strings, numbers, Spans, lists of them, and functions giving them. */
-export type TextContent = string | number | SpanElement | null | undefined | boolean | readonly TextContent[] | (() => TextContent);
+export type TextContent =
+  | string
+  | number
+  | SpanElement
+  | JsxElement
+  | null
+  | undefined
+  | boolean
+  | readonly TextContent[]
+  | (() => TextContent);
 
 /** A function component: it runs once; props whose values can change are getters (read them
  * where they are used, not when the component starts). */
@@ -241,9 +259,14 @@ function color(c: SpanProps["color"]): readonly [number, number, number, number]
   return typeof c === "string" ? parseColor(c, "color").color : c;
 }
 
-interface Paragraph {
+export interface Paragraph {
   text: string;
   spans: TextSpanOptions[];
+}
+
+/** @internal A Text's content as text and spans. */
+export function gatherText(c: unknown, p: Paragraph): void {
+  gather(c, p, false);
 }
 
 function gather(c: unknown, p: Paragraph, inSpan: boolean): void {

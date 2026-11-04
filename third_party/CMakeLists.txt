@@ -18,7 +18,7 @@ if(NOT EXISTS "${_wgpu_dir}/Cargo.toml")
     message(FATAL_ERROR "third_party/wgpu-native is missing: run `git submodule update --init` "
                         "and tools/vendor-rust.sh")
 endif()
-if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/wgpu-native-vendor")
+if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/rust-vendor")
     message(FATAL_ERROR "Vendored Rust crates are missing: run tools/vendor-rust.sh")
 endif()
 
