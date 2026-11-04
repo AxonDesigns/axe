@@ -1,28 +1,28 @@
 {
   "threshold_percent": 2,
-  "reason": "Milestone 3a.1/3a.2: token scopes (bench_layout/scope added; startup_source +2.86% for the larger @axe/core and @axe/wire bundle, intended); startup cases run the frozen bench/apps/cards",
+  "reason": "Milestone 3b.1: @axe/core grew (value sugar, slot API): startup_source +5.41%, intended; setText without a closure per call: script_encode -5.36%",
   "source": {
-    "run_id": 41861768340,
+    "run_id": 41903259172,
     "run_attempt": 1,
     "workflow": "ci",
     "event": "workflow_dispatch",
-    "ref": "m3a.1-token-scopes",
-    "commit": "035dfdc55c5be3d85c8c7fdfc4bf6727bd1865b6",
-    "url": "https://github.com/AxonDesigns/axe/actions/runs/41861768340"
+    "ref": "m3b.1-signals",
+    "commit": "574e571a8e699ed449c34fd0f548374c6a90004f",
+    "url": "https://github.com/AxonDesigns/axe/actions/runs/41903259172"
   },
   "counts": {
     "bench_layout/full_cold": 95100610,
     "bench_layout/full_warm": 41165845,
-    "bench_layout/incremental": 5885267,
+    "bench_layout/incremental": 5885287,
     "bench_layout/inherited": 4642170,
-    "bench_layout/scope": 3345805,
+    "bench_layout/scope": 3345793,
     "bench_layout/token": 5444135,
-    "bench_script/script_dispatch": 36289746,
-    "bench_script/script_encode": 476442835,
-    "bench_script/startup_bytecode": 14431247,
-    "bench_script/startup_source": 37414572,
+    "bench_script/script_dispatch": 36909183,
+    "bench_script/script_encode": 450923995,
+    "bench_script/startup_bytecode": 14403967,
+    "bench_script/startup_source": 39437728,
     "bench_text/raster": 24977607,
     "bench_text/relayout": 6048054,
-    "bench_text/shape": 65514473
+    "bench_text/shape": 65490303
   }
 }
