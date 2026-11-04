@@ -166,17 +166,30 @@ typedef struct ui_style_decl {
     ui_value value;
 } ui_style_decl;
 
+// A token's value within a scope (docs/styles.md, "Token scopes"): what a node and its
+// descendants read for the token instead of its global value. The value is one a token can
+// hold (another token included); UI_VALUE_UNSET only in ui_cmd_set_token_overrides, where it
+// removes the node's own declaration.
+typedef struct ui_token_decl {
+    uint32_t token; // not 0
+    ui_value value;
+} ui_token_decl;
+
 // A block of declarations that applies when the node has every state in `states` (0: the
-// base block, always).
+// base block, always). Its token declarations apply to the node and its subtree while the
+// block does.
 typedef struct ui_style_block_desc {
     uint8_t states;
     const ui_style_decl *decls;
     uint32_t count;
+    const ui_token_decl *tokens;
+    uint32_t token_count;
 } ui_style_block_desc;
 
 // Defines style `id` (not 0), or redefines it: every node using it is resolved again.
 // UI_ERR_INVALID_ARGUMENT for an unknown property, a kind the property doesn't accept, an
-// out-of-range value, or more than 255 blocks or 65535 declarations in a block.
+// out-of-range value, a token declaration with a 0 token or a value a token can't hold, or
+// more than 65535 blocks, declarations or token declarations in a block.
 ui_result ui_cmd_define_style(ui_cmd_writer *w, uint32_t id, const ui_style_block_desc *blocks,
                               uint32_t block_count);
 // Removes style `id`; nodes listing it resolve as if it weren't there (until redefined).
@@ -193,6 +206,11 @@ ui_result ui_cmd_set_props(ui_cmd_writer *w, ui_handle node, const ui_style_decl
 // token (resolved when used; a cycle or a missing token makes the declaration that uses it
 // count as absent). UI_VALUE_UNSET removes the token. Every node using it is resolved again.
 ui_result ui_cmd_set_token(ui_cmd_writer *w, uint32_t id, ui_value value);
+// Sets the node's own token declarations (docs/styles.md, "Token scopes"), which win over
+// those of its styles; UI_VALUE_UNSET removes one. Writes to the same token replace the
+// earlier declaration. UI_ERR_INVALID_ARGUMENT for a 0 token or a value a token can't hold.
+ui_result ui_cmd_set_token_overrides(ui_cmd_writer *w, ui_handle node, const ui_token_decl *decls,
+                                     uint32_t count);
 // Sets the node's states selected by `mask` to those in `value` (ui_state bits).
 ui_result ui_cmd_set_state(ui_cmd_writer *w, ui_handle node, uint32_t mask, uint32_t value);
 

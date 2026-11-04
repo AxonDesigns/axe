@@ -115,9 +115,11 @@ rounded: TypeScript decodes a `time` to a `number` with rounding allowed, while 
 
 **What a field holds** (`=`): `count(<tail item>)` (the item's length in elements or bytes);
 `header` (the fixed part's size, written by the encoder; 0 read as the original size);
-`header(0)` (the same, but this version writes 0); `stride(<tail item>)` (the size of each
-record of a tail array; 0 read as the record's original size); `size` and `size/4` (a
-record's own size in bytes or words).
+`header(0)` (the same, but this version writes 0 and only the original fields while every
+appended field is 0, as an older writer did, and the whole fixed part otherwise:
+`_written_size` says which); `stride(<tail item>)` (the size of each record of a tail array;
+0 read as the record's original size); `size` and `size/4` (a record's own size in bytes or
+words).
 
 **Checks** are the values the core accepts; anything else drops the op, the generated C
 `_check` reports it, and the TypeScript encoder throws a RangeError before writing:
@@ -151,6 +153,11 @@ After `tail`, the variable data in order:
 - An array of a record with `= size` (style blocks and entries) is walked record by record.
 - An array of a fixed record uses the op's `stride` field when it has one.
 - `pad 4` zero-pads to a multiple of 4; `multiple 4` requires the length to be one.
+- **Parallel arrays** share a count: `count(<first>)` names the first, and the others give
+  the same field in brackets (`tokens u32[n]`, then `token_values style_entry[n]`). The
+  encoders check that their lengths agree.
+- In TypeScript, the arrays an appended count counts are optional in a record (absent: none),
+  so code written before them compiles unchanged.
 - Without a `header` field, the variable data starts at the original size. Such an op can't
   grow its fixed part: its appended fields would have to follow the variable data.
 
@@ -179,16 +186,36 @@ within one schema:
   (`reserved` padding aside), and nothing may straddle it.
 - A field with `since` either takes over reserved bytes inside the original size or is
   appended after it. Either way its default is zero bytes: `default` other than 0 is an
-  error; an enum field needs a value 0; a count or size can't be appended, since 0 would not
-  mean "what an older writer meant".
+  error; an enum field needs a value 0; a size can't be appended, since 0 would not mean
+  "what an older writer meant".
+- An appended count is allowed when what it counts is new variable data: arrays after every
+  item an original field sizes, in a record whose original fields include its header field.
+  Then 0, "no elements", is what an older writer meant.
 - `since` must name a change listed under `changes`.
 
 Between versions, `--compat-base REF` compares the schema with the one at git `REF`
 (the merge base, in review): no op, event, record, enum value or style property may be
 removed or renumbered; every earlier field must keep its name, offset, type and size, except
 reserved bytes that a `since` field took over; fields past an earlier size must have
-`since`; original sizes and the order of variable data don't change. A version bump
-(`wire`) lifts these checks.
+`since` (reserved padding aside); original sizes and the order of variable data don't
+change. A version bump (`wire`) lifts these checks.
+
+### The older reader
+
+The rules say what an older reader does with a newer buffer; `tools/wire/old_reader.py`
+checks that it does. It builds `REF`'s reader (its generated codec and its
+`tests/wire/wire_dump.c`, from `git archive`) and runs the command fixtures added or changed
+since `REF` through it:
+
+```sh
+python3 -I tools/wire/old_reader.py --base REF [FIXTURE.bin ...]
+```
+
+Each fixture must be accepted (framing), every op the older reader knows must decode as this
+version's dump (`<fixture>.bin.txt`) says, without the lines describing data that reader
+doesn't know (`NEW_ONLY` in the script), and ops it doesn't know must be skipped as unknown.
+CI's `idl` job runs it against the PR's base or the previous commit, so a wire change comes
+with fixtures of what it adds (`test_wire_fixtures --write` dumps a new one).
 
 ## Using it for packages
 

@@ -1,6 +1,8 @@
 // The generated codec reads every fixture buffer as the hand-written code did before the IDL
 // (tests/wire/proof.md): each tests/wire/fixtures/<name>.bin is dumped and compared with the
 // <name>.bin.txt the pre-IDL code produced. cmd-* are command buffers, ev-* event buffers.
+// Fixtures added since (the token scopes' cmd-scope-*) were dumped by this code:
+//     test_wire_fixtures --write <name>.bin...   writes each <name>.bin.txt
 #include <dirent.h>
 #include <stdlib.h>
 #include <string.h>
@@ -58,10 +60,31 @@ static void test_fixtures(void) {
     }
     closedir(d);
     printf("%u command and %u event fixtures\n", commands, events);
-    CHECK(commands == 395 && events == 180); // the fixtures are all there
+    CHECK(commands == 398 && events == 180); // the fixtures are all there
 }
 
-int main(void) {
+// Writes the dump of each fixture given, for a new one (check what it says before committing).
+static int write_dumps(int argc, char **argv) {
+    for (int i = 0; i < argc; i++) {
+        size_t size;
+        char *data = slurp(argv[i], &size), path[4096];
+        const char *base = strrchr(argv[i], '/');
+        if (!data) return 1;
+        wire_text t = {0};
+        (!strncmp(base ? base + 1 : argv[i], "ev-", 3) ? wire_dump_events : wire_dump_commands)(
+            &t, (const uint8_t *)data, size);
+        snprintf(path, sizeof path, "%s.txt", argv[i]);
+        FILE *f = fopen(path, "wb");
+        if (!f || fwrite(t.data, 1, t.size, f) != t.size) return 1;
+        fclose(f);
+        wire_text_free(&t);
+        free(data);
+    }
+    return 0;
+}
+
+int main(int argc, char **argv) {
+    if (argc > 1 && !strcmp(argv[1], "--write")) return write_dumps(argc - 2, argv + 2);
     RUN(test_fixtures);
     return test_failures ? 1 : 0;
 }

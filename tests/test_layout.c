@@ -299,7 +299,7 @@ static void test_styles(void) {
     ui_cmd_set_token(f.w, 1, ui_px(100));
     ui_style_decl card[] = {{UI_STYLE_WIDTH, ui_token_ref(1)}, {UI_STYLE_HEIGHT, ui_px(40)}};
     ui_style_decl hover[] = {{UI_STYLE_PADDING_LEFT, ui_px(10)}, {UI_STYLE_PADDING_TOP, ui_percent(10)}};
-    ui_style_block_desc blocks[] = {{0, card, 2}, {UI_STATE_HOVER, hover, 2}};
+    ui_style_block_desc blocks[] = {{.decls = card, .count = 2}, {.states = UI_STATE_HOVER, .decls = hover, .count = 2}};
     CHECK(ui_cmd_define_style(f.w, 7, blocks, 2) == UI_OK);
     ui_cmd_create_node(f.w, node(1), f.surfaces[0]);
     props(&f, 1, &(ui_style_decl){UI_STYLE_ALIGN_ITEMS, ui_keyword(UI_FLEX_START)}, 1);
@@ -317,7 +317,7 @@ static void test_styles(void) {
     CHECK(rect_is(&f, 3, 10, 30, 5, 5)); // 10% of the containing block's width, 300
     ui_style_decl column[] = {{UI_STYLE_WIDTH, ui_px(60)}, {UI_STYLE_FLEX_DIRECTION, ui_keyword(UI_FLEX_COLUMN)},
                               {UI_STYLE_ALIGN_ITEMS, ui_keyword(UI_FLEX_CENTER)}};
-    CHECK(ui_cmd_define_style(f.w, 7, &(ui_style_block_desc){0, column, 3}, 1) == UI_OK); // redefined
+    CHECK(ui_cmd_define_style(f.w, 7, &(ui_style_block_desc){.decls = column, .count = 3}, 1) == UI_OK); // redefined
     frame(&f);
     CHECK(rect_is(&f, 2, 0, 0, 60, 5) && rect_is(&f, 3, 27.5f, 0, 5, 5));
     // Layout properties don't transition: geometry animates through layout animations.

@@ -1,0 +1,9 @@
+commands 136 bytes: valid
+op 1 size 16: node=00000001:1 parent=10000000:1
+op 20 size 56: node=00000001:1 count=3
+    token 3 kind=7 words=5 read=1 c=00000000 c=3f800000 c=00000000 c=3f800000 -> ok
+    token 4 kind=9 words=2 read=1 t=13 -> ok
+    token 5 kind=1 words=1 read=1 -> ok
+op 20 size 12: node=00000001:1 count=0
+op 20 size 20: node=00000001:1 count=1
+    token 3 kind=1 words=1 read=1 -> ok

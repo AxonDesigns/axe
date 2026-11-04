@@ -27,10 +27,11 @@ export const Op = {
   setState: 17,
   moveNode: 18,
   requestLayout: 19,
+  setTokenOverrides: 20,
 } as const;
 export type Op = (typeof Op)[keyof typeof Op];
 
-const opValues: ReadonlySet<number> = new Set([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]);
+const opValues: ReadonlySet<number> = new Set([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]);
 export function isOp(v: number): v is Op { return opValues.has(v); }
 
 export const EventType = {

@@ -193,6 +193,14 @@ target_link_libraries(test_style PRIVATE ui m)
 ui_target_warnings(test_style)
 add_test(NAME style COMMAND test_style)
 
+# Token scopes: nested, state blocks, use-site aliases, cycles, kinds, moves, transitions.
+add_executable(test_scopes test_scopes.c)
+target_include_directories(test_scopes PRIVATE ${PROJECT_SOURCE_DIR}/src)
+target_compile_definitions(test_scopes PRIVATE _DEFAULT_SOURCE)
+target_link_libraries(test_scopes PRIVATE ui m)
+ui_target_warnings(test_scopes)
+add_test(NAME scopes COMMAND test_scopes)
+
 # Layout against Chrome's results for the fixtures in tools/layout-fixtures.
 add_executable(test_layout_conformance test_layout_conformance.c layout/fixtures_generated.c)
 target_include_directories(test_layout_conformance PRIVATE ${PROJECT_SOURCE_DIR}/src ${CMAKE_CURRENT_SOURCE_DIR})

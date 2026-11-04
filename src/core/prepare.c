@@ -300,7 +300,7 @@ ui_prep_buffer *ui_prep_create(ui_preparer *p, const uint8_t *data, size_t size)
         styled |= op.opcode == UI_OP_DEFINE_STYLE || op.opcode == UI_OP_DESTROY_STYLE ||
                   op.opcode == UI_OP_SET_TOKEN || op.opcode == UI_OP_SET_STYLES ||
                   op.opcode == UI_OP_SET_PROPS || op.opcode == UI_OP_SET_STATE ||
-                  op.opcode == UI_OP_MOVE_NODE;
+                  op.opcode == UI_OP_MOVE_NODE || op.opcode == UI_OP_SET_TOKEN_OVERRIDES;
     }
     if (!texts && !fonts && !styled) return NULL;
     ui_prep_buffer *b = calloc(1, sizeof *b);

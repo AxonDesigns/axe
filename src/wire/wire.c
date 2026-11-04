@@ -318,18 +318,41 @@ static uint64_t decl_bytes(const ui_style_decl *decls, uint32_t count, bool over
     return count ? bytes : 1; // 1: valid and empty (no bytes are written)
 }
 
+// Bytes of token declarations (ids and entries), or 0 if any is invalid (1: valid and empty).
+static uint64_t token_decl_bytes(const ui_token_decl *decls, uint32_t count, bool override) {
+    uint64_t bytes = 0;
+    for (uint32_t i = 0; i < count; i++) {
+        const ui_value *v = &decls[i].value;
+        if (!decls[i].token || !(v->kind == UI_VALUE_UNSET ? override : ui_wire_style_token_value_valid(v)))
+            return 0;
+        bytes += 4u + 4u * ui_wire_style_value_words(v);
+    }
+    return count ? bytes : 1;
+}
+
+// Writes `count` token declarations: their ids, then their values as entries of property 0.
+static uint8_t *put_token_decls(uint8_t *p, const ui_token_decl *decls, uint32_t count) {
+    for (uint32_t i = 0; i < count; i++) p = ui_wire_put_u32(p, decls[i].token);
+    for (uint32_t i = 0; i < count; i++) p = ui_wire_style_entry_put(p, 0, &decls[i].value);
+    return p;
+}
+
 ui_result ui_cmd_define_style(ui_cmd_writer *w, uint32_t id, const ui_style_block_desc *blocks,
                               uint32_t block_count) {
     if (!id || block_count > UINT16_MAX || (block_count && !blocks)) return UI_ERR_INVALID_ARGUMENT;
     uint64_t size = 0;
     for (uint32_t b = 0; b < block_count; b++) {
-        if (blocks[b].count > UINT16_MAX || (blocks[b].count && !blocks[b].decls))
+        const ui_style_block_desc *d = &blocks[b];
+        if (d->count > UINT16_MAX || (d->count && !d->decls) || d->token_count > UINT16_MAX ||
+            (d->token_count && !d->tokens))
             return UI_ERR_INVALID_ARGUMENT;
-        uint64_t bytes = decl_bytes(blocks[b].decls, blocks[b].count, false);
-        if (!bytes) return UI_ERR_INVALID_ARGUMENT;
-        bytes = blocks[b].count ? bytes : 0;
-        if (UI_WIRE_STYLE_BLOCK_SIZE + bytes > UINT16_MAX) return UI_ERR_INVALID_ARGUMENT;
-        size += UI_WIRE_STYLE_BLOCK_SIZE + bytes;
+        uint64_t bytes = decl_bytes(d->decls, d->count, false);
+        uint64_t token_bytes = token_decl_bytes(d->tokens, d->token_count, false);
+        if (!bytes || !token_bytes) return UI_ERR_INVALID_ARGUMENT;
+        bytes = (d->count ? bytes : 0) + (d->token_count ? token_bytes : 0) +
+                ui_wire_style_block_written_size(&(ui_wire_style_block){.token_count = (uint16_t)d->token_count});
+        if (bytes > UINT16_MAX) return UI_ERR_INVALID_ARGUMENT;
+        size += bytes;
     }
     if (UI_WIRE_DEFINE_STYLE_SIZE + size > UI_WIRE_MAX_PAYLOAD) return UI_ERR_INVALID_ARGUMENT;
     uint8_t *p;
@@ -337,13 +360,16 @@ ui_result ui_cmd_define_style(ui_cmd_writer *w, uint32_t id, const ui_style_bloc
                                            (uint32_t)size, &p);
     if (r != UI_OK) return r;
     for (uint32_t b = 0; b < block_count; b++) {
-        uint32_t bytes = UI_WIRE_STYLE_BLOCK_SIZE;
-        for (uint32_t i = 0; i < blocks[b].count; i++)
-            bytes += 4u * ui_wire_style_value_words(&blocks[b].decls[i].value);
-        p = ui_wire_style_block_write(p, &(ui_wire_style_block){.bytes = (uint16_t)bytes, .states = blocks[b].states,
-                                                                .entry_count = (uint16_t)blocks[b].count});
-        for (uint32_t i = 0; i < blocks[b].count; i++)
-            p = ui_wire_style_entry_put(p, blocks[b].decls[i].property, &blocks[b].decls[i].value);
+        const ui_style_block_desc *d = &blocks[b];
+        ui_wire_style_block h = {.states = d->states, .entry_count = (uint16_t)d->count,
+                                 .token_count = (uint16_t)d->token_count};
+        uint32_t bytes = ui_wire_style_block_written_size(&h);
+        for (uint32_t i = 0; i < d->count; i++) bytes += 4u * ui_wire_style_value_words(&d->decls[i].value);
+        for (uint32_t i = 0; i < d->token_count; i++) bytes += 4u + 4u * ui_wire_style_value_words(&d->tokens[i].value);
+        h.bytes = (uint16_t)bytes;
+        p = ui_wire_style_block_write(p, &h);
+        for (uint32_t i = 0; i < d->count; i++) p = ui_wire_style_entry_put(p, d->decls[i].property, &d->decls[i].value);
+        p = put_token_decls(p, d->tokens, d->token_count);
     }
     return UI_OK;
 }
@@ -384,6 +410,24 @@ static ui_result put_token(ui_cmd_writer *w, uint32_t id, const ui_value *value)
 
 ui_result ui_cmd_set_token(ui_cmd_writer *w, uint32_t id, ui_value value) {
     return put_token(w, id, &value);
+}
+
+ui_result ui_cmd_set_token_overrides(ui_cmd_writer *w, ui_handle node, const ui_token_decl *decls,
+                                     uint32_t count) {
+    if (count > UINT16_MAX || (count && !decls)) return UI_ERR_INVALID_ARGUMENT;
+    uint64_t bytes = token_decl_bytes(decls, count, true);
+    if (!bytes) return UI_ERR_INVALID_ARGUMENT;
+    bytes = count ? bytes : 0;
+    if (UI_WIRE_SET_TOKEN_OVERRIDES_SIZE + bytes > UI_WIRE_MAX_PAYLOAD) return UI_ERR_INVALID_ARGUMENT;
+    uint32_t local[64], *ids = count <= 64 ? local : malloc(count * sizeof *ids);
+    if (!ids) return UI_ERR_OUT_OF_MEMORY;
+    for (uint32_t i = 0; i < count; i++) ids[i] = decls[i].token;
+    uint8_t *p;
+    ui_result r = ui_wire_set_token_overrides_put(&w->buf, &(ui_wire_set_token_overrides){node, .count = (uint16_t)count},
+                                                  ids, (uint32_t)(bytes - 4u * count), &p);
+    if (ids != local) free(ids);
+    for (uint32_t i = 0; r == UI_OK && i < count; i++) p = ui_wire_style_entry_put(p, 0, &decls[i].value);
+    return r;
 }
 
 ui_result ui_cmd_set_state(ui_cmd_writer *w, ui_handle node, uint32_t mask, uint32_t value) {

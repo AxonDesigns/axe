@@ -113,6 +113,29 @@ static void dump_entries(wire_text *t, const uint8_t *p, uint32_t count, bool ov
     }
 }
 
+// Token declarations: ids, then entries of property 0 holding what a token can hold.
+static void dump_token_decls(wire_text *t, const uint8_t *ids, const uint8_t *p, uint32_t count, bool override) {
+    uint32_t off = 0;
+    for (uint32_t i = 0; i < count; i++) {
+        const uint8_t *e = p + off;
+        ui_wire_style_entry h;
+        ui_wire_style_entry_read(e, UI_WIRE_STYLE_ENTRY_SIZE, &h);
+        off += ui_wire_style_entry_size(e);
+        uint32_t token = ui_wire_get_u32(ids + 4 * i);
+        out(t, "\n    token %u kind=%u words=%u", token, h.kind, h.words);
+        if (!ui_wire_value_kind_words(h.kind)) {
+            out(t, " skipped");
+            continue;
+        }
+        ui_value v;
+        bool read = ui_wire_style_value_read(e, &v);
+        out(t, " read=%d", read);
+        if (!read) continue;
+        value(t, &v);
+        verdict(t, token && (v.kind == UI_VALUE_UNSET ? override : ui_wire_style_token_value_valid(&v)));
+    }
+}
+
 #define READ(type, var) \
     ui_wire_##type var; \
     ui_wire_##type##_read(p, op->payload_size, &var)
@@ -258,6 +281,10 @@ static void dump_op(wire_text *t, const ui_wire_op *op) {
             ui_wire_style_block_tail bt;
             ui_wire_style_block_tail_of(bp, &blk, &bt);
             dump_entries(t, bt.entries, blk.entry_count, false);
+            if (blk.token_count) { // printed only when present: older dumps stay as they were
+                out(t, "\n    tokens=%u", blk.token_count);
+                dump_token_decls(t, bt.tokens, bt.token_values, blk.token_count, false);
+            }
             bp += ui_wire_style_block_size(bp);
         }
         break;
@@ -308,6 +335,16 @@ static void dump_op(wire_text *t, const ui_wire_op *op) {
             ok = val.kind == UI_VALUE_UNSET || ui_wire_style_token_value_valid(&val);
         }
         verdict(t, ok);
+        break;
+    }
+    case UI_OP_SET_TOKEN_OVERRIDES: {
+        ui_wire_set_token_overrides v;
+        ui_wire_set_token_overrides_read(p, ui_wire_set_token_overrides_header_size(p), &v);
+        ui_wire_set_token_overrides_tail tail;
+        ui_wire_set_token_overrides_tail_of(p, &v, &tail);
+        handle(t, "node", v.node);
+        u(t, "count", v.count);
+        dump_token_decls(t, tail.tokens, tail.values, v.count, true);
         break;
     }
     case UI_OP_SET_STATE: {

@@ -24,6 +24,7 @@ import {
   type TokenValue,
   type TransitionPropName,
   type UnsetValue,
+  type StyleBlock as WireStyleBlock,
 } from "@axe/wire";
 import { commands } from "./runtime.js";
 
@@ -52,23 +53,64 @@ export const unset: UnsetValue = Object.freeze({ kind: ValueKind.unset });
 /** What a token may hold. */
 export type TokenType = PxValue | PercentValue | NumberValue | ColorValue | KeywordValue | AutoValue | NoneValue | StringValue;
 
+type IsUnion<T, U = T> = T extends unknown ? ([U] extends [T] ? false : true) : never;
+/** Holds for one kind of value: a token has one kind, fixed by its global value (docs/styles.md,
+ * "Token scopes"), so `Token<PxValue | AutoValue>` is a compile error. */
+export interface OneKind<V extends { readonly kind: number }> {
+  readonly kind: true extends IsUnion<V["kind"]> ? never : V["kind"];
+}
+
+/** Any token, whatever its kind. */
+export type AnyToken =
+  | Token<PxValue>
+  | Token<PercentValue>
+  | Token<NumberValue>
+  | Token<ColorValue>
+  | Token<KeywordValue>
+  | Token<AutoValue>
+  | Token<NoneValue>
+  | Token<StringValue>;
+
+/** A token's value within a scope: what a node and its subtree read for the token instead of its
+ * global value. Made by `token.with(value)`; used in a style block's `tokens` and by
+ * `node.setTokens`. */
+export interface TokenDecl {
+  readonly token: number;
+  readonly value: StyleValue;
+}
+
 let nextTokenId = 1;
 
 /** A theme token: a value styles refer to by id. Setting it updates every node using it, with
- * their transitions. */
-export class Token<V extends TokenType = TokenType> {
+ * their transitions. A scope (a style block's `tokens`, `node.setTokens`) gives it another value
+ * for a subtree. */
+export class Token<V extends TokenType & OneKind<V>> {
   readonly id: number;
   #value: V | Token<V> | null;
 
-  private constructor(value: V | Token<V>) {
+  private constructor(value: V | Token<V> | null) {
     this.id = nextTokenId++;
     this.#value = value;
-    write(this.id, value);
+    if (value !== null) write(this.id, value);
   }
 
-  /** A new token holding `value` (or referring to another token). */
-  static create<V extends TokenType>(value: V | Token<V>): Token<V> {
+  /** A new token holding `value` (or referring to another token of its kind). Its kind is the
+   * value's: one kind, which scopes must give it too. */
+  static create<V extends TokenType & OneKind<V>>(value: V | Token<V>): Token<V> {
     return new Token<V>(value);
+  }
+
+  /** A local token: no global value, only what scopes declare for it. The core doesn't check
+   * its declarations' kind (the properties reading it check their values); V does here. */
+  static local<V extends TokenType & OneKind<V>>(): Token<V> {
+    return new Token<V>(null);
+  }
+
+  /** This token's declaration of `value` for a scope (its kind, or another token of its kind). */
+  with(value: V | Token<V>): TokenDecl {
+    const v = valueOf(value);
+    if (!styleTokenValueValid(v)) throw new RangeError(`Token ${this.id}: a token can't hold that value`);
+    return { token: this.id, value: v };
   }
 
   get value(): V | Token<V> | null {
@@ -80,27 +122,42 @@ export class Token<V extends TokenType = TokenType> {
     this.#value = value;
   }
 
-  /** Removes the token: declarations using it count as absent until it is set again. */
+  /** Removes the token's global value: it becomes local, and declarations using it count as
+   * absent wherever no scope declares it. */
   unset(): void {
     commands.setToken(this.id, { property: 0, value: unset });
     this.#value = null;
   }
 }
 
-function write(id: number, value: TokenType | Token): void {
+/** What helpers take for a token: any Token, whatever its kind. */
+interface TokenRef {
+  readonly id: number;
+}
+
+function write(id: number, value: TokenType | TokenRef): void {
   const v = valueOf(value);
   if (!styleTokenValueValid(v)) throw new RangeError(`Token ${id}: a token can't hold that value`);
   commands.setToken(id, { property: 0, value: v });
 }
 
-function valueOf(v: StyleValue | Token): StyleValue {
-  return v instanceof Token ? { kind: ValueKind.token, token: v.id } : v;
+function valueOf(v: StyleValue | TokenRef): StyleValue {
+  return "kind" in v ? v : { kind: ValueKind.token, token: v.id };
 }
 
 // ---- Declarations -----------------------------------------------------------------------------
 
 type CssWide = InheritValue | InitialValue;
-type Tokenized<V> = V | (V extends TokenType ? Token<V> : never) | CssWide;
+type TokenOf<V> = V extends PxValue ? Token<PxValue>
+  : V extends PercentValue ? Token<PercentValue>
+  : V extends NumberValue ? Token<NumberValue>
+  : V extends ColorValue ? Token<ColorValue>
+  : V extends KeywordValue ? Token<KeywordValue>
+  : V extends AutoValue ? Token<AutoValue>
+  : V extends NoneValue ? Token<NoneValue>
+  : V extends StringValue ? Token<StringValue>
+  : never;
+type Tokenized<V> = V | TokenOf<V> | CssWide;
 
 /** Declarations: each property with the values it takes, a token of such a value, inherit or
  * initial. Order matters only between a logical property and its physical side (the later
@@ -120,14 +177,14 @@ export interface StyleEntry {
 export function entries(decls: Overrides | undefined, transitions: Transitions | undefined, override: boolean): StyleEntry[] {
   const out: StyleEntry[] = [];
   // Plain loops: this runs for every setProps and defineStyle.
-  if (decls) add(out, decls as Record<string, StyleValue | Token | undefined>, false, override);
+  if (decls) add(out, decls as Record<string, StyleValue | AnyToken | undefined>, false, override);
   if (transitions) add(out, transitions as Record<string, StyleValue | undefined>, true, override);
   return out;
 }
 
 const ids = StyleProp as Record<string, number | undefined>;
 
-function add(out: StyleEntry[], decls: Record<string, StyleValue | Token | undefined>, transition: boolean, override: boolean): void {
+function add(out: StyleEntry[], decls: Record<string, StyleValue | AnyToken | undefined>, transition: boolean, override: boolean): void {
   for (const name in decls) {
     const v = decls[name];
     if (v === undefined) continue;
@@ -146,6 +203,9 @@ function add(out: StyleEntry[], decls: Record<string, StyleValue | Token | undef
 export interface StyleBlock {
   readonly decls?: Decls;
   readonly transitions?: Transitions;
+  /** The block's scope: token values for the node and its subtree while the block applies
+   * (`token.with(value)`); later blocks and the node's own (`node.setTokens`) win. */
+  readonly tokens?: readonly TokenDecl[];
 }
 
 export interface StyleDesc extends StyleBlock {
@@ -185,10 +245,25 @@ export class Style {
 }
 
 function define(id: number, desc: StyleDesc): void {
-  const blocks = [{ states: 0, entries: entries(desc.decls, desc.transitions, false) }];
+  const blocks = [block(0, desc)];
   for (const b of desc.states ?? []) {
     if (!(b.when > 0 && b.when <= 0xff && Number.isInteger(b.when))) throw new RangeError("a state block needs state bits (State)");
-    blocks.push({ states: b.when, entries: entries(b.decls, b.transitions, false) });
+    blocks.push(block(b.when, b));
   }
   commands.defineStyle(id, blocks);
+}
+
+function block(states: number, b: StyleBlock): WireStyleBlock {
+  const out = { states, entries: entries(b.decls, b.transitions, false) };
+  return b.tokens?.length ? { ...out, ...tokenArrays(b.tokens) } : out;
+}
+
+/** Token declarations as the wire's parallel arrays: ids, then values as entries of property 0. */
+export function tokenArrays(decls: readonly TokenDecl[]): { tokens: number[]; tokenValues: StyleEntry[] } {
+  const tokens: number[] = [], tokenValues: StyleEntry[] = [];
+  for (const d of decls) {
+    tokens.push(d.token);
+    tokenValues.push({ property: 0, value: d.value });
+  }
+  return { tokens, tokenValues };
 }

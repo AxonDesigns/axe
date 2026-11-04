@@ -1,0 +1,29 @@
+commands 380 bytes: valid
+op 1 size 16: node=00000001:1 parent=10000000:1
+op 1 size 16: node=00000002:1 parent=00000001:1
+op 12 size 204: id=1 blocks=3 -> ok
+  block bytes=156 states=0 entries=2 header=12
+    entry prop=1 kind=9 words=2 read=1 t=3 -> ok
+    entry prop=55 kind=9 words=2 read=1 t=4 -> ok
+    tokens=9
+    token 3 kind=7 words=5 read=1 c=3dcccccd c=3e4ccccd c=3e99999a c=3f800000 -> ok
+    token 4 kind=2 words=2 read=1 n=41400000 -> ok
+    token 5 kind=3 words=2 read=1 n=42480000 -> ok
+    token 6 kind=6 words=2 read=1 n=3fc00000 -> ok
+    token 7 kind=8 words=2 read=1 k=2 -> ok
+    token 8 kind=4 words=1 read=1 -> ok
+    token 9 kind=5 words=1 read=1 -> ok
+    token 10 kind=11 words=6 read=1 str=17#717ffa8ce844874d -> ok
+    token 11 kind=9 words=2 read=1 t=3 -> ok
+  block bytes=24 states=1 entries=0 header=12
+    tokens=1
+    token 3 kind=9 words=2 read=1 t=12 -> ok
+  block bytes=16 states=2 entries=1 header=8
+    entry prop=1 kind=9 words=2 read=1 t=3 -> ok
+op 16 size 24: id=3
+    entry prop=0 kind=7 words=5 c=3f800000 c=00000000 c=00000000 c=3f800000 -> ok
+op 16 size 24: id=12
+    entry prop=0 kind=7 words=5 c=00000000 c=00000000 c=3f800000 c=3f800000 -> ok
+op 14 size 16: node=00000001:1 count=1 id=1 -> ok
+op 14 size 16: node=00000002:1 count=1 id=1 -> ok
+op 17 size 16: node=00000001:1 mask=1 value=1

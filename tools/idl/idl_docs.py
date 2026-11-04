@@ -52,7 +52,7 @@ def walk(r: Record, prefix: str, base: int, skip: set) -> list[tuple[str, str]]:
 def appended(r: Record) -> list[tuple[str, str]]:
     """What was appended to an op: its own fields, then those of the records in its tail
     (reported per record, so a record also nested in the header is listed once)."""
-    in_tail = [t.record for t in r.tail if t.kind == "array" and t.record and not t.record.size_field]
+    in_tail = list({t.record.name: t.record for t in r.tail if t.kind == "array" and t.record}.values())
     nested = {f.record.name for rec in in_tail for f in rec.fields if f.record}
     out = walk(r, "", 0, nested)
     for rec in in_tail:
@@ -69,7 +69,7 @@ def history_table(s: Schema) -> str:
             continue
         sizes = [f"header {r.original}" if r.tail else str(r.original)]
         for t in r.tail:
-            if t.kind == "array" and t.record and not t.record.size_field and any(
+            if t.kind == "array" and t.record and any(
                     f.since or (f.record and any(x.since for x in f.record.fields)) for f in t.record.fields):
                 sizes.append(f"{t.record.name.split('_')[-1]} {t.record.original}")
         groups = []

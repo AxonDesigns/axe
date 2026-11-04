@@ -17,6 +17,7 @@ changes
   461c82d  "Per-span language"
   m1.1     "Milestone 1.1, wire evolution rules"
   ae568d4  "Shaping properties in styles, prepared on workers"
+  m3a.1    "Milestone 3a.1, token scopes"
 
 # ---- Enums and bitmasks -------------------------------------------------------------------
 
@@ -40,6 +41,7 @@ enum op : u16  c ui_op UI_OP_
   set_state = 17
   move_node = 18
   request_layout = 19
+  set_token_overrides = 20
 
 enum event_type : u16  c ui_event_type UI_EVENT_
   frame_committed = 1
@@ -200,14 +202,18 @@ record style_entry
   tail
   value     style_value(kind)
 
-record style_block
+record style_block  original 8
   bytes         u16 = size        "the block's size, this header included"
   states        state             "the states a node must have for the block to apply; 0: always"
   reserved      u8
   entry_count   u16 = count(entries)
   header_bytes  u16 = header(0)
+  token_count   u16 = count(tokens)  since m3a.1  "token declarations: the block's scope for the node's subtree"
+  reserved      u16
   tail
   entries       style_entry[entry_count]
+  tokens        u32[token_count]  nonzero  "the declared tokens"
+  token_values  style_entry[token_count]  "their values, in order (property 0), as set_token's"
 
 # ---- Style properties ---------------------------------------------------------------------
 # id, name, then the values it takes (every value property also takes token, inherit and
@@ -426,6 +432,14 @@ command move_node = 18  original 24  "node, parent handle (a node, or a surface 
 command request_layout = 19  original 12  "node, `u32 request_id`: answered by `layout_measured` ([`docs/layout.md`](layout.md), \"Measurement\")"
   node        handle
   request_id  u32
+
+command set_token_overrides = 20  original 12  "node, `u16 header_bytes` (12), `u16 count`, `u32 tokens[count]`, then `count` entries (property 0): the node's own token declarations (see [`docs/styles.md`](styles.md), \"Token scopes\"); `unset` removes one"
+  node          node
+  header_bytes  u16 = header
+  count         u16 = count(tokens)
+  tail
+  tokens        u32[count]  nonzero
+  values        style_entry[count]
 
 # ---- Events (core -> logic) ---------------------------------------------------------------
 

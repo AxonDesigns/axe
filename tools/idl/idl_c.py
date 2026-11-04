@@ -232,13 +232,35 @@ def record_decls(s: Schema, r: Record) -> list[str]:
             continue
         out += read_field(f, "p", "o->")
     out.append("}")
-    out.append(f"// Writes the fixed part ({const(r, 'SIZE')} bytes) and returns the end. Header and record")
-    out.append(f"// sizes are this version's; counts and lengths are the caller's.")
-    out.append(f"static inline uint8_t *{n}_write(uint8_t *p, const {n} *v) {{")
-    for f in r.fields:
-        out += write_field(s, r, f)
-    out.append(f"    return p + {const(r, 'SIZE')};")
-    out.append("}")
+    short = short_header_fields(r)
+    if short:
+        full = " || ".join(f"v->{f.name}" for f in short)
+        out.append(f"// The size of the fixed part as written: the original size when every appended field is 0")
+        out.append(f"// (as an older writer sends it, with header 0), else {const(r, 'SIZE')}.")
+        out.append(f"static inline uint32_t {n}_written_size(const {n} *v) {{")
+        out.append(f"    return {full} ? {const(r, 'SIZE')} : {const(r, 'ORIGINAL')};")
+        out.append("}")
+        out.append(f"// Writes the fixed part ({n}_written_size bytes) and returns the end. Counts and")
+        out.append(f"// lengths are the caller's.")
+        out.append(f"static inline uint8_t *{n}_write(uint8_t *p, const {n} *v) {{")
+        out.append(f"    bool full = {full};")
+        for f in r.fields:
+            if f.offset < r.original:
+                out += write_field(s, r, f)
+        out.append(f"    if (!full) return p + {const(r, 'ORIGINAL')};")
+        for f in r.fields:
+            if f.offset >= r.original:
+                out += write_field(s, r, f)
+        out.append(f"    return p + {const(r, 'SIZE')};")
+        out.append("}")
+    else:
+        out.append(f"// Writes the fixed part ({const(r, 'SIZE')} bytes) and returns the end. Header and record")
+        out.append(f"// sizes are this version's; counts and lengths are the caller's.")
+        out.append(f"static inline uint8_t *{n}_write(uint8_t *p, const {n} *v) {{")
+        for f in r.fields:
+            out += write_field(s, r, f)
+        out.append(f"    return p + {const(r, 'SIZE')};")
+        out.append("}")
     hf = r.header_field
     if hf:
         orig = const(r, "ORIGINAL")
@@ -304,10 +326,18 @@ def write_value(s: Schema, r: Record, f: Field) -> str:
     if f.assign == "header":
         return const(r, "SIZE")
     if f.assign == "header0":
-        return "0"
+        return f"(full ? {const(r, 'SIZE')} : 0)" if short_header_fields(r) else "0"
     if f.assign == "stride":
         return const(r.tail_item(f.assign_ref).record, "SIZE")
     return f"v->{f.name}"
+
+
+def short_header_fields(r: Record) -> list[Field]:
+    """A record with a header(0) field writes only its original fields, with header 0, while
+    every appended field is 0: these are the appended fields that decide."""
+    if not any(f.assign == "header0" for f in r.fields):
+        return []
+    return [f for f in r.fields if f.since]
 
 
 def write_field(s: Schema, r: Record, f: Field) -> list[str]:
@@ -323,7 +353,7 @@ def write_field(s: Schema, r: Record, f: Field) -> list[str]:
     st = f.type.storage or f.type.base
     if st == "u8":
         return [f"    p[{off}] = (uint8_t){val};" if val != "0" else f"    p[{off}] = 0;"]
-    cast = f"({CTYPES[st]})" if val.startswith("UI_") or val == "0" else ""
+    cast = f"({CTYPES[st]})" if val.startswith(("UI_", "(full")) or val == "0" else ""
     return [f"    ui_wire_put_{st}(p + {off}, {cast}{val});"]
 
 
@@ -349,6 +379,9 @@ def tail_decls(s: Schema, r: Record) -> list[str]:
             out.append(f"    t->{ti.name}_stride = {n}_{ti.name}_stride(p);")
         if not last and step:
             out.append(f"    off += {step};")
+        elif not last and ti.kind == "array" and ti.record and ti.record.size_field:
+            # Self-sized records: step over each (the framing was checked).
+            out.append(f"    for (uint32_t i = 0; i < h->{ti.count_field}; i++) off += ui_wire_{ti.record.name}_size(p + off);")
     out.append("    (void)h;")
     out.append("}")
     for ti in r.tail:

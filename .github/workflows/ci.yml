@@ -3,8 +3,8 @@
 # exposes them; tools/tsan/), and
 # runs each libFuzzer target from its seed corpus (the fuzz preset's tests). Longer fuzzing
 # runs nightly in fuzz.yml. bench-callgrind guards the benchmarks' instruction counts, idl
-# checks the wire IDL's generated code and evolution rules, and actionlint checks the
-# workflows. A manual run can be limited to the benchmark guard.
+# checks the wire IDL's generated code and evolution rules (and has the base's reader read
+# the new fixtures), and actionlint checks the workflows. A manual run can be limited to the benchmark guard.
 # The wgpu-native build (vendored crates + Cargo target dir) is cached per preset, keyed on
 # the pinned submodule commit and the Rust toolchain, so a warm run only builds our C code.
 name: ci
@@ -136,8 +136,9 @@ jobs:
           path: callgrind-counts.json
           if-no-files-found: ignore
 
-  # The wire IDL (docs/idl.md): the committed generated code is what idl/wire.idl gives, and the
-  # change keeps the evolution rules against the base (the PR's base, or the previous commit).
+  # The wire IDL (docs/idl.md): the committed generated code is what idl/wire.idl gives, the
+  # change keeps the evolution rules against the base (the PR's base, or the previous commit),
+  # and the base's reader reads the fixtures added since as those rules say it must.
   idl:
     name: wire IDL
     if: inputs.jobs != 'bench'
@@ -162,6 +163,18 @@ jobs:
 
       - name: Generator tests
         run: python3 -I tools/idl/test_axe_idl.py
+
+      # The base's own reader, built from its generated codec, reads the command fixtures
+      # added or changed since: what the evolution rules promise an older reader.
+      - name: Older reader reads the new fixtures
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          if [ -z "$BASE" ] || ! git cat-file -e "$BASE^{commit}" 2>/dev/null; then
+            echo "no base commit to compare with"
+          else
+            python3 -I tools/wire/old_reader.py --base "$BASE"
+          fi
 
   # Lints the workflows with actionlint's release binary, pinned by version and checksum.
   actionlint:

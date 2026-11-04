@@ -15,8 +15,10 @@ void ui_styles_init(ui_styles *s) { memset(s, 0, sizeof *s); }
 
 static void free_def(ui_styles *s, ui_style_def *d) {
     for (uint32_t i = 0; i < d->entry_count; i++) ui_styles_release_value(s, &d->entries[i].value);
+    for (uint32_t i = 0; i < d->decl_count; i++) ui_styles_release_value(s, &d->decls[i].value);
     free(d->blocks);
     free(d->entries);
+    free(d->decls);
     free(d->tokens);
 }
 
@@ -182,6 +184,91 @@ bool ui_style_decode(ui_styles *s, const uint8_t *p, uint32_t count, bool overri
     return ok;
 }
 
+bool ui_scope_decl_decode(ui_styles *s, const uint8_t *ids, const uint8_t *values, uint32_t count, bool override,
+                          ui_scope_decl *out, uint32_t *out_count) {
+    uint32_t n = 0;
+    bool ok = true;
+    for (uint32_t i = 0; ok && i < count; i++) {
+        const uint8_t *e = values;
+        values += ui_wire_style_entry_size(e);
+        uint32_t token = ui_wire_get_u32(ids + 4u * i);
+        ui_wire_style_entry h;
+        ui_wire_style_entry_read(e, UI_WIRE_STYLE_ENTRY_SIZE, &h);
+        if (!ui_wire_value_kind_words(h.kind)) continue; // a newer writer's kind: skipped
+        ui_value v;
+        ok = token && ui_wire_style_value_read(e, &v) &&
+             (v.kind == UI_VALUE_UNSET ? override : ui_wire_style_token_value_valid(&v)) && intern_value(s, &v);
+        if (ok && v.kind == UI_VALUE_COLOR) ui_color_from_wire(v.color, v.color); // linear, once
+        if (ok) out[n++] = (ui_scope_decl){token, v};
+    }
+    if (!ok) {
+        for (uint32_t i = 0; i < n; i++) ui_styles_release_value(s, &out[i].value);
+        n = 0;
+    }
+    *out_count = n;
+    return ok;
+}
+
+bool ui_value_eq(const ui_value *a, const ui_value *b) {
+    if (a->kind != b->kind) return false;
+    switch (a->kind) {
+    case UI_VALUE_PX:
+    case UI_VALUE_PERCENT:
+    case UI_VALUE_NUMBER: return a->number == b->number;
+    case UI_VALUE_COLOR: return !memcmp(a->color, b->color, sizeof a->color);
+    case UI_VALUE_KEYWORD: return a->keyword == b->keyword;
+    case UI_VALUE_TOKEN: return a->token == b->token;
+    case UI_VALUE_SPRING: return a->spring.stiffness == b->spring.stiffness && a->spring.damping == b->spring.damping;
+    case UI_VALUE_STRING: return ui_istr_eq(a->string.bytes, b->string.bytes);
+    default: return true; // no payload
+    }
+}
+
+// ---- Scopes ------------------------------------------------------------------------------
+
+bool ui_scope_set(ui_scope *sc, const ui_scope_decl *const *list, uint32_t count) {
+    sc->count = 0;
+    sc->filter = 0;
+    if (!count) return true;
+    if (ui_grow((void **)&sc->decls, &sc->capacity, count, sizeof *sc->decls) != UI_OK) return false;
+    // Last of each token in cascade order: sort (token, position) pairs, keep each run's last.
+    typedef struct { uint32_t token, at; } key;
+    key local[32], *keys = count <= 32 ? local : malloc(count * sizeof *keys);
+    if (!keys) return false;
+    for (uint32_t i = 0; i < count; i++) keys[i] = (key){list[i]->token, i};
+    for (uint32_t i = 1; i < count; i++) { // insertion sort: short lists
+        key k = keys[i];
+        uint32_t j = i;
+        while (j && (keys[j - 1].token > k.token || (keys[j - 1].token == k.token && keys[j - 1].at > k.at))) {
+            keys[j] = keys[j - 1];
+            j--;
+        }
+        keys[j] = k;
+    }
+    for (uint32_t i = 0; i < count; i++) {
+        if (i + 1 < count && keys[i + 1].token == keys[i].token) continue;
+        sc->decls[sc->count++] = *list[keys[i].at];
+        sc->filter |= ui_token_bit(keys[i].token);
+    }
+    if (keys != local) free(keys);
+    return true;
+}
+
+void ui_scope_free(ui_scope *sc) {
+    free(sc->decls);
+    *sc = (ui_scope){0};
+}
+
+const ui_scope_decl *ui_scope_find(const ui_scope *sc, uint32_t token) {
+    uint32_t lo = 0, hi = sc->count;
+    while (lo < hi) {
+        uint32_t mid = (lo + hi) / 2;
+        if (sc->decls[mid].token < token) lo = mid + 1;
+        else hi = mid;
+    }
+    return lo < sc->count && sc->decls[lo].token == token ? &sc->decls[lo] : NULL;
+}
+
 // ---- Styles ------------------------------------------------------------------------------
 
 static ui_style_def *def_slot(const ui_styles *s, uint32_t id, bool *found) {
@@ -239,12 +326,19 @@ static bool note_change(uint32_t **list, uint32_t *count, uint32_t *capacity, ui
     return true;
 }
 
-// A block's header and where its entries are.
-static const uint8_t *read_block(const uint8_t *bp, ui_wire_style_block *b) {
-    ui_wire_style_block_read(bp, ui_wire_style_block_header_size(bp), b);
-    ui_wire_style_block_tail t;
-    ui_wire_style_block_tail_of(bp, b, &t);
-    return t.entries;
+// A block's header and where its entries and token declarations are.
+static void read_block(const uint8_t *bp, ui_wire_style_block *b, ui_wire_style_block_tail *t) {
+    uint32_t header = ui_wire_style_block_header_size(bp);
+    ui_wire_style_block_read(bp, header < UI_WIRE_STYLE_BLOCK_SIZE ? header : UI_WIRE_STYLE_BLOCK_SIZE, b);
+    ui_wire_style_block_tail_of(bp, b, t);
+}
+
+static bool add_token_id(ui_style_def *d, uint32_t t) {
+    for (uint32_t k = 0; k < d->token_count; k++) {
+        if (d->tokens[k] == t) return true;
+    }
+    d->tokens[d->token_count++] = t;
+    return true;
 }
 
 bool ui_styles_define(ui_styles *s, const uint8_t *payload, uint32_t *out_id) {
@@ -254,35 +348,47 @@ bool ui_styles_define(ui_styles *s, const uint8_t *payload, uint32_t *out_id) {
     ui_wire_define_style_tail_of(payload, &op, &tail);
     uint32_t id = *out_id = op.id;
     if (ui_wire_define_style_check(&op)) return false;
-    uint32_t blocks = op.block_count, total = 0;
+    uint32_t blocks = op.block_count, total = 0, total_decls = 0;
     const uint8_t *bp = tail.blocks;
     for (uint32_t b = 0; b < blocks; b++) {
         ui_wire_style_block blk;
-        read_block(bp, &blk);
+        ui_wire_style_block_tail t;
+        read_block(bp, &blk, &t);
         total += blk.entry_count;
+        total_decls += blk.token_count;
         bp += ui_wire_style_block_size(bp);
     }
     ui_style_def d = {.id = id};
     d.blocks = malloc((blocks ? blocks : 1) * sizeof *d.blocks);
     d.entries = malloc((total ? total : 1) * sizeof *d.entries);
-    d.tokens = malloc((total ? total : 1) * sizeof *d.tokens);
-    bool ok = d.blocks && d.entries && d.tokens;
+    d.decls = malloc((total_decls ? total_decls : 1) * sizeof *d.decls);
+    d.tokens = malloc((total + 2 * total_decls ? total + 2 * total_decls : 1) * sizeof *d.tokens);
+    bool ok = d.blocks && d.entries && d.decls && d.tokens;
     bp = tail.blocks;
     for (uint32_t b = 0; ok && b < blocks; b++) {
         ui_wire_style_block blk;
-        const uint8_t *entries = read_block(bp, &blk);
-        uint32_t n;
-        ok = ui_style_decode(s, entries, blk.entry_count, false, d.entries + d.entry_count, &n);
-        d.blocks[d.block_count++] = (ui_style_block){blk.states, d.entry_count, n};
+        ui_wire_style_block_tail t;
+        read_block(bp, &blk, &t);
+        uint32_t n, nd = 0;
+        ok = ui_style_decode(s, t.entries, blk.entry_count, false, d.entries + d.entry_count, &n);
+        if (ok) {
+            ok = ui_scope_decl_decode(s, t.tokens, t.token_values, blk.token_count, false, d.decls + d.decl_count, &nd);
+            if (!ok) { // the entries were kept: release them with the rest
+                d.entry_count += n;
+                n = 0;
+            }
+        }
+        d.blocks[d.block_count++] = (ui_style_block){blk.states, d.entry_count, n, d.decl_count, nd};
         d.entry_count += n;
+        d.decl_count += nd;
         bp += ui_wire_style_block_size(bp);
     }
     for (uint32_t i = 0; ok && i < d.entry_count; i++) {
-        if (d.entries[i].value.kind != UI_VALUE_TOKEN) continue;
-        uint32_t t = d.entries[i].value.token;
-        bool seen = false;
-        for (uint32_t k = 0; k < d.token_count && !seen; k++) seen = d.tokens[k] == t;
-        if (!seen) d.tokens[d.token_count++] = t;
+        if (d.entries[i].value.kind == UI_VALUE_TOKEN) add_token_id(&d, d.entries[i].value.token);
+    }
+    for (uint32_t i = 0; ok && i < d.decl_count; i++) {
+        add_token_id(&d, d.decls[i].token);
+        if (d.decls[i].value.kind == UI_VALUE_TOKEN) add_token_id(&d, d.decls[i].value.token);
     }
     ok = ok && grow_defs(s) &&
          note_change(&s->changed_styles, &s->changed_style_count, &s->changed_style_capacity, id);
@@ -450,26 +556,112 @@ static const ui_value *view_token(const ui_style_view *v, uint32_t id) {
     return token_of(v->styles, id);
 }
 
-// Floyd's cycle detection, as in ui_styles_token_value.
+// A token's global type (ui_style_view_token_type): Floyd's walk of its global chain.
+int ui_style_view_token_type(const ui_style_view *v, uint32_t token) {
+    uint32_t slow = token, fast = token;
+    for (;;) {
+        for (int step = 0; step < 2; step++) {
+            const ui_value *t = view_token(v, fast);
+            if (!t) return UI_TOKEN_LOCAL;
+            if (t->kind != UI_VALUE_TOKEN) return (int)t->kind;
+            fast = t->token;
+        }
+        slow = view_token(v, slow)->token;
+        if (slow == fast) return UI_TOKEN_INVALID;
+    }
+}
+
+// Whether a declaration with `value` is taken for a token of type `type`: any for a local
+// token; for a typed one, a value of its kind, or an alias to a token of its type or a local
+// one (whose value the property checks when the chain ends there).
+static bool takes(const ui_style_view *v, int type, const ui_value *value) {
+    if (type == UI_TOKEN_LOCAL) return true;
+    if (value->kind != UI_VALUE_TOKEN) return (int)value->kind == type;
+    if (v->read) *v->read |= ui_token_bit(value->token); // its type decides: a change must reach us
+    int to = ui_style_view_token_type(v, value->token);
+    return to == type || to == UI_TOKEN_LOCAL;
+}
+
+bool ui_style_view_scope_takes(const ui_style_view *v, uint32_t token, const ui_value *value) {
+    int type = ui_style_view_token_type(v, token);
+    return type != UI_TOKEN_INVALID && takes(v, type, value);
+}
+
+// A link that a scope around the node may declare: the nearest declaration its type takes,
+// else the global value. NULL: missing, or a token in a global cycle declared on the way
+// (references to such a token without a declaration loop, which Floyd's walk finds).
+__attribute__((noinline)) static const ui_value *scoped_link(const ui_style_view *v, uint32_t id) {
+    uint64_t bit = ui_token_bit(id);
+    int type = 1; // not computed yet (no kind is 1: that is unset, which tokens don't hold)
+    for (const ui_scope *sc = v->scope; sc; sc = sc->parent) {
+        if (!(sc->filter & bit)) continue;
+        const ui_scope_decl *d = ui_scope_find(sc, id);
+        if (!d) continue;
+        if (type == 1) type = ui_style_view_token_type(v, id);
+        if (type == UI_TOKEN_INVALID) return NULL;
+        if (takes(v, type, &d->value)) return &d->value;
+    }
+    return view_token(v, id);
+}
+
+// One link of a chain, for the node of v->scope.
+static inline const ui_value *link_value(const ui_style_view *v, uint32_t id) {
+    return v->scope ? scoped_link(v, id) : view_token(v, id);
+}
+
+// Floyd's cycle detection, as in ui_styles_token_value, with every link looked up for the
+// node of v->scope: a cycle is found in the chain as that node sees it. The links after the
+// first are noted in v->read (the first is the declaration's own token, which the caller
+// knows).
+__attribute__((noinline)) static bool chain_value(const ui_style_view *v, const ui_value *value, ui_value *out);
+
 bool ui_style_view_token_value(const ui_style_view *v, const ui_value *value, ui_value *out) {
     if (value->kind != UI_VALUE_TOKEN) {
         *out = *value;
         return true;
     }
+    if (!v->scope) { // the usual case: no scope, a token holding a value
+        const ui_value *t = view_token(v, value->token);
+        if (t && t->kind != UI_VALUE_TOKEN) {
+            *out = *t;
+            return true;
+        }
+    }
+    return chain_value(v, value, out);
+}
+
+static bool chain_value(const ui_style_view *v, const ui_value *value, ui_value *out) {
     uint32_t slow = value->token, fast = value->token;
+    const ui_value *t = link_value(v, fast);
     for (;;) {
+        // `fast` moves two links each turn, `slow` one; t is fast's.
         for (int step = 0; step < 2; step++) {
-            const ui_value *t = view_token(v, fast);
             if (!t) return false;
             if (t->kind != UI_VALUE_TOKEN) {
                 *out = *t;
                 return true;
             }
             fast = t->token;
+            if (v->read) *v->read |= ui_token_bit(fast);
+            t = link_value(v, fast);
         }
-        slow = view_token(v, slow)->token;
+        slow = link_value(v, slow)->token; // fast already passed it: a token reference
         if (slow == fast) return false;
     }
+}
+
+bool ui_style_view_chain_reads(const ui_style_view *v, uint32_t token, const uint32_t *set, uint32_t count) {
+    // Every token the chain reads, alias targets checked for their type included, by filter:
+    // a collision only computes a family more.
+    uint64_t read = ui_token_bit(token); // the first link isn't noted
+    ui_style_view probe = *v;
+    probe.read = &read;
+    ui_value out;
+    ui_style_view_token_value(&probe, &(ui_value){.kind = UI_VALUE_TOKEN, .token = token}, &out);
+    for (uint32_t i = 0; i < count; i++) {
+        if (read & ui_token_bit(set[i])) return true;
+    }
+    return false;
 }
 
 // ---- Resolution --------------------------------------------------------------------------
@@ -811,9 +1003,16 @@ typedef struct block_ref {
 bool ui_style_cascade(const ui_style_view *v, const uint32_t *ids, uint32_t count, uint8_t state,
                       const ui_style_entry *overrides, uint32_t override_count,
                       const ui_style_entry ***list, uint32_t *len, uint32_t *cap) {
+    return ui_style_cascade_decls(v, ids, count, state, overrides, override_count, list, len, cap, NULL, 0, NULL);
+}
+
+bool ui_style_cascade_decls(const ui_style_view *v, const uint32_t *ids, uint32_t count, uint8_t state,
+                            const ui_style_entry *overrides, uint32_t override_count,
+                            const ui_style_entry ***list, uint32_t *len, uint32_t *cap,
+                            const ui_scope_decl *own, uint32_t own_count, ui_decl_list *decls) {
     // Matching blocks: at most 255 styles; more than 4 blocks each overflow to the heap.
     block_ref local[256], *refs = local;
-    uint32_t ref_cap = UI_ARRAY_LEN(local), n = 0, entries = override_count;
+    uint32_t ref_cap = UI_ARRAY_LEN(local), n = 0, entries = override_count, decl_total = own_count;
     bool ok = true;
     for (uint32_t i = 0; ok && i < count; i++) {
         const ui_style_def *d = ui_style_view_find(v, ids[i]);
@@ -831,9 +1030,12 @@ bool ui_style_cascade(const ui_style_view *v, const uint32_t *ids, uint32_t coun
             uint32_t spec = (uint32_t)__builtin_popcount(blk->states);
             refs[n++] = (block_ref){spec << 24 | i << 16 | (b & 0xFFFF), d, blk};
             entries += blk->count;
+            decl_total += blk->decl_count;
         }
     }
     ok = ok && ui_grow((void **)list, cap, entries ? entries : 1, sizeof **list) == UI_OK;
+    ok = ok && (!decls || ui_grow((void **)&decls->items, &decls->capacity, decl_total ? decl_total : 1,
+                                  sizeof *decls->items) == UI_OK);
     if (ok) {
         // Insertion sort: lists are short and mostly in order already.
         for (uint32_t i = 1; i < n; i++) {
@@ -852,6 +1054,16 @@ bool ui_style_cascade(const ui_style_view *v, const uint32_t *ids, uint32_t coun
         }
         for (uint32_t e = 0; e < override_count; e++) (*list)[k++] = &overrides[e];
         *len = k;
+        if (decls) {
+            uint32_t m = 0;
+            for (uint32_t i = 0; i < n; i++) {
+                const ui_style_block *blk = refs[i].block;
+                for (uint32_t e = 0; e < blk->decl_count; e++)
+                    decls->items[m++] = &refs[i].def->decls[blk->decl_first + e];
+            }
+            for (uint32_t e = 0; e < own_count; e++) decls->items[m++] = &own[e];
+            decls->count = m;
+        }
     }
     if (refs != local) free(refs);
     return ok;

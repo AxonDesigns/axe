@@ -1,15 +1,27 @@
 // @axe/core: text encodes as ui_cmd_set_text does, handles follow the C allocator, the tree
 // mirror, measurement and its order, fonts, and the checks on styles and tokens.
 
-import { CommandWriter, WIRE_VERSION, type Handle } from "@axe/wire";
+import {
+  CommandWriter,
+  StyleProp,
+  ValueKind,
+  WIRE_VERSION,
+  type AutoValue,
+  type ColorValue,
+  type Handle,
+  type PxValue,
+  type StyleValue,
+} from "@axe/wire";
 import {
   FontLoadError,
   Node,
   StaleNodeError,
+  State,
   Style,
   TextAlign,
   Token,
   app,
+  auto,
   loadFont,
   number,
   percent,
@@ -163,6 +175,71 @@ test("styles and tokens refuse what the core would drop", () => {
   n.destroy();
   t.unset();
 });
+
+test("token scopes encode as their wire ops", () => {
+  const accent = Token.create(rgba(1, 0, 0));
+  const size = Token.create(px(4));
+  const local = Token.local<ColorValue>();
+  const n = Node.create(surface());
+  // A style's blocks: the base and a state block declare tokens; a block without keeps the
+  // short header (no tokens field at all).
+  let defined: Style | null = null;
+  const style = encodeAlone(() => {
+    defined = Style.define({
+      decls: { backgroundColor: accent },
+      tokens: [accent.with(rgba(0, 1, 0)), size.with(px(8))],
+      states: [{ when: State.hover, tokens: [accent.with(local)] }, { when: State.pressed, decls: { opacity: number(0.5) } }],
+    });
+  });
+  const body = (w: CommandWriter): number[] => Array.from(w.finish(WIRE_VERSION)!);
+  const w = new CommandWriter();
+  const decl = (value: StyleValue) => ({ property: 0, value });
+  w.defineStyle((defined as Style | null)!.id, [
+    {
+      states: 0,
+      entries: [{ property: StyleProp.backgroundColor, value: { kind: ValueKind.token, token: accent.id } }],
+      tokens: [accent.id, size.id],
+      tokenValues: [decl(rgba(0, 1, 0)), decl(px(8))],
+    },
+    { states: State.hover, entries: [], tokens: [accent.id], tokenValues: [decl({ kind: ValueKind.token, token: local.id })] },
+    { states: State.pressed, entries: [{ property: StyleProp.opacity, value: number(0.5) }] },
+  ]);
+  expect(Array.from(style)).toEqual(body(w));
+  // A node's own, and removing them.
+  const own = encodeAlone(() => n.setTokens(accent.with(rgba(0, 0, 1)), local.with(rgba(1, 1, 1))));
+  const w2 = new CommandWriter();
+  w2.setTokenOverrides(n.handle, [accent.id, local.id], [decl(rgba(0, 0, 1)), decl(rgba(1, 1, 1))]);
+  expect(Array.from(own)).toEqual(body(w2));
+  const gone = encodeAlone(() => n.unsetTokens(accent, local));
+  const w3 = new CommandWriter();
+  w3.setTokenOverrides(n.handle, [accent.id, local.id], [decl(unset), decl(unset)]);
+  expect(Array.from(gone)).toEqual(body(w3));
+  // What a token can't hold throws before anything is written.
+  expect(() => accent.with(spring(1, 1) as never)).toThrow(RangeError, "can't hold");
+  n.destroy();
+  accent.unset();
+  size.unset();
+});
+
+// Compile-time checks only (never called): a token has one kind, and scopes must keep it.
+function tokenKinds(): void {
+  const color = Token.create(rgba(1, 0, 0));
+  const length = Token.create(px(1));
+  color.with(rgba(0, 0, 1));
+  color.with(Token.local<ColorValue>());
+  // @ts-expect-error a token type is one kind, not a union
+  const both: Token<PxValue | AutoValue> | null = null;
+  void both;
+  // @ts-expect-error a token's kind is inferred from its value: one kind
+  Token.create(Math.random() > 0.5 ? px(1) : auto);
+  // @ts-expect-error a color token's declarations are colors
+  color.with(px(1));
+  // @ts-expect-error or color tokens
+  color.with(length);
+  // @ts-expect-error a style property takes tokens of its kinds only
+  Style.define({ decls: { width: color } });
+}
+void tokenKinds;
 
 test("springs and the older ops", async () => {
   const n = Node.create(surface());

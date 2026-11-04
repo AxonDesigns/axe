@@ -59,6 +59,16 @@ bool ui_text_ctx_values(const ui_text_ctx *c, const ui_text_source *base, ui_sty
                         ui_text_values *out);
 bool ui_text_values_eq(const ui_text_values *a, const ui_text_values *b);
 
+// A node's scope (docs/styles.md, "Token scopes"): the token declarations of its styles and
+// its own, which its subtree reads tokens through. Allocated the first time the node may
+// declare a token, and kept, perhaps empty, until it is destroyed.
+typedef struct ui_node_scope {
+    ui_scope scope;        // first: ui_node.scope points here. Its declarations change only
+                           // when the node resolves; its parent follows the tree at once.
+    ui_scope_decl *own;    // set_token_overrides' declarations (strings referenced)
+    uint32_t own_count, own_capacity;
+} ui_node_scope;
+
 typedef struct ui_node {
     // Fields are grouped by when they are used, so resolving styles reads a few cache lines
     // of each node: the tree and the style bookkeeping, then what is drawn.
@@ -72,14 +82,18 @@ typedef struct ui_node {
     bool resolved;         // resolved before: changes may animate from now on
     bool inherits_other;   // a non-inherited property takes `inherit`: follows every parent change
     bool warned_children;  // reported as a text node with in-flow children (layout)
+    bool scoped;           // `scope` is its own (a ui_node_scope it owns)
     uint8_t state;         // ui_state bits
     uint16_t jump;         // 1 << UI_SPRING_*: a set_* op set it (it jumps unless transitioned)
     uint16_t text_declared; // UI_TEXT_SET_* bits of the text values its cascade decides
     uint16_t style_count, override_count, override_capacity;
-    // What its cascade reads from tokens: a filter of their ids (token_bit, scene.c), and
-    // the families of the entries reading them. A token change skips nodes the filter rules out.
+    // What its values read from tokens: a filter of every token on the chains followed
+    // (ui_token_bit), and the families of the entries reading tokens. A token or scope
+    // change skips nodes the filter rules out.
     uint8_t token_families;
     uint64_t token_filter;
+    // Its scope: its own (ui_node_scope) if it has one, else its parent's; NULL: none.
+    ui_scope *scope;
     uint32_t *styles;
     ui_style_entry *overrides;
     // The entries that apply to it, by increasing precedence (pointers into style
@@ -201,6 +215,16 @@ typedef struct ui_scene {
     uint32_t style_dirty_count, style_dirty_capacity;
     uint32_t *scratch; // traversal stack
     uint32_t scratch_capacity;
+    // What resolving reads definitions and tokens through (the styles, the scope of the node
+    // being computed, where it notes the tokens read): set once, not per node.
+    ui_style_view view;
+    // Token scopes, while resolving: a node's gathered declarations, its new scope, and the
+    // tokens that changed in it.
+    ui_decl_list decls;
+    ui_scope scope_next;
+    uint32_t *scope_changed;
+    uint32_t scope_changed_capacity;
+    bool scope_marked;        // a node's scope change queued its descendants (resolve_node)
     ui_build_level *levels;   // build: one per ancestor level
     uint32_t level_capacity;
     ui_scene_timer_fn timer_fn;

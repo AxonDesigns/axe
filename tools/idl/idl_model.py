@@ -806,6 +806,23 @@ def _original_floor(r: Record) -> int:
     return end
 
 
+def appended_count_ok(s: Schema, r: Record, f: Field):
+    """An appended count must count only arrays that follow every item an original field
+    sizes, in a record whose header says where its variable data starts."""
+    path = s.path
+    counted = [i for i, t in enumerate(r.tail) if t.count_field == f.name]
+    if not counted:
+        raise IdlError(path, f.line, f"`{f.name}` was appended, but counts nothing")
+    if not r.header_field or r.header_field.since:
+        raise IdlError(path, f.line, f"`{f.name}` was appended to a record without an original header field")
+    by_name = {x.name: x for x in r.fields}
+    for i, t in enumerate(r.tail):
+        cf = by_name.get(t.count_field)
+        if cf is not None and not cf.since and i > min(counted):
+            raise IdlError(path, f.line,
+                           f"`{f.name}` was appended, so what it counts must come after `{t.name}`")
+
+
 def check_record(s: Schema, r: Record):
     path = s.path
     what = f"{r.kind} `{r.name}`"
@@ -841,9 +858,13 @@ def check_record(s: Schema, r: Record):
             if f.enum and not f.enum.bitmask and not any(v.value == 0 for v in f.enum.values):
                 raise IdlError(path, f.line,
                                f"`{f.name}` was appended, so {f.enum.name} needs a value 0 as its default")
-            if f.assign == "count" or f.assign in ("size", "words"):
+            if f.assign in ("size", "words"):
                 raise IdlError(path, f.line,
                                f"`{f.name}` was appended, but a {f.assign} field has no zero default")
+            if f.assign == "count":
+                # An appended count is 0 from an older writer: no elements, which is what it
+                # meant, as long as what it counts is new variable data after the old.
+                appended_count_ok(s, r, f)
         elif f.default != 0:
             raise IdlError(path, f.line, "`default` is for appended fields, and must be 0")
         check_field_checks(s, r, f)
@@ -910,7 +931,10 @@ def check_tail_item(s: Schema, r: Record, ti: TailItem):
     if ti.kind in ("array", "bytes"):
         if not count:
             raise IdlError(path, ti.line, f"`{ti.name}`: no field `{ti.count_field}` holds its count")
-        if count.assign != "count" or count.assign_ref != ti.name:
+        # Several arrays may share a count (parallel arrays): it names the first of them.
+        first = r.tail_item(count.assign_ref) if count.assign == "count" else None
+        if not first or (first is not ti and (ti.kind != "array" or first.kind != "array" or
+                                              first.count_field != ti.count_field)):
             raise IdlError(path, count.line,
                            f"`{count.name}` counts `{ti.name}`, so it must be `= count({ti.name})`")
     if ti.kind == "array":
@@ -1044,7 +1068,7 @@ def compat(old: Schema, new: Schema) -> list[str]:
                     continue
             errors.append(f"{what}: `{of.name}` (offset {of.offset}) was removed, moved or renamed")
         for nf in n.fields:
-            if nf.offset >= o.size and not nf.since:
+            if nf.offset >= o.size and not nf.since and not nf.reserved:
                 errors.append(f"{what}: `{nf.name}` was appended without `since`")
         if [t.name for t in o.tail] != [t.name for t in n.tail][:len(o.tail)]:
             errors.append(f"{what}: its variable data changed order")

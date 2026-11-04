@@ -73,7 +73,7 @@ static void borders(builder *b, ui_handle root) {
                                 {UI_STYLE_BORDER_COLOR, ui_token_ref(1)},
                                 {UI_STYLE_CORNER_RADIUS, ui_px(4)},
                                 {UI_STYLE_BACKGROUND_COLOR, ui_rgba(1, 0.97f, 0.9f, 1)}};
-    ui_style_block_desc block = {0, outlined, 4};
+    ui_style_block_desc block = {.decls = outlined, .count = 4};
     CHECK(ui_cmd_define_style(b->w, 7, &block, 1) == UI_OK);
     ui_handle styled = node(b, root, 168, 90, 136, 50);
     CHECK(ui_cmd_set_styles(b->w, styled, (uint32_t[]){7}, 1) == UI_OK);

@@ -91,7 +91,7 @@ static ui_result set_direction(demo *d, ui_cmd_writer *w) {
 #define DECLS(...) ((ui_style_decl[]){__VA_ARGS__}), (sizeof((ui_style_decl[]){__VA_ARGS__}) / sizeof(ui_style_decl))
 
 static ui_result define(ui_cmd_writer *w, uint32_t id, const ui_style_decl *decls, uint32_t count) {
-    return ui_cmd_define_style(w, id, &(ui_style_block_desc){0, decls, count}, 1);
+    return ui_cmd_define_style(w, id, &(ui_style_block_desc){.decls = decls, .count = count}, 1);
 }
 
 static ui_result define_styles(ui_cmd_writer *w) {

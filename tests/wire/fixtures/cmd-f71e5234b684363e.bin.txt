@@ -1,6 +1,6 @@
-commands 172 bytes: valid
-op 12 size 56: id=305419896 blocks=2 -> ok
-  block bytes=36 states=1 entries=3 header=12
+commands 176 bytes: valid
+op 12 size 60: id=305419896 blocks=2 -> ok
+  block bytes=40 states=1 entries=3 header=16
     entry prop=999 kind=2 words=2 skipped
     entry prop=1 kind=77 words=1 skipped
     entry prop=5 kind=6 words=3 read=1 n=3f000000 -> ok

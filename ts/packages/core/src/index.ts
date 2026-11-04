@@ -23,6 +23,9 @@ export {
   type Overrides,
   type StyleBlock,
   type StyleDesc,
+  type AnyToken,
+  type OneKind,
+  type TokenDecl,
   type TokenType,
   type Transitions,
 } from "./style.js";

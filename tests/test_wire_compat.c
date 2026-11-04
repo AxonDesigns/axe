@@ -419,7 +419,9 @@ static void test_start_spring_unknown(void) {
 static void test_styles(void) {
     uint8_t define[] = {
         0x78, 0x56, 0x34, 0x12, 12, 0, 2, 0, 0xEE, 0xEE, 0xEE, 0xEE, // header 12, 2 blocks
-        36, 0, UI_STATE_HOVER, 0, 3, 0, 12, 0, 0xEE, 0xEE, 0xEE, 0xEE, // 36 bytes, 3 entries
+        // 40 bytes, 3 entries, a 16-byte header: this version's 12 (no token declarations),
+        // then a newer writer's 4.
+        40, 0, UI_STATE_HOVER, 0, 3, 0, 16, 0, 0, 0, 0, 0, 0xEE, 0xEE, 0xEE, 0xEE,
         0xE7, 3, 2, 2, 0, 0, 0x80, 0x3F,                             // unknown property 999
         1, 0, 77, 1,                                                 // unknown kind 77
         5, 0, 6, 3, 0, 0, 0, 0x3F, 0xEE, 0xEE, 0xEE, 0xEE,            // opacity 0.5 + a word
@@ -475,12 +477,13 @@ static void test_styles(void) {
     ui_scene_destroy(&s);
 
     // Framing errors: an entry of 0 words, a block past the payload, a block header below 8,
-    // set_props entries past the payload, set_styles ids past it, a token's entry past it.
+    // token declarations past the block; set_props entries past the payload, set_styles ids
+    // past it, a token's entry past it.
     uint8_t bad[sizeof define];
     const struct {
         uint32_t offset;
         uint8_t value;
-    } patches[] = {{27, 0}, {12, 200}, {18, 4}};
+    } patches[] = {{31, 0}, {12, 200}, {18, 4}, {20, 1}};
     for (size_t i = 0; i < sizeof patches / sizeof *patches; i++) {
         memcpy(bad, define, sizeof bad);
         bad[patches[i].offset] = patches[i].value;
@@ -531,6 +534,85 @@ static void test_styles(void) {
     CHECK(fam && !strcmp(fam, "ab"));
     free(bytes);
     ui_scene_destroy(&sc);
+}
+
+static uint8_t *put_rgba(uint8_t *p, float r, float g, float b, float a) {
+    return ui_wire_put_f32(ui_wire_put_f32(ui_wire_put_f32(ui_wire_put_f32(p, r), g), b), a);
+}
+
+// Token declarations from a newer writer (docs/styles.md, "Token scopes"): a longer block
+// header, declarations of kinds this reader doesn't know (skipped), longer entries, bytes
+// after them in the block; set_token_overrides with a longer header and a longer entry.
+static void test_token_scopes(void) {
+    uint8_t define[] = {
+        0x77, 0, 0, 0, 8, 0, 1, 0,                                    // style 0x77, 1 block
+        64, 0, 0, 0, 1, 0, 16, 0, 2, 0, 0, 0, 0xEE, 0xEE, 0xEE, 0xEE, // 64 bytes, header 16, 2 tokens
+        1, 0, UI_VALUE_TOKEN, 2, 1, 0, 0, 0,                          // background: token 1
+        1, 0, 0, 0, 2, 0, 0, 0,                                       // tokens 1 and 2
+        0, 0, UI_VALUE_COLOR, 6, 0, 0, 0, 0, 0, 0, 0x80, 0x3F,        // 1: green and a word
+        0, 0, 0, 0, 0, 0, 0x80, 0x3F, 0xEE, 0xEE, 0xEE, 0xEE,
+        0, 0, 77, 1,                                                  // 2: a kind from the future
+        0xEE, 0xEE, 0xEE, 0xEE,                                       // and more in the block
+    };
+    ui_wire_buf b;
+    ui_wire_buf_init(&b, UI_WIRE_MAGIC_CMD);
+    memcpy(emit(&b, UI_OP_DEFINE_STYLE, sizeof define), define, sizeof define);
+    uint8_t *p = emit(&b, UI_OP_CREATE_NODE, UI_WIRE_CREATE_NODE_SIZE);
+    ui_wire_put_handle(ui_wire_put_handle(p, node), surface);
+    p = emit(&b, UI_OP_CREATE_NODE, UI_WIRE_CREATE_NODE_SIZE);
+    ui_wire_put_handle(ui_wire_put_handle(p, child), node);
+    p = emit(&b, UI_OP_SET_STYLES, 16);
+    p = ui_wire_put_u32(ui_wire_put_u16(ui_wire_put_u16(ui_wire_put_handle(p, node), 1), 12), 0x77);
+    p = emit(&b, UI_OP_SET_STYLES, 16);
+    ui_wire_put_u32(ui_wire_put_u16(ui_wire_put_u16(ui_wire_put_handle(p, child), 1), 12), 0x77);
+    p = emit(&b, UI_OP_SET_TOKEN, 4 + 20);
+    put_rgba(ui_wire_put_u32(ui_wire_put_u32(p, 1), 0x05070000u), 1, 0, 0, 1); // red
+    // The child's own: header 16, token 3 of an unknown kind, token 1 blue with a word more.
+    p = emit(&b, UI_OP_SET_TOKEN_OVERRIDES, 16 + 8 + 4 + 24);
+    p = ui_wire_put_u32(ui_wire_put_u16(ui_wire_put_u16(ui_wire_put_handle(p, child), 16), 2), 0xEEEEEEEEu);
+    p = ui_wire_put_u32(ui_wire_put_u32(p, 3), 1);
+    p = ui_wire_put_u32(p, 0x01580000u); // kind 88, 1 word
+    p = put_rgba(ui_wire_put_u32(p, 0x06070000u), 0, 0, 1, 1);
+    ui_wire_put_u32(p, 0xEEEEEEEEu);
+    size_t n;
+    uint8_t *bytes = ui_wire_buf_finish(&b, &n);
+    ui_scene s;
+    captured c = {0};
+    scene_init(&s, &c);
+    CHECK(ui_scene_apply(&s, bytes, n, 0) == UI_OK);
+    CHECK_EQ_INT(s.stats.dropped, 0);
+    ui_scene_resolve(&s, 0);
+    CHECK(ui_scene_check_resolved(&s));
+    const ui_style_def *d = ui_styles_find(&s.styles, 0x77);
+    CHECK(d && d->entry_count == 1 && d->decl_count == 1 && d->decls[0].token == 1);
+    const float *green = s.nodes[ui_handle_slot(node)].computed.background;
+    const float *blue = s.nodes[ui_handle_slot(child)].computed.background;
+    CHECK(green[0] == 0 && green[1] == 1 && green[2] == 0);
+    CHECK(blue[0] == 0 && blue[1] == 0 && blue[2] == 1);
+    free(bytes);
+    ui_scene_destroy(&s);
+    // Framing: declarations past the op.
+    uint8_t short_op[24] = {0};
+    ui_wire_put_u16(short_op + 8, 12);
+    ui_wire_put_u16(short_op + 10, 2); // two tokens: ids fit, their entries don't
+    CHECK_EQ_INT(apply_patched(UI_OP_SET_TOKEN_OVERRIDES, short_op, sizeof short_op), UI_ERR_MALFORMED);
+    // Invalid values drop the op: a 0 token, a value a token can't hold, unset in a style.
+    uint8_t zero[24] = {0};
+    ui_wire_put_u16(zero + 8, 12);
+    ui_wire_put_u16(zero + 10, 1);
+    ui_wire_put_u32(zero + 16, 0x01010000u); // token 0, unset
+    ui_scene z;
+    scene_init(&z, &c);
+    ui_wire_buf_init(&b, UI_WIRE_MAGIC_CMD);
+    p = emit(&b, UI_OP_CREATE_NODE, UI_WIRE_CREATE_NODE_SIZE);
+    ui_wire_put_handle(ui_wire_put_handle(p, node), surface);
+    memcpy(emit(&b, UI_OP_SET_TOKEN_OVERRIDES, sizeof zero), zero, sizeof zero);
+    ui_wire_put_handle(b.data + b.size - sizeof zero, node);
+    bytes = ui_wire_buf_finish(&b, &n);
+    CHECK(ui_scene_apply(&z, bytes, n, 0) == UI_OK);
+    CHECK_EQ_INT(z.stats.dropped, 1);
+    free(bytes);
+    ui_scene_destroy(&z);
 }
 
 static void test_events(void) {
@@ -590,6 +672,7 @@ int main(void) {
     RUN(test_styles);
     RUN(test_unknown_ops);
     RUN(test_start_spring_unknown);
+    RUN(test_token_scopes);
     RUN(test_events);
     return test_failures != 0;
 }

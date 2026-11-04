@@ -189,10 +189,35 @@ class Errors(unittest.TestCase):
                      ops="command ping = 1  original 8\n  node node\n  x e since c1\n"
                          "event pong = 1 original 4\n  id u32\n")
 
-    def test_appended_count_has_no_zero_default(self):
-        self.rejects("", "has no zero default",
+    def test_appended_count(self):
+        # Allowed: 0 from an older writer means no elements, which is what it sent, when what
+        # it counts follows the original variable data and the header says where that starts.
+        s = schema(ops="command ping = 1  original 12\n  node node\n  h u16 = header\n  n u16 = count(xs)\n"
+                       "  m u16 = count(ys) since c1\n  reserved u16\n  tail\n  xs u32[n]\n  ys u32[m]\n"
+                       "event pong = 1 original 4\n  id u32\n")
+        self.assertEqual(s.commands[0].size, 16)
+        self.rejects("", "without an original header field",
                      ops="command ping = 1  original 8\n  node node\n  n u16 = count(xs) since c1\n"
                          "  header u16 = header since c1\n  tail\n  xs u32[n]\n"
+                         "event pong = 1 original 4\n  id u32\n")
+        self.rejects("", "must come after `xs`",
+                     ops="command ping = 1  original 12\n  node node\n  h u16 = header\n  n u16 = count(xs)\n"
+                         "  m u16 = count(ys) since c1\n  reserved u16\n  tail\n  ys u32[m]\n  xs u32[n]\n"
+                         "event pong = 1 original 4\n  id u32\n")
+        self.rejects("", "a size field has no zero default",
+                     prelude=PRELUDE + "record e\n  words u8 = size/4\n  r u8\n  b u16 = size since c1\n",
+                     ops=PING)
+
+    def test_shared_count(self):
+        # Parallel arrays share one count, which names the first.
+        s = schema("record e\n  k u16\n  words u8 = size/4\n  r u8\n",
+                   "command ping = 1  original 12\n  node node\n  h u16 = header\n  n u16 = count(ids)\n"
+                   "  tail\n  ids u32[n]\n  es e[n]\n"
+                   "event pong = 1 original 4\n  id u32\n")
+        self.assertEqual([t.count_field for t in s.commands[0].tail], ["n", "n"])
+        self.rejects("", "so it must be `= count(bs)`",
+                     ops="command ping = 1  original 12\n  node node\n  h u16 = header\n  n u16 = count(ids)\n"
+                         "  tail\n  ids u32[n]\n  bs bytes[n]\n"
                          "event pong = 1 original 4\n  id u32\n")
 
     def test_taking_reserved_bytes_is_allowed(self):
@@ -357,6 +382,11 @@ event pong = 1  original 4
 
     def test_append_with_since(self):
         ops = self.OPS.replace("  reserved u32\n", "  reserved u32\n  y u32 since c1\n")
+        self.assertEqual(self.check(self.BASE, ops), [])
+
+    def test_append_reserved_padding(self):
+        ops = self.OPS.replace("  reserved u32\n", "  reserved u32\n  y u16 since c1\n  reserved u16\n")
+        # Reserved padding after an appended field needs no `since`.
         self.assertEqual(self.check(self.BASE, ops), [])
 
     def test_take_reserved(self):

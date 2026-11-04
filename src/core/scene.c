@@ -28,6 +28,7 @@ void ui_scene_init(ui_scene *s, const ui_logger *log) {
     s->log = log;
     ui_handle_table_init(&s->handles, UI_HANDLE_NODE);
     ui_styles_init(&s->styles);
+    s->view = ui_style_view_of(&s->styles);
 }
 
 static void free_node(ui_scene *s, ui_node *n) {
@@ -41,6 +42,16 @@ static void free_node(ui_scene *s, ui_node *n) {
     ui_text_source_release(n->text_base);
     n->text_base = NULL;
     n->text_keyed = false;
+    // From the node's flag, not through the scope: an ancestor's may be freed already.
+    ui_node_scope *own = n->scoped ? (ui_node_scope *)n->scope : NULL;
+    n->scoped = false;
+    if (own) {
+        for (uint32_t i = 0; i < own->own_count; i++) ui_styles_release_value(&s->styles, &own->own[i].value);
+        free(own->own);
+        ui_scope_free(&own->scope);
+        free(own);
+    }
+    n->scope = NULL;
     free(n->anim);
     free(n->styles);
     free(n->overrides);
@@ -57,6 +68,9 @@ void ui_scene_destroy(ui_scene *s) {
     for (uint32_t slot = 0; slot < s->handles.used; slot++) {
         if (s->handles.alive[slot]) free_node(s, &s->nodes[slot]);
     }
+    free(s->decls.items);
+    ui_scope_free(&s->scope_next);
+    free(s->scope_changed);
     ui_handle_table_destroy(&s->handles);
     ui_styles_free(&s->styles);
     free(s->nodes);
@@ -243,6 +257,91 @@ static bool set_override(ui_scene *s, ui_node *n, uint16_t prop, const ui_value 
     return true;
 }
 
+// ---- Token scopes ------------------------------------------------------------------------
+// (docs/styles.md, "Token scopes"). Every node points at its scope: its own, or its parent's.
+// Those pointers follow the tree as ops change it; the scopes' declarations change when their
+// nodes resolve, which then queues the descendants reading a token that changed.
+
+static ui_node_scope *own_scope(const ui_scene *s, uint32_t slot) {
+    return s->nodes[slot].scoped ? (ui_node_scope *)s->nodes[slot].scope : NULL;
+}
+
+// The scope a node's parent gives it.
+static ui_scope *enclosing_scope(const ui_scene *s, const ui_node *n) {
+    return n->parent != UI_NO_SLOT ? s->nodes[n->parent].scope : NULL;
+}
+
+// The node after `cur` in pre-order within `top`'s subtree, cur's children included when
+// `descend`; UI_NO_SLOT at the end. Needs no stack.
+static uint32_t next_in(const ui_scene *s, uint32_t top, uint32_t cur, bool descend) {
+    if (descend && s->nodes[cur].first_child != UI_NO_SLOT) return s->nodes[cur].first_child;
+    while (cur != top && s->nodes[cur].next_sibling == UI_NO_SLOT) cur = s->nodes[cur].parent;
+    return cur == top ? UI_NO_SLOT : s->nodes[cur].next_sibling;
+}
+
+// Points what pointed at scope `from` in top's subtree at `to`: nodes without a scope of their
+// own, and the parents of the scopes inside (whose subtrees point at them).
+static void repoint(ui_scene *s, uint32_t top, ui_scope *from, ui_scope *to) {
+    for (uint32_t cur = top; cur != UI_NO_SLOT;) {
+        ui_node_scope *own = own_scope(s, cur);
+        if (own) {
+            if (own->scope.parent == from) own->scope.parent = to;
+        } else if (s->nodes[cur].scope == from) {
+            s->nodes[cur].scope = to;
+        }
+        cur = next_in(s, top, cur, !own);
+    }
+}
+
+// The node's own scope, made the first time: empty, inside the one it had, which its subtree
+// now reads through it. NULL if out of memory.
+static ui_node_scope *attach_scope(ui_scene *s, uint32_t slot) {
+    ui_node_scope *own = own_scope(s, slot);
+    if (own) return own;
+    if (!(own = calloc(1, sizeof *own))) return NULL;
+    ui_scope *outer = s->nodes[slot].scope;
+    own->scope.parent = outer;
+    repoint(s, slot, outer, &own->scope);
+    s->nodes[slot].scoped = true;
+    return own;
+}
+
+// Every token declared in a scope or those around it, by filter.
+static uint64_t chain_filter(const ui_scope *sc) {
+    uint64_t f = 0;
+    for (; sc; sc = sc->parent) f |= sc->filter;
+    return f;
+}
+
+// Sets (UI_VALUE_UNSET: removes) one of the node's own token declarations, taking over the
+// value's string reference.
+static bool set_own_decl(ui_scene *s, uint32_t slot, const ui_scope_decl *d) {
+    ui_node_scope *own = own_scope(s, slot);
+    if (!own && d->value.kind == UI_VALUE_UNSET) return true;
+    if (!own && !(own = attach_scope(s, slot))) {
+        ui_styles_release_value(&s->styles, &d->value);
+        return false;
+    }
+    for (uint32_t i = 0; i < own->own_count; i++) {
+        if (own->own[i].token != d->token) continue;
+        ui_styles_release_value(&s->styles, &own->own[i].value);
+        if (d->value.kind == UI_VALUE_UNSET) {
+            memmove(&own->own[i], &own->own[i + 1], (own->own_count - i - 1) * sizeof *own->own);
+            own->own_count--;
+        } else {
+            own->own[i].value = d->value;
+        }
+        return true;
+    }
+    if (d->value.kind == UI_VALUE_UNSET) return true;
+    if (ui_grow((void **)&own->own, &own->own_capacity, own->own_count + 1, sizeof *own->own) != UI_OK) {
+        ui_styles_release_value(&s->styles, &d->value);
+        return false;
+    }
+    own->own[own->own_count++] = *d;
+    return true;
+}
+
 void ui_scene_set_root_direction(ui_scene *s, ui_handle surface, uint8_t direction) {
     uint32_t i = ui_scene_root_index(s, surface);
     if (i == UI_MAX_SURFACES || s->roots[i].computed.text.direction == direction) return;
@@ -298,6 +397,7 @@ static bool apply_create(ui_scene *s, const ui_wire_op *op) {
     if (*last != UI_NO_SLOT) s->nodes[*last].next_sibling = slot;
     else *first = slot;
     *last = slot;
+    n->scope = enclosing_scope(s, n);
     s->roots[n->root].dirty = true;
     mark_style_dirty(s, slot, true);
     layout_dirty(s, slot);
@@ -382,6 +482,7 @@ static ui_handle op_node(const ui_wire_op *op) {
         NODE_OF(UI_OP_SET_STYLES, set_styles)
         NODE_OF(UI_OP_SET_PROPS, set_props)
         NODE_OF(UI_OP_SET_STATE, set_state)
+        NODE_OF(UI_OP_SET_TOKEN_OVERRIDES, set_token_overrides)
         NODE_OF(UI_OP_MOVE_NODE, move_node)
         NODE_OF(UI_OP_REQUEST_LAYOUT, request_layout)
     default: return (ui_handle){0};
@@ -406,6 +507,7 @@ static bool apply_op(ui_scene *s, const ui_wire_op *op, uint64_t now_ns) {
     case UI_OP_SET_STYLES:
     case UI_OP_SET_PROPS:
     case UI_OP_SET_STATE:
+    case UI_OP_SET_TOKEN_OVERRIDES:
     case UI_OP_MOVE_NODE:
     case UI_OP_REQUEST_LAYOUT:
     case UI_OP_DESTROY_NODE:
@@ -486,6 +588,20 @@ static bool apply_set_props(ui_scene *s, ui_node *n, const ui_wire_set_props *v,
     return ok;
 }
 
+static bool apply_token_overrides(ui_scene *s, ui_node *n, const ui_wire_set_token_overrides *v,
+                                  const ui_wire_set_token_overrides_tail *t) {
+    uint32_t count = v->count, decoded;
+    ui_scope_decl local[16], *d = count <= 16 ? local : malloc(count * sizeof *d);
+    if (!d) return false;
+    bool ok = ui_scope_decl_decode(&s->styles, t->tokens, t->values, count, true, d, &decoded);
+    uint32_t slot = (uint32_t)(n - s->nodes), i = 0;
+    for (; ok && i < decoded; i++) ok = set_own_decl(s, slot, &d[i]);
+    for (; i < decoded; i++) ui_styles_release_value(&s->styles, &d[i].value); // not taken over
+    if (d != local) free(d);
+    mark_style_dirty(s, slot, true); // even partly applied: the scope is gathered again
+    return ok;
+}
+
 // Sets the root of every node in a subtree (it moved to another surface).
 static void set_root(ui_scene *s, uint32_t slot, uint32_t root) {
     uint32_t top = slot;
@@ -558,6 +674,9 @@ static bool apply_move(ui_scene *s, ui_node *n, const ui_wire_move_node *v) {
     }
     parent_layout_dirty(s, slot);
     s->roots[n->root].dirty = true;
+    // The scope around it before the move (its own scope's parent, if it has one).
+    ui_node_scope *own = own_scope(s, slot);
+    ui_scope *old_outer = own ? own->scope.parent : n->scope;
     float from[2];
     presented_origin(s, n->parent, from);
     uint32_t old_root = n->root;
@@ -576,6 +695,17 @@ static bool apply_move(ui_scene *s, ui_node *n, const ui_wire_move_node *v) {
     s->roots[root_index].dirty = true;
     layout_dirty(s, slot);
     mark_style_dirty(s, slot, false); // it inherits from its new parent
+    ui_scope *new_outer = enclosing_scope(s, n);
+    if (new_outer != old_outer) {
+        // Another scope: what the subtree reads may change wherever it reads a token either
+        // scope chain declares.
+        uint64_t changed = chain_filter(old_outer) | chain_filter(new_outer);
+        repoint(s, slot, old_outer, new_outer);
+        for (uint32_t cur = slot; changed && cur != UI_NO_SLOT; cur = next_in(s, slot, cur, true)) {
+            const ui_node *m = &s->nodes[cur];
+            if (m->token_filter & changed) mark_families_dirty(s, cur, false, m->token_families);
+        }
+    }
     return true;
 }
 
@@ -699,6 +829,15 @@ static bool apply_node_op(ui_scene *s, const ui_wire_op *op, uint64_t now_ns) {
             UI_OK)
             return drop(s, "request_layout (out of memory)", h);
         s->requests[s->request_count++] = (ui_scene_request){h, o.request_id};
+        return true;
+    }
+    case UI_OP_SET_TOKEN_OVERRIDES: {
+        if (!n) return drop(s, "set_token_overrides", h);
+        ui_wire_set_token_overrides o;
+        ui_wire_set_token_overrides_read(op->payload, ui_wire_set_token_overrides_header_size(op->payload), &o);
+        ui_wire_set_token_overrides_tail t;
+        ui_wire_set_token_overrides_tail_of(op->payload, &o, &t);
+        if (!apply_token_overrides(s, n, &o, &t)) return drop(s, "set_token_overrides (values)", h);
         return true;
     }
     case UI_OP_SET_STATE: {
@@ -1067,8 +1206,6 @@ static const ui_computed *parent_values(const ui_scene *s, const ui_node *n) {
     return n->parent != UI_NO_SLOT ? &s->nodes[n->parent].computed : &s->roots[n->root].computed;
 }
 
-// A token id's bit in a node's token_filter.
-static uint64_t token_bit(uint32_t id) { return 1ull << ((id * 0x9E3779B1u) >> 26); }
 
 // The text values a paragraph is shaped with (ui_text_ctx_key), but direction.
 static bool shaping_values_eq(const ui_text_values *a, const ui_text_values *b) {
@@ -1078,8 +1215,137 @@ static bool shaping_values_eq(const ui_text_values *a, const ui_text_values *b) 
 
 // What resolve_node returns: the families its children compute again (UI_FAMILY_*), and
 // whether any of its values changed (children taking `inherit` on a non-inherited property
-// then compute everything again).
+// then compute everything again). When its scope changed, it queued the descendants reading
+// a changed token and set s->scope_marked: resolve its subtree in tree order then.
 enum { RESOLVE_CHANGED = 0x100 };
+
+static int cmp_u32(const void *a, const void *b);
+
+// Which families of a node read a token in `set` (sorted), for a node whose token filter
+// meets the set's: all its token families when there is no choice, else those of the
+// entries whose chain reads one.
+// A node reading tokens for one family only needs no look (families_reading inlines that).
+__attribute__((noinline)) static uint32_t families_reading_slow(ui_scene *s, const ui_node *n, const uint32_t *set,
+                                                                 uint32_t count) {
+    ui_style_view view = ui_style_view_of(&s->styles);
+    view.scope = n->scope;
+    uint32_t families = 0;
+    for (uint32_t k = 0; k < n->cascade_count; k++) {
+        const ui_style_entry *e = n->cascade[k];
+        if (e->value.kind != UI_VALUE_TOKEN || (families & e->family)) continue;
+        if (n->scope ? ui_style_view_chain_reads(&view, e->value.token, set, count)
+                     : bsearch(&e->value.token, set, count, sizeof *set, cmp_u32) != NULL)
+            families |= e->family;
+    }
+    return families;
+}
+
+static inline uint32_t families_reading(ui_scene *s, const ui_node *n, const uint32_t *set, uint32_t count) {
+    uint32_t families = n->token_families;
+    return families & (families - 1) ? families_reading_slow(s, n, set, count) : families;
+}
+
+// Queues the families of `n` reading a token in `set` (sorted). A node whose cascade is
+// gathered again is computed whole anyway (and its cascade can't be read: it may point into
+// a replaced definition).
+static void mark_reading(ui_scene *s, uint32_t slot, const uint32_t *set, uint32_t count, uint64_t filter) {
+    ui_node *n = &s->nodes[slot];
+    if (!(n->token_filter & filter) || (n->style_dirty && n->dirty_families == UI_FAMILY_ALL)) return;
+    if (n->cascade_dirty) {
+        mark_style_dirty(s, slot, true);
+        return;
+    }
+    uint32_t families = families_reading(s, n, set, count);
+    if (families) mark_families_dirty(s, slot, false, families);
+}
+
+// After `top`'s scope changed the tokens in `changed` (sorted): queues the descendants that
+// read one, as it is for them. A descendant whose own scope, or one between, takes a token
+// hides the change from its subtree; one that hides all of them is skipped whole.
+__attribute__((noinline)) static void mark_scope_change(ui_scene *s, uint32_t top, const uint32_t *changed,
+                                                         uint32_t count) {
+    const ui_scope *at = s->nodes[top].scope;
+    ui_style_view types = ui_style_view_of(&s->styles);
+    uint64_t filter = 0;
+    for (uint32_t i = 0; i < count; i++) filter |= ui_token_bit(changed[i]);
+    uint32_t local[64], *left = count <= 64 ? local : malloc(count * sizeof *left);
+    for (uint32_t cur = next_in(s, top, top, true); cur != UI_NO_SLOT;) {
+        const ui_node *m = &s->nodes[cur];
+        // The changed tokens no scope between `top`'s and this node's takes.
+        const uint32_t *set = changed;
+        uint32_t n = count;
+        uint64_t f = filter;
+        if (m->scope != at && left) {
+            n = 0;
+            f = 0;
+            for (uint32_t i = 0; i < count; i++) {
+                uint64_t bit = ui_token_bit(changed[i]);
+                bool hidden = false;
+                for (const ui_scope *sc = m->scope; sc && sc != at && !hidden; sc = sc->parent) {
+                    const ui_scope_decl *d = (sc->filter & bit) ? ui_scope_find(sc, changed[i]) : NULL;
+                    hidden = d && ui_style_view_scope_takes(&types, changed[i], &d->value);
+                }
+                if (!hidden) {
+                    left[n++] = changed[i];
+                    f |= bit;
+                }
+            }
+            set = left;
+        }
+        if (n) mark_reading(s, cur, set, n, f);
+        cur = next_in(s, top, cur, n > 0); // nothing left reaches its subtree
+    }
+    if (left != local) free(left);
+}
+
+// Gathers the node's scope again (its cascade was), and returns the number of tokens whose
+// value in it changed (in s->scope_changed, sorted).
+__attribute__((noinline)) static uint32_t update_scope(ui_scene *s, uint32_t slot) {
+    ui_node *n = &s->nodes[slot];
+    ui_node_scope *own = own_scope(s, slot);
+    if (!own && !s->decls.count) return 0;
+    if (!own && !(own = attach_scope(s, slot))) {
+        UI_ERROR(s->log, MODULE, "out of memory resolving a token scope");
+        return 0;
+    }
+    ui_scope *next = &s->scope_next, *cur = &own->scope;
+    if (!ui_scope_set(next, s->decls.items, s->decls.count)) {
+        UI_ERROR(s->log, MODULE, "out of memory resolving a token scope");
+        next->count = 0;
+    }
+    // The tokens declared in one but not the other, or with another value.
+    uint32_t changed = 0, i = 0, j = 0;
+    if (ui_grow((void **)&s->scope_changed, &s->scope_changed_capacity, cur->count + next->count + 1,
+                sizeof *s->scope_changed) != UI_OK) {
+        UI_ERROR(s->log, MODULE, "out of memory resolving a token scope");
+        return 0;
+    }
+    while (i < cur->count || j < next->count) {
+        uint32_t a = i < cur->count ? cur->decls[i].token : UINT32_MAX;
+        uint32_t b = j < next->count ? next->decls[j].token : UINT32_MAX;
+        if (i < cur->count && j < next->count && a == b) {
+            if (!ui_value_eq(&cur->decls[i].value, &next->decls[j].value)) s->scope_changed[changed++] = a;
+            i++, j++;
+        } else if (j >= next->count || (i < cur->count && a < b)) {
+            s->scope_changed[changed++] = a;
+            i++;
+        } else {
+            s->scope_changed[changed++] = b;
+            j++;
+        }
+    }
+    // The new declarations replace the old (the arrays swap; the parent stays).
+    ui_scope old = *cur;
+    cur->decls = next->decls;
+    cur->count = next->count;
+    cur->capacity = next->capacity;
+    cur->filter = next->filter;
+    next->decls = old.decls;
+    next->capacity = old.capacity;
+    next->count = 0;
+    (void)n;
+    return changed;
+}
 
 // Computes a node's values (its dirty families of them: all when its cascade changed) from
 // its cascade and its parent's, and makes what is drawn and laid out follow.
@@ -1088,14 +1354,25 @@ static uint32_t resolve_node(ui_scene *s, ui_node *n, uint64_t now_ns) {
     n->style_dirty = false;
     n->dirty_families = 0;
     if (n->cascade_dirty) {
+        uint32_t slot = (uint32_t)(n - s->nodes);
         ui_style_view view = ui_style_view_of(&s->styles);
-        if (!ui_style_cascade(&view, n->styles, n->style_count, n->state, n->overrides,
-                              n->override_count, &n->cascade, &n->cascade_count, &n->cascade_capacity)) {
+        ui_node_scope *own = own_scope(s, slot);
+        if (!ui_style_cascade_decls(&view, n->styles, n->style_count, n->state, n->overrides, n->override_count,
+                                    &n->cascade, &n->cascade_count, &n->cascade_capacity, own ? own->own : NULL,
+                                    own ? own->own_count : 0, &s->decls)) {
             UI_ERROR(s->log, MODULE, "out of memory resolving styles");
             n->cascade_count = 0; // initial and inherited values only
+            s->decls.count = 0;
         }
         n->cascade_dirty = false;
         families = UI_FAMILY_ALL;
+        // Its scope: gathered with the cascade. The descendants reading a token that changed
+        // are queued now (what they read doesn't depend on this node's values).
+        uint32_t changed = update_scope(s, slot);
+        if (changed && n->first_child != UI_NO_SLOT) {
+            mark_scope_change(s, slot, s->scope_changed, changed);
+            s->scope_marked = true;
+        }
     }
     if (!n->resolved || (families & UI_FAMILY_OTHER)) families = UI_FAMILY_ALL;
     bool all = families == UI_FAMILY_ALL;
@@ -1116,20 +1393,23 @@ static uint32_t resolve_node(ui_scene *s, ui_node *n, uint64_t now_ns) {
     }
     uint16_t old_declared = n->text_declared;
     if (all) {
+        // The entries' own tokens; computing adds the links after them (aliases, through
+        // scopes too).
         n->token_filter = 0;
         n->token_families = 0;
         for (uint32_t k = 0; k < n->cascade_count; k++) {
             const ui_style_entry *e = n->cascade[k];
             if (e->value.kind != UI_VALUE_TOKEN) continue;
-            n->token_filter |= token_bit(e->value.token);
+            n->token_filter |= ui_token_bit(e->value.token);
             n->token_families |= e->family;
         }
     }
     ui_computed_start_families(c, parent, families);
     text_start(n, c, families);
-    ui_style_view view = ui_style_view_of(&s->styles);
+    s->view.scope = n->scope;
+    s->view.read = &n->token_filter;
     uint32_t declared;
-    uint32_t flags = ui_style_compute_families(&view, n->cascade, n->cascade_count, parent, families, c, &declared);
+    uint32_t flags = ui_style_compute_families(&s->view, n->cascade, n->cascade_count, parent, families, c, &declared);
     if (all) {
         n->inherits_other = flags & UI_STYLE_INHERITS_OTHER;
         n->text_declared = (uint16_t)declared;
@@ -1215,6 +1495,15 @@ static void dirty_children(ui_scene *s, const ui_node *n, uint32_t r, uint32_t *
     }
 }
 
+// Resolves the queued and reached nodes of top's subtree (top excluded), in tree order.
+static void resolve_in_order(ui_scene *s, uint32_t top, uint64_t now_ns) {
+    for (uint32_t cur = next_in(s, top, top, true); cur != UI_NO_SLOT; cur = next_in(s, top, cur, true)) {
+        ui_node *n = &s->nodes[cur];
+        if (n->style_dirty) dirty_children(s, n, resolve_node(s, n, now_ns), NULL, NULL);
+    }
+    s->scope_marked = false; // what it queued comes later in this order
+}
+
 // Computes `slot`, then, depth first, every descendant reached through a change it inherits.
 // Uses s->scratch as the stack.
 static void resolve_subtree(ui_scene *s, uint32_t top, uint64_t now_ns) {
@@ -1226,9 +1515,19 @@ static void resolve_subtree(ui_scene *s, uint32_t top, uint64_t now_ns) {
     }
     s->scratch[count++] = top;
     while (count) {
-        ui_node *n = &s->nodes[s->scratch[--count]];
+        uint32_t slot = s->scratch[--count];
+        ui_node *n = &s->nodes[slot];
+        uint32_t r = resolve_node(s, n, now_ns);
+        if (s->scope_marked) {
+            // Its scope queued descendants anywhere below: resolve the subtree in tree order,
+            // parents first, rather than through the stack.
+            s->scope_marked = false;
+            dirty_children(s, n, r, NULL, NULL);
+            resolve_in_order(s, slot, now_ns);
+            continue;
+        }
         // A child queued itself and pushed here resolves now; the queue then skips it.
-        dirty_children(s, n, resolve_node(s, n, now_ns), s->scratch, &count);
+        dirty_children(s, n, r, s->scratch, &count);
     }
 }
 
@@ -1256,7 +1555,7 @@ static void mark_changes(ui_scene *s, const uint32_t *styles, uint32_t style_cou
                          uint32_t token_count) {
     if (token_count) qsort(tokens, token_count, sizeof *tokens, cmp_u32);
     uint64_t filter = 0;
-    for (uint32_t i = 0; i < token_count; i++) filter |= token_bit(tokens[i]);
+    for (uint32_t i = 0; i < token_count; i++) filter |= ui_token_bit(tokens[i]);
     for (uint32_t slot = 0; slot < s->handles.used; slot++) {
         ui_node *n = &s->nodes[slot];
         if (!s->handles.alive[slot] || (n->style_dirty && n->dirty_families == UI_FAMILY_ALL)) continue;
@@ -1269,16 +1568,7 @@ static void mark_changes(ui_scene *s, const uint32_t *styles, uint32_t style_cou
         }
         if (!(n->token_filter & filter)) continue;
         // Which of the families reading tokens read a changed one, when there is a choice.
-        uint32_t families = n->token_families;
-        if (families & (families - 1)) {
-            families = 0;
-            for (uint32_t k = 0; k < n->cascade_count; k++) {
-                const ui_style_entry *e = n->cascade[k];
-                if (e->value.kind == UI_VALUE_TOKEN &&
-                    bsearch(&e->value.token, tokens, token_count, sizeof *tokens, cmp_u32))
-                    families |= e->family;
-            }
-        }
+        uint32_t families = families_reading(s, n, tokens, token_count);
         if (families) mark_families_dirty(s, slot, false, families);
     }
 }
@@ -1292,6 +1582,7 @@ static uint32_t resolve_walk(ui_scene *s, uint64_t now_ns) {
         for (uint32_t slot = s->roots[i].first_child; slot != UI_NO_SLOT;) {
             ui_node *n = &s->nodes[slot];
             visited++;
+            // A scope change queued descendants, which come later in this order.
             if (n->style_dirty) dirty_children(s, n, resolve_node(s, n, now_ns), NULL, NULL);
             // Next in order: the first child, else the next sibling of the nearest ancestor
             // that has one.
@@ -1303,13 +1594,23 @@ static uint32_t resolve_walk(ui_scene *s, uint64_t now_ns) {
             if (slot != UI_NO_SLOT) slot = s->nodes[slot].next_sibling;
         }
     }
+    s->scope_marked = false; // what scope changes queued came later in this order
     return visited;
 }
 
 void ui_scene_resolve(ui_scene *s, uint64_t now_ns) {
     uint32_t *styles, style_count, *tokens, token_count;
-    if (ui_styles_take_changes(&s->styles, &styles, &style_count, &tokens, &token_count))
+    if (ui_styles_take_changes(&s->styles, &styles, &style_count, &tokens, &token_count)) {
+#ifndef NDEBUG
+        ui_style_view global = ui_style_view_of(&s->styles);
+        for (uint32_t i = 0; i < token_count; i++) {
+            if (ui_style_view_token_type(&global, tokens[i]) == UI_TOKEN_INVALID)
+                UI_DEBUG_REPORT(s->log, MODULE, "token %u is in a cycle of tokens: its declarations and the "
+                                "declarations reading it are ignored", tokens[i]);
+        }
+#endif
         mark_changes(s, styles, style_count, tokens, token_count);
+    }
     free(styles);
     free(tokens);
     // Parents first, so every node computes from its parent's new values. Each node's
@@ -1372,29 +1673,74 @@ static bool computed_eq(const ui_computed *a, const ui_computed *b) {
            lengths_eq(x->inset, y->inset, 4);
 }
 
+static bool scope_eq(const ui_scope *a, const ui_scope *b) {
+    if (a->count != b->count || a->filter != b->filter) return false;
+    for (uint32_t i = 0; i < a->count; i++) {
+        if (a->decls[i].token != b->decls[i].token || !ui_value_eq(&a->decls[i].value, &b->decls[i].value))
+            return false;
+    }
+    return true;
+}
+
+// The nearest non-empty scope in `fresh` at `slot` or above it.
+static ui_scope *fresh_scope_of(const ui_scene *s, ui_scope *fresh, uint32_t slot) {
+    for (; slot != UI_NO_SLOT; slot = s->nodes[slot].parent) {
+        if (fresh[slot].count) return &fresh[slot];
+    }
+    return NULL;
+}
+
 bool ui_scene_check_resolved(ui_scene *s) {
     const ui_style_entry **list = NULL;
-    uint32_t len = 0, cap = 0;
+    uint32_t len = 0, cap = 0, used = s->handles.used;
     bool ok = true;
     ui_style_view view = ui_style_view_of(&s->styles);
-    for (uint32_t slot = 0; ok && slot < s->handles.used; slot++) {
+    // Every node's scope from scratch: its declarations, the scene's scope for it, its pointer.
+    ui_scope *fresh = calloc(used ? used : 1, sizeof *fresh);
+    ui_decl_list decls = {0};
+    if (!fresh) return true; // out of memory: nothing to compare with
+    for (uint32_t slot = 0; ok && slot < used; slot++) {
+        ui_node *n = &s->nodes[slot];
+        if (!s->handles.alive[slot]) continue;
+        ui_node_scope *own = own_scope(s, slot);
+        if (!ui_style_cascade_decls(&view, n->styles, n->style_count, n->state, n->overrides, n->override_count,
+                                    &list, &len, &cap, own ? own->own : NULL, own ? own->own_count : 0, &decls) ||
+            !ui_scope_set(&fresh[slot], decls.items, decls.count))
+            break;
+        ui_scope *outer = enclosing_scope(s, n);
+        ok = own ? scope_eq(&own->scope, &fresh[slot]) && n->scope == &own->scope && own->scope.parent == outer
+                 : !fresh[slot].count && n->scope == outer;
+    }
+    for (uint32_t slot = 0; slot < used; slot++) {
+        if (s->handles.alive[slot] && fresh[slot].count && s->nodes[slot].parent != UI_NO_SLOT)
+            fresh[slot].parent = fresh_scope_of(s, fresh, s->nodes[slot].parent);
+    }
+    for (uint32_t slot = 0; ok && slot < used; slot++) {
         ui_node *n = &s->nodes[slot];
         if (!s->handles.alive[slot]) continue;
         if (!ui_style_cascade(&view, n->styles, n->style_count, n->state, n->overrides, n->override_count, &list,
                               &len, &cap))
             break; // out of memory: nothing to compare with
         const ui_computed *parent = parent_values(s, n);
-        ui_computed fresh;
-        ui_computed_start(&fresh, parent);
-        text_start(n, &fresh, UI_FAMILY_ALL);
+        ui_computed fresh_values;
+        ui_computed_start(&fresh_values, parent);
+        text_start(n, &fresh_values, UI_FAMILY_ALL);
         uint32_t declared;
-        uint32_t flags = ui_style_compute(&view, list, len, parent, &fresh, &declared);
-        ok = computed_eq(&fresh, &n->computed) && declared == n->text_declared &&
-             (!(flags & UI_STYLE_INHERITS_OTHER) || n->inherits_other);
+        uint64_t read = 0;
+        for (uint32_t k = 0; k < len; k++) {
+            if (list[k]->value.kind == UI_VALUE_TOKEN) read |= ui_token_bit(list[k]->value.token);
+        }
+        ui_style_view scoped = view;
+        scoped.scope = fresh_scope_of(s, fresh, slot);
+        scoped.read = &read;
+        uint32_t flags = ui_style_compute(&scoped, list, len, parent, &fresh_values, &declared);
+        // A token it reads that its filter misses would not bring a change to it.
+        ok = computed_eq(&fresh_values, &n->computed) && declared == n->text_declared &&
+             (!(flags & UI_STYLE_INHERITS_OTHER) || n->inherits_other) && !(read & ~n->token_filter);
         // What is drawn: the value, or where its spring heads.
-        const float *values[] = {fresh.background, fresh.border_color[0], fresh.border_color[1],
-                                 fresh.border_color[2], fresh.border_color[3], fresh.corner_radius,
-                                 &fresh.opacity, fresh.text.color};
+        const ui_computed *v = &fresh_values;
+        const float *values[] = {v->background, v->border_color[0], v->border_color[1], v->border_color[2],
+                                 v->border_color[3], v->corner_radius, &v->opacity, v->text.color};
         const int springs[] = {UI_SPRING_COLOR, UI_SPRING_BORDER_TOP, UI_SPRING_BORDER_RIGHT, UI_SPRING_BORDER_BOTTOM,
                                UI_SPRING_BORDER_LEFT, UI_SPRING_RADIUS, UI_SPRING_OPACITY, UI_SPRING_TEXT_COLOR};
         for (size_t i = 0; ok && i < UI_ARRAY_LEN(springs); i++) {
@@ -1404,6 +1750,9 @@ bool ui_scene_check_resolved(ui_scene *s) {
                 ok = sp && sp->active ? sp->target[k] == (double)values[i][k] : shown[k] == values[i][k];
         }
     }
+    for (uint32_t slot = 0; slot < used; slot++) ui_scope_free(&fresh[slot]);
+    free(fresh);
+    free(decls.items);
     free(list);
     return ok;
 }

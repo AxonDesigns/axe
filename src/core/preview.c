@@ -1,5 +1,6 @@
 #include "core/preview.h"
 
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -14,12 +15,14 @@ typedef struct pv_node {
     bool exists;
     uint32_t generation;      // its node's, or the last its slot had (a new one must be higher)
     uint32_t parent, root;    // parent slot (UI_NO_SLOT: at the root `root`)
-    bool styles_set, overrides_set, state_set;
+    bool styles_set, overrides_set, state_set, own_set;
     uint32_t *styles;
     uint32_t style_count;
     ui_style_entry *overrides;
     uint32_t override_count, override_capacity;
     uint8_t state;
+    ui_scope_decl *own;       // its own token declarations (set_token_overrides), when own_set
+    uint32_t own_count, own_capacity;
     // The buffer's set_text ops for it, in order (each with a reader after it, where its
     // continuations start), and what the last that applies decodes to, when needed.
     struct pv_text {
@@ -32,6 +35,11 @@ typedef struct pv_node {
     // Memo.
     bool done, alive;
     bool differs;             // its text values differ from the scene's
+    // Its scope after the buffer: the scene's (when !scope_differs), or `scope_store` (its own
+    // declarations, inside its parent's), or its parent's.
+    const ui_scope *scope;
+    ui_scope *scope_store;    // allocated: entries move when the table grows, scopes mustn't
+    bool scope_differs;       // it, or a scope around it, may declare otherwise than in the scene
     ui_text_ctx ctx;
     ui_text_values values;    // what its children inherit
 } pv_node;
@@ -49,6 +57,7 @@ struct ui_preview {
     bool failed;              // out of memory: every answer is "unknown"
     const ui_style_entry **list; // cascade scratch
     uint32_t list_capacity;
+    ui_decl_list decls;          // their token declarations
     uint32_t *path;           // evaluation scratch
     uint32_t path_capacity;
 };
@@ -194,6 +203,52 @@ static void set_override(ui_preview *p, pv_node *e, const ui_style_entry *entry)
     e->overrides[e->override_count++] = *entry;
 }
 
+// The scene node's own token declarations (set_token_overrides').
+static void scene_own(const ui_scene *s, uint32_t slot, const ui_scope_decl **own, uint32_t *count) {
+    *own = NULL;
+    *count = 0;
+    if (slot >= s->handles.used || !s->handles.alive[slot]) return;
+    const ui_node_scope *ns = (const ui_node_scope *)s->nodes[slot].scope;
+    if (s->nodes[slot].scoped) {
+        *own = ns->own;
+        *count = ns->own_count;
+    }
+}
+
+static void copy_own(ui_preview *p, pv_node *e) {
+    if (e->own_set) return;
+    e->own_set = true;
+    const ui_scope_decl *own;
+    uint32_t count;
+    scene_own(p->scene, e->slot, &own, &count);
+    if (!count) return;
+    if (ui_grow((void **)&e->own, &e->own_capacity, count, sizeof *e->own) != UI_OK) {
+        p->failed = true;
+        return;
+    }
+    memcpy(e->own, own, count * sizeof *e->own);
+    e->own_count = count;
+}
+
+static void set_own(ui_preview *p, pv_node *e, const ui_scope_decl *d) {
+    for (uint32_t i = 0; i < e->own_count; i++) {
+        if (e->own[i].token != d->token) continue;
+        if (d->value.kind == UI_VALUE_UNSET) {
+            memmove(&e->own[i], &e->own[i + 1], (e->own_count - i - 1) * sizeof *e->own);
+            e->own_count--;
+        } else {
+            e->own[i].value = d->value;
+        }
+        return;
+    }
+    if (d->value.kind == UI_VALUE_UNSET) return;
+    if (ui_grow((void **)&e->own, &e->own_capacity, e->own_count + 1, sizeof *e->own) != UI_OK) {
+        p->failed = true;
+        return;
+    }
+    e->own[e->own_count++] = *d;
+}
+
 // True if an entry can change a text value: a text property, or inherit/initial (which may
 // copy one), or a token (which may resolve to anything the property takes).
 static bool text_entry(const ui_style_entry *e) {
@@ -211,9 +266,12 @@ static bool text_entry(const ui_style_entry *e) {
     }
 }
 
+// A definition whose blocks can change text values: through text entries, or through token
+// declarations (whatever reads the tokens in the subtree).
 static bool def_has_text(const ui_style_def *d, bool state_blocks_only) {
     for (uint32_t b = 0; d && b < d->block_count; b++) {
         if (state_blocks_only && !d->blocks[b].states) continue;
+        if (d->blocks[b].decl_count) return true;
         for (uint32_t k = 0; k < d->blocks[b].count; k++) {
             if (text_entry(&d->entries[d->blocks[b].first + k])) return true;
         }
@@ -222,8 +280,9 @@ static bool def_has_text(const ui_style_def *d, bool state_blocks_only) {
 }
 
 static ui_style_view view_of(const ui_preview *p) {
-    return (ui_style_view){&p->scene->styles, &p->over, p->gone_defs, p->gone_tokens,
-                           p->gone_def_count, p->gone_token_count};
+    return (ui_style_view){.styles = &p->scene->styles, .over = &p->over, .gone_defs = p->gone_defs,
+                           .gone_tokens = p->gone_tokens, .gone_def_count = p->gone_def_count,
+                           .gone_token_count = p->gone_token_count};
 }
 
 // The node's style list after the buffer.
@@ -273,11 +332,14 @@ static void read_op(ui_preview *p, const ui_wire_op *op, const ui_wire_reader *a
         if (!(e = touch(p, ui_handle_slot(h)))) return;
         if (e->styles_set) free(e->styles);
         free(e->overrides);
+        free(e->own);
+        if (e->scope_store) ui_scope_free(e->scope_store);
+        free(e->scope_store);
         free(e->texts);
         ui_text_source_release(e->text);
         *e = (pv_node){.slot = e->slot, .over = true, .exists = true, .generation = h.generation,
                        .parent = parent_slot, .root = root, .styles_set = true, .overrides_set = true,
-                       .state_set = true};
+                       .state_set = true, .own_set = true};
         return;
     }
     case UI_OP_DESTROY_NODE: {
@@ -369,6 +431,29 @@ static void read_op(ui_preview *p, const ui_wire_op *op, const ui_wire_reader *a
             }
         }
         if (entries != local) free(entries);
+        return; // the strings stay interned in `over` until the preview is destroyed
+    }
+    case UI_OP_SET_TOKEN_OVERRIDES: {
+        ui_wire_set_token_overrides o;
+        ui_wire_set_token_overrides_read(q, ui_wire_set_token_overrides_header_size(q), &o);
+        ui_wire_set_token_overrides_tail t;
+        ui_wire_set_token_overrides_tail_of(q, &o, &t);
+        ui_handle h = o.node;
+        if (!alive(p, h)) return;
+        uint32_t count = o.count, n;
+        ui_scope_decl local[16], *d = count <= 16 ? local : malloc(count * sizeof *d);
+        if (!d) {
+            p->failed = true;
+            return;
+        }
+        // As the scene: an invalid declaration drops the op.
+        if (ui_scope_decl_decode(&p->over, t.tokens, t.values, count, true, d, &n)) {
+            pv_node *e = touch(p, ui_handle_slot(h));
+            copy_own(p, e);
+            for (uint32_t i = 0; i < n; i++) set_own(p, e, &d[i]);
+            p->global = true; // anything in its subtree may read the tokens
+        }
+        if (d != local) free(d);
         return; // the strings stay interned in `over` until the preview is destroyed
     }
     case UI_OP_SET_STATE: {
@@ -500,10 +585,14 @@ void ui_preview_destroy(ui_preview *p) {
         if (e->slot == UI_NO_SLOT) continue;
         if (e->styles_set) free(e->styles);
         free(e->overrides);
+        free(e->own);
+        if (e->scope_store) ui_scope_free(e->scope_store);
+        free(e->scope_store);
         free(e->texts);
         ui_text_source_release(e->text);
     }
     free(p->nodes);
+    free(p->decls.items);
     ui_styles_free(&p->over);
     free(p->gone_defs);
     free(p->gone_tokens);
@@ -526,6 +615,8 @@ bool ui_preview_sets_text(const ui_preview *p, uint32_t slot) {
 // The node uses a style or token the buffer changes.
 static bool uses_changes(const ui_preview *p, const pv_node *e) {
     if (!p->changed_def_count && !p->changed_token_count) return false;
+    // In a scope, a token change can reach it through a declaration's alias or type.
+    if (p->changed_token_count && p->scene->nodes[e->slot].scope) return true;
     const uint32_t *ids;
     uint32_t count;
     styles_of(p, e, &ids, &count);
@@ -563,6 +654,17 @@ static const ui_text_source *base_of(ui_preview *p, pv_node *e) {
     return scene_node ? s->nodes[e->slot].text_base : NULL;
 }
 
+// The same declarations (`b` NULL: none).
+static bool same_decls(const ui_scope *a, const ui_scope *b) {
+    uint32_t count = b ? b->count : 0;
+    if (a->count != count) return false;
+    for (uint32_t i = 0; i < count; i++) {
+        if (a->decls[i].token != b->decls[i].token || !ui_value_eq(&a->decls[i].value, &b->decls[i].value))
+            return false;
+    }
+    return true;
+}
+
 // Computes one node whose parent (if any) is done.
 static void evaluate(ui_preview *p, pv_node *e) {
     const ui_scene *s = p->scene;
@@ -570,7 +672,8 @@ static void evaluate(ui_preview *p, pv_node *e) {
     e->alive = false;
     if (!e->exists) return;
     const ui_text_values *parent;
-    bool parent_differs = false;
+    bool parent_differs = false, parent_scope_differs = false;
+    const ui_scope *parent_scope = NULL;
     if (e->parent == UI_NO_SLOT) {
         if (e->root >= UI_MAX_SURFACES) return;
         parent = &s->roots[e->root].computed.text;
@@ -579,14 +682,18 @@ static void evaluate(ui_preview *p, pv_node *e) {
         if (!up || !up->alive) return;
         parent = &up->values;
         parent_differs = up->differs;
+        parent_scope = up->scope;
+        parent_scope_differs = up->scope_differs;
     }
     e->alive = true;
     bool scene_node = e->slot < s->handles.used && s->handles.alive[e->slot] &&
                       s->handles.generations[e->slot] == e->generation;
-    if (scene_node && !e->over && !parent_differs && !uses_changes(p, e)) {
+    if (scene_node && !e->over && !parent_differs && !parent_scope_differs && !uses_changes(p, e)) {
         e->ctx = ui_scene_text_ctx(s, e->slot);
         e->values = s->nodes[e->slot].computed.text;
         e->differs = false;
+        e->scope = s->nodes[e->slot].scope;
+        e->scope_differs = false;
         return;
     }
     // Its cascade after the buffer, computed on its parent's values after the buffer.
@@ -597,10 +704,31 @@ static void evaluate(ui_preview *p, pv_node *e) {
     const ui_style_entry *o = e->overrides_set ? e->overrides : scene_node ? s->nodes[e->slot].overrides : NULL;
     uint32_t on = e->overrides_set ? e->override_count : scene_node ? s->nodes[e->slot].override_count : 0;
     ui_style_view v = view_of(p);
-    if (!ui_style_cascade(&v, ids, count, state, o, on, &p->list, &n, &p->list_capacity)) {
+    const ui_scope_decl *own;
+    uint32_t own_count;
+    if (e->own_set) {
+        own = e->own;
+        own_count = e->own_count;
+    } else {
+        scene_own(s, scene_node ? e->slot : UI_NO_SLOT, &own, &own_count);
+    }
+    if (!e->scope_store) e->scope_store = calloc(1, sizeof *e->scope_store);
+    if (!e->scope_store ||
+        !ui_style_cascade_decls(&v, ids, count, state, o, on, &p->list, &n, &p->list_capacity, own, own_count,
+                                &p->decls) ||
+        !ui_scope_set(e->scope_store, p->decls.items, p->decls.count)) {
         p->failed = true;
         return;
     }
+    // Its scope: its declarations inside its parent's. It differs from the scene's when they
+    // do, or the scope around it does (or it moved, or is new).
+    e->scope_store->parent = (ui_scope *)(uintptr_t)parent_scope;
+    e->scope = e->scope_store->count ? e->scope_store : parent_scope;
+    const ui_scope *was = scene_node ? s->nodes[e->slot].scope : NULL;
+    const ui_node_scope *was_own = scene_node && s->nodes[e->slot].scoped ? (const ui_node_scope *)was : NULL;
+    e->scope_differs = parent_scope_differs || !scene_node || e->parent != s->nodes[e->slot].parent ||
+                       e->root != s->nodes[e->slot].root || !same_decls(e->scope_store, was_own ? &was_own->scope : NULL);
+    v.scope = e->scope;
     ui_computed pc, c;
     ui_computed_init(&pc);
     pc.text = *parent;

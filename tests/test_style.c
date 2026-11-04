@@ -68,8 +68,8 @@ static void test_precedence(void) {
     fixture f;
     setup(&f);
     ui_style_decl red = bg(1, 0, 0), green = bg(0, 1, 0), blue = bg(0, 0, 1);
-    define(&f, 1, &(ui_style_block_desc){0, &red, 1}, 1);
-    define(&f, 2, &(ui_style_block_desc){0, &green, 1}, 1);
+    define(&f, 1, &(ui_style_block_desc){.decls = &red, .count = 1}, 1);
+    define(&f, 2, &(ui_style_block_desc){.decls = &green, .count = 1}, 1);
     ui_cmd_set_styles(f.w, f.node, (uint32_t[]){1, 2}, 2);
     flush(&f);
     CHECK(is_rgb(&f, 0, 1, 0)); // later styles win
@@ -86,12 +86,12 @@ static void test_precedence(void) {
     ui_cmd_set_styles(f.w, f.node, (uint32_t[]){1, 3}, 2);
     flush(&f);
     CHECK(is_rgb(&f, 1, 0, 0));
-    define(&f, 3, &(ui_style_block_desc){0, &blue, 1}, 1);
+    define(&f, 3, &(ui_style_block_desc){.decls = &blue, .count = 1}, 1);
     flush(&f);
     CHECK(is_rgb(&f, 0, 0, 1));
     // Redefining updates users; destroying removes it from their resolution.
     ui_style_decl gray = bg(0.5f, 0.5f, 0.5f);
-    define(&f, 3, &(ui_style_block_desc){0, &gray, 1}, 1);
+    define(&f, 3, &(ui_style_block_desc){.decls = &gray, .count = 1}, 1);
     flush(&f);
     CHECK(is_rgb(&f, 0.5f, 0.5f, 0.5f) || n_of(&f)->color[0] < 0.25f); // linear 0.214
     CHECK_NEAR(n_of(&f)->color[0], 0.2140f, 1e-3);
@@ -106,10 +106,10 @@ static void test_state_specificity(void) {
     setup(&f);
     ui_style_decl base_a = bg(1, 1, 1), hover_a = bg(1, 0, 0), both_a = bg(0, 1, 0);
     ui_style_decl base_b = bg(0, 0, 0), hover_b = bg(0, 0, 1);
-    ui_style_block_desc a[] = {{0, &base_a, 1},
-                               {UI_STATE_HOVER, &hover_a, 1},
-                               {UI_STATE_HOVER | UI_STATE_PRESSED, &both_a, 1}};
-    ui_style_block_desc b[] = {{0, &base_b, 1}, {UI_STATE_HOVER, &hover_b, 1}};
+    ui_style_block_desc a[] = {{.decls = &base_a, .count = 1},
+                               {.states = UI_STATE_HOVER, .decls = &hover_a, .count = 1},
+                               {.states = UI_STATE_HOVER | UI_STATE_PRESSED, .decls = &both_a, .count = 1}};
+    ui_style_block_desc b[] = {{.decls = &base_b, .count = 1}, {.states = UI_STATE_HOVER, .decls = &hover_b, .count = 1}};
     define(&f, 1, a, 3);
     define(&f, 2, b, 2);
     ui_cmd_set_styles(f.w, f.node, (uint32_t[]){1, 2}, 2);
@@ -124,7 +124,7 @@ static void test_state_specificity(void) {
     // An earlier style's hover beats a later style's base.
     ui_cmd_set_styles(f.w, f.node, (uint32_t[]){1, 3}, 2);
     ui_style_decl base_c = bg(0.5f, 0, 0);
-    define(&f, 3, &(ui_style_block_desc){0, &base_c, 1}, 1);
+    define(&f, 3, &(ui_style_block_desc){.decls = &base_c, .count = 1}, 1);
     ui_cmd_set_state(f.w, f.node, UI_STATE_PRESSED, 0);
     flush(&f);
     CHECK(is_rgb(&f, 1, 0, 0));
@@ -144,8 +144,8 @@ static void test_tokens(void) {
     ui_cmd_set_token(f.w, 4, ui_token_ref(3));
     ui_cmd_set_token(f.w, 5, ui_px(4));
     ui_style_decl fallback = bg(1, 0, 0), chained = {UI_STYLE_BACKGROUND_COLOR, ui_token_ref(1)};
-    define(&f, 1, &(ui_style_block_desc){0, &fallback, 1}, 1);
-    define(&f, 2, &(ui_style_block_desc){0, &chained, 1}, 1);
+    define(&f, 1, &(ui_style_block_desc){.decls = &fallback, .count = 1}, 1);
+    define(&f, 2, &(ui_style_block_desc){.decls = &chained, .count = 1}, 1);
     ui_cmd_set_styles(f.w, f.node, (uint32_t[]){1, 2}, 2);
     flush(&f);
     CHECK(is_rgb(&f, 0, 1, 0)); // through the chain
@@ -157,7 +157,7 @@ static void test_tokens(void) {
     const uint32_t refs[] = {3, 5, 99};
     for (int i = 0; i < 3; i++) {
         ui_style_decl d = {UI_STYLE_BACKGROUND_COLOR, ui_token_ref(refs[i])};
-        define(&f, 2, &(ui_style_block_desc){0, &d, 1}, 1);
+        define(&f, 2, &(ui_style_block_desc){.decls = &d, .count = 1}, 1);
         flush(&f);
         CHECK(is_rgb(&f, 1, 0, 0));
     }
@@ -187,9 +187,9 @@ static void test_transitions(void) {
     setup(&f);
     ui_style_decl anim[] = {bg(1, 0, 0), {UI_STYLE_TRANSITION(UI_STYLE_BACKGROUND_COLOR), ui_transition(200, 28)}};
     ui_style_decl hover = bg(0, 0, 1), other = bg(0, 1, 0);
-    ui_style_block_desc blocks[] = {{0, anim, 2}, {UI_STATE_HOVER, &hover, 1}};
+    ui_style_block_desc blocks[] = {{.decls = anim, .count = 2}, {.states = UI_STATE_HOVER, .decls = &hover, .count = 1}};
     define(&f, 1, blocks, 2);
-    define(&f, 2, &(ui_style_block_desc){0, &other, 1}, 1);
+    define(&f, 2, &(ui_style_block_desc){.decls = &other, .count = 1}, 1);
     ui_cmd_set_styles(f.w, f.node, (uint32_t[]){1}, 1);
     flush(&f);
     CHECK(is_rgb(&f, 1, 0, 0)); // the first resolution never animates
@@ -221,7 +221,7 @@ static void test_transitions(void) {
     ui_cmd_set_state(f.w, f.node, UI_STATE_HOVER, 0);
     ui_style_decl tokened[] = {{UI_STYLE_BACKGROUND_COLOR, ui_token_ref(1)},
                                {UI_STYLE_TRANSITION(UI_STYLE_BACKGROUND_COLOR), ui_transition(200, 28)}};
-    define(&f, 1, &(ui_style_block_desc){0, tokened, 2}, 1);
+    define(&f, 1, &(ui_style_block_desc){.decls = tokened, .count = 2}, 1);
     flush(&f);
     f.now += 3000000000ull;
     ui_scene_animate(&f.s, f.now);
@@ -266,7 +266,7 @@ static void test_legacy_ops(void) {
     CHECK(is_rgb(&f, 0, 1, 0) && !n->anim->springs[UI_SPRING_COLOR].active);
     // With a declared transition, set_color animates instead.
     ui_style_decl t = {UI_STYLE_TRANSITION(UI_STYLE_BACKGROUND_COLOR), ui_transition(300, 30)};
-    define(&f, 1, &(ui_style_block_desc){0, &t, 1}, 1);
+    define(&f, 1, &(ui_style_block_desc){.decls = &t, .count = 1}, 1);
     ui_cmd_set_styles(f.w, f.node, (uint32_t[]){1}, 1);
     flush(&f);
     ui_cmd_set_color(f.w, f.node, 1, 1, 0, 1);
@@ -287,7 +287,7 @@ static void test_paint_values(void) {
                          {UI_STYLE_CORNER_RADIUS, ui_px(6)},
                          {UI_STYLE_OPACITY, ui_number(0.25f)},
                          {UI_STYLE_CLIP, ui_keyword(UI_CLIP_RECT)}};
-    define(&f, 1, &(ui_style_block_desc){0, d, 5}, 1);
+    define(&f, 1, &(ui_style_block_desc){.decls = d, .count = 5}, 1);
     ui_cmd_set_styles(f.w, f.node, (uint32_t[]){1}, 1);
     flush(&f);
     ui_node *n = n_of(&f);
@@ -300,9 +300,9 @@ static void test_paint_values(void) {
                            {UI_STYLE_TRANSITION(UI_STYLE_BORDER_WIDTH), ui_transition(1, 1)},
                            {999, ui_px(1)}};
     for (int i = 0; i < 5; i++)
-        CHECK(ui_cmd_define_style(f.w, 9, &(ui_style_block_desc){0, &bad[i], 1}, 1) ==
+        CHECK(ui_cmd_define_style(f.w, 9, &(ui_style_block_desc){.decls = &bad[i], .count = 1}, 1) ==
               UI_ERR_INVALID_ARGUMENT);
-    CHECK(ui_cmd_define_style(f.w, 9, &(ui_style_block_desc){0, &(ui_style_decl){UI_STYLE_OPACITY, ui_unset()}, 1}, 1) ==
+    CHECK(ui_cmd_define_style(f.w, 9, &(ui_style_block_desc){.decls = &(ui_style_decl){UI_STYLE_OPACITY, ui_unset()}, .count = 1}, 1) ==
           UI_ERR_INVALID_ARGUMENT); // unset is for overrides only
     CHECK(ui_cmd_set_styles(f.w, f.node, (uint32_t[]){0}, 1) == UI_ERR_INVALID_ARGUMENT);
     teardown(&f);
@@ -328,7 +328,7 @@ static void test_text_values(void) {
                          {UI_STYLE_TEXT_ALIGN, ui_keyword(UI_TEXT_ALIGN_CENTER)},
                          {UI_STYLE_LINE_HEIGHT, ui_auto()},
                          {UI_STYLE_MAX_LINES, ui_none()}};
-    define(&f, 1, &(ui_style_block_desc){0, d, 4}, 1);
+    define(&f, 1, &(ui_style_block_desc){.decls = d, .count = 4}, 1);
     ui_cmd_set_styles(f.w, f.node, (uint32_t[]){1}, 1);
     flush(&f);
     CHECK(n->text_color[1] == 1 && n->text_color[2] == 0);
@@ -420,7 +420,7 @@ static void test_inherit_initial(void) {
           3);
     ui_style_decl kid[] = {{UI_STYLE_BACKGROUND_COLOR, ui_inherit()}, {UI_STYLE_PADDING_LEFT, ui_inherit()},
                            {UI_STYLE_TEXT_COLOR, ui_initial()}};
-    define(&f, 9, &(ui_style_block_desc){0, kid, 3}, 1);
+    define(&f, 9, &(ui_style_block_desc){.decls = kid, .count = 3}, 1);
     ui_cmd_set_styles(f.w, h(2), (uint32_t[]){9}, 1);
     flush(&f);
     CHECK(green(cv(&f, 2)->background));
@@ -503,7 +503,7 @@ static void test_logical(void) {
     ui_style_decl block[] = {{UI_STYLE_MARGIN_RIGHT, ui_px(40)}, {UI_STYLE_MARGIN_START, ui_px(10)},
                              {UI_STYLE_PADDING_START, ui_px(3)}, {UI_STYLE_PADDING_LEFT, ui_px(9)},
                              {UI_STYLE_INSET_END, ui_percent(5)}};
-    define(&f, 4, &(ui_style_block_desc){0, block, 5}, 1);
+    define(&f, 4, &(ui_style_block_desc){.decls = block, .count = 5}, 1);
     ui_cmd_set_styles(f.w, h(2), (uint32_t[]){4}, 1);
     flush(&f);
     const ui_layout_style *l = &cv(&f, 2)->layout;
@@ -524,7 +524,7 @@ static void test_logical(void) {
     // An invalid token makes a logical declaration absent: an earlier one shows through.
     ui_style_decl more[] = {{UI_STYLE_MARGIN_END, ui_px(7)}, {UI_STYLE_MARGIN_END, ui_token_ref(99)}};
     props(&f, 2, &(ui_style_decl){UI_STYLE_MARGIN_LEFT, ui_unset()}, 1);
-    define(&f, 5, &(ui_style_block_desc){0, more, 2}, 1);
+    define(&f, 5, &(ui_style_block_desc){.decls = more, .count = 2}, 1);
     ui_cmd_set_styles(f.w, h(2), (uint32_t[]){4, 5}, 2);
     flush(&f);
     CHECK(l->margin[1].value == 7); // end = right in ltr
@@ -578,8 +578,8 @@ static void test_partial_resolution(void) {
                               {UI_STYLE_BORDER_WIDTH, ui_px(2)},
                               {UI_STYLE_BORDER_START_COLOR, ui_token_ref(1)},
                               {UI_STYLE_MARGIN_TOP, ui_token_ref(3)}};
-    define(&f, 9, &(ui_style_block_desc){0, fallback, 2}, 1);
-    define(&f, 10, &(ui_style_block_desc){0, themed, 5}, 1);
+    define(&f, 9, &(ui_style_block_desc){.decls = fallback, .count = 2}, 1);
+    define(&f, 10, &(ui_style_block_desc){.decls = themed, .count = 5}, 1);
     ui_cmd_set_styles(f.w, h(1), (uint32_t[]){9, 10}, 2);
     props(&f, 1, &(ui_style_decl){UI_STYLE_DIRECTION, ui_keyword(UI_DIRECTION_RTL)}, 1);
     props(&f, 2, &(ui_style_decl){UI_STYLE_BACKGROUND_COLOR, ui_inherit()}, 1);
@@ -614,7 +614,7 @@ static void test_partial_resolution(void) {
     flush(&f);
     CHECK(cv(&f, 1)->layout.margin[0].value == 11 && f.s.nodes[1].layout.dirty);
     // Redefining the style gathers its users' cascades again.
-    define(&f, 10, &(ui_style_block_desc){0, themed, 1}, 1);
+    define(&f, 10, &(ui_style_block_desc){.decls = themed, .count = 1}, 1);
     flush(&f);
     CHECK(green(cv(&f, 1)->background) && red(cv(&f, 1)->border_color[1]) && cv(&f, 1)->layout.margin[0].value == 0);
     // Enough users that one walk of the tree resolves them (rather than a queue sorted by

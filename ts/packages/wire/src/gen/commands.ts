@@ -43,6 +43,10 @@ export interface StyleBlock {
   /** the states a node must have for the block to apply; 0: always */
   readonly states: number;
   readonly entries: readonly StyleEntry[];
+  /** the declared tokens */
+  readonly tokens?: ArrayLike<number>;
+  /** their values, in order (property 0), as set_token's */
+  readonly tokenValues?: readonly StyleEntry[];
 }
 
 /** The fixed fields of set_text. */
@@ -65,6 +69,9 @@ export interface SetTextFields {
   /** the fields that come from the node rather than this op; 0 = all set here */
   readonly fromNode: number;
 }
+
+/** What an optional tail array of a record is when absent. */
+const NONE: readonly never[] = Object.freeze([]);
 
 function writeTextSpan(w: CommandWriter, at: number, v: TextSpan): number {
   const u32 = w.u32, f32 = w.f32;
@@ -101,8 +108,12 @@ function writeStyleEntry(w: CommandWriter, at: number, v: StyleEntry): number {
 }
 
 function sizeofStyleBlock(v: StyleBlock): number {
-  let size = 8;
+  if ((v.tokenValues ?? NONE).length !== (v.tokens ?? NONE).length) throw bad("style_block", "token_values");
+  for (let i = 0; i < (v.tokens ?? NONE).length; i++) if (!isUint((v.tokens ?? NONE)[i]!, 0xffffffff) || (v.tokens ?? NONE)[i] === 0) throw bad("style_block", "tokens");
+  let size = (v.tokens ?? NONE).length !== 0 ? 12 : 8;
   for (const x of v.entries) size += sizeofStyleEntry(x);
+  size += (v.tokens ?? NONE).length * 4;
+  for (const x of (v.tokenValues ?? NONE)) size += sizeofStyleEntry(x);
   return size;
 }
 
@@ -111,11 +122,19 @@ function writeStyleBlock(w: CommandWriter, at: number, v: StyleBlock): number {
   void f32;
   const size = sizeofStyleBlock(v);
   const entriesCount = v.entries.length;
+  const tokensCount = (v.tokens ?? NONE).length;
   const word = at >> 2;
+  const full = (v.tokens ?? NONE).length !== 0;
   u32[word + 0] = (size | (v.states) << 16 | (0) << 24) >>> 0;
-  u32[word + 1] = (entriesCount | (0) << 16) >>> 0;
-  at += 8;
+  u32[word + 1] = (entriesCount | ((full ? 12 : 0)) << 16) >>> 0;
+  if (full) {
+    u32[word + 2] = (tokensCount | (0) << 16) >>> 0;
+  }
+  at += full ? 12 : 8;
   for (const x of v.entries) at = writeStyleEntry(w, at, x);
+  for (let i = 0; i < (v.tokens ?? NONE).length; i++) w.u32[(at >> 2) + i] = (v.tokens ?? NONE)[i]!;
+  at += (v.tokens ?? NONE).length * 4;
+  for (const x of (v.tokenValues ?? NONE)) at = writeStyleEntry(w, at, x);
   return at;
 }
 
@@ -478,6 +497,27 @@ export class CommandWriter extends WireWriter {
     u32[word + 0] = node.index;
     u32[word + 1] = node.generation;
     u32[word + 2] = requestId;
+    void at;
+  }
+
+  /** set_token_overrides (20): node, `u16 header_bytes` (12), `u16 count`, `u32 tokens[count]`, then `count` entries (property 0): the node's own token declarations (see [`docs/styles.md`](styles.md), "Token scopes"); `unset` removes one */
+  setTokenOverrides(node: Handle, tokens: ArrayLike<number>, values: readonly StyleEntry[]): void {
+    if (values.length !== tokens.length) throw bad("set_token_overrides", "values");
+    if (!(tokens.length <= 0xffff)) throw bad("set_token_overrides", "count");
+    for (let i = 0; i < tokens.length; i++) if (!isUint(tokens[i]!, 0xffffffff) || tokens[i] === 0) throw bad("set_token_overrides", "tokens");
+    const tokensCount = tokens.length;
+    const payload = 12 + tokens.length * 4 + values.reduce((a, x) => a + sizeofStyleEntry(x), 0);
+    let at = this.op(20, payload);
+    const u32 = this.u32, f32 = this.f32;
+    void f32;
+    const word = at >> 2;
+    u32[word + 0] = node.index;
+    u32[word + 1] = node.generation;
+    u32[word + 2] = (12 | (tokensCount) << 16) >>> 0;
+    at += 12;
+    for (let i = 0; i < tokens.length; i++) this.u32[(at >> 2) + i] = tokens[i]!;
+    at += tokens.length * 4;
+    for (const x of values) at = writeStyleEntry(this, at, x);
     void at;
   }
 

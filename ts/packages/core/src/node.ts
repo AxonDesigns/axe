@@ -8,7 +8,7 @@
 import { EventType, NULL_HANDLE, type Handle, type Property, type Rect } from "@axe/wire";
 import { Surface } from "./app.js";
 import { commands, debug, on, reportLeak } from "./runtime.js";
-import { Style, entries, type Overrides, type Transitions } from "./style.js";
+import { Style, entries, tokenArrays, unset, type AnyToken, type Overrides, type TokenDecl, type Transitions } from "./style.js";
 import { setText, type TextOptions } from "./text.js";
 
 // ---- Handles and the tree ---------------------------------------------------------------
@@ -257,6 +257,20 @@ export class Node {
   setProps(decls: Overrides, transitions?: Transitions): void {
     this.#checked("set properties of");
     commands.setProps(this.handle, entries(decls, transitions, true));
+  }
+
+  /** Sets the node's own token values (`token.with(value)`) for it and its subtree; they win over
+   * its styles' (docs/styles.md, "Token scopes"). */
+  setTokens(...decls: TokenDecl[]): void {
+    this.#checked("set tokens of");
+    const { tokens, tokenValues } = tokenArrays(decls);
+    commands.setTokenOverrides(this.handle, tokens, tokenValues);
+  }
+
+  /** Removes the node's own values of these tokens. */
+  unsetTokens(...tokens: AnyToken[]): void {
+    this.#checked("unset tokens of");
+    commands.setTokenOverrides(this.handle, tokens.map((t) => t.id), tokens.map(() => ({ property: 0, value: unset })));
   }
 
   /** Sets the states in `mask` to those in `value` (State bits): hover, pressed... */

@@ -22,6 +22,7 @@ import {
   utf8OffsetFromUtf16,
   type Handle,
   type StyleEntry,
+  type StyleValue,
 } from "@axe/wire";
 import { cBuffer, cEvents, expect, test } from "@axe/testing";
 
@@ -89,6 +90,33 @@ test("styles, overrides and tokens encode as the C writer does", () => {
   same(finish(w), "styles");
 });
 
+test("token declarations encode as the C writer does", () => {
+  const w = new CommandWriter();
+  const base: StyleEntry[] = [{ property: StyleProp.backgroundColor, value: { kind: ValueKind.token, token: 3 } }];
+  const decl = (value: StyleValue): StyleEntry => ({ property: 0, value });
+  w.defineStyle(1, [
+    {
+      states: 0,
+      entries: base,
+      tokens: [3, 4, 6],
+      tokenValues: [
+        decl({ kind: ValueKind.color, color: [0.25, 0.5, 1, 1] }),
+        decl({ kind: ValueKind.token, token: 5 }),
+        decl({ kind: ValueKind.string, string: "Noto Serif" }),
+      ],
+    },
+    { states: State.hover, entries: [], tokens: [3], tokenValues: [decl({ kind: ValueKind.px, number: 2 })] },
+    { states: State.pressed, entries: base }, // no declarations: the 8-byte header, as before
+  ]);
+  w.setTokenOverrides(a, [3, 9, 10], [
+    decl({ kind: ValueKind.color, color: [1, 0, 0, 1] }),
+    decl({ kind: ValueKind.unset }),
+    decl({ kind: ValueKind.keyword, keyword: 2 }),
+  ]);
+  w.setTokenOverrides(a, [], []);
+  same(finish(w), "scopes");
+});
+
 test("a method that throws writes nothing", () => {
   const w = new CommandWriter();
   w.createNode(a, surface);
@@ -102,6 +130,11 @@ test("a method that throws writes nothing", () => {
   expect(() => w.loadFont(1, new Uint8Array(0))).toThrow(RangeError, "path_bytes");
   expect(() => w.loadFont(1, new Uint8Array([0xff]))).toThrow(RangeError, "path");
   expect(() => w.setState(a, -1, 0)).toThrow(RangeError, "mask");
+  const none = { kind: ValueKind.none } as const;
+  expect(() => w.setTokenOverrides(a, [1, 0], [{ property: 0, value: none }, { property: 0, value: none }])).toThrow(RangeError, "tokens");
+  expect(() => w.setTokenOverrides(a, [1], [])).toThrow(RangeError, "values");
+  expect(() => w.defineStyle(1, [{ states: 0, entries: [], tokens: [1], tokenValues: [] }])).toThrow(RangeError, "token_values");
+  expect(() => w.defineStyle(1, [{ states: 0, entries: [], tokens: [0], tokenValues: [{ property: 0, value: none }] }])).toThrow(RangeError, "tokens");
   expect(w.opCount).toBe(1);
   const bytes = finish(w);
   expect(bytes.length).toBe(16 + 20);

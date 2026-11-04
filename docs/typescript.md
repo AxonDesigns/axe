@@ -82,13 +82,31 @@ allocator is the C one's, generations and LIFO free list) and writes `create_nod
 - **Values** are built by constructors: `px`, `percent`, `number`, `rgba`, `keyword` (with
   the generated enums: `keyword(FlexDirection.column)`), `string`, `spring`, and the
   constants `auto`, `none`, `inherit`, `initial`, `unset`.
-- **`Style.define({ decls, transitions, states })`** defines an interned style: applying it
+- **`Style.define({ decls, transitions, tokens, states })`** defines an interned style: applying it
   costs one op. Per-property value types are generated, so `width: rgba(...)` fails to
   type-check; a value out of range throws a `RangeError` naming the property, as the core
   would drop it.
 - **`Token.create(value)`** makes a theme token. Declarations refer to it directly
   (`backgroundColor: accent`), and `token.set(value)` updates every node using it, with their
   transitions.
+- **A token has one kind**, inferred from its value: `Token.create(px(4))` is a
+  `Token<PxValue>`. The core fixes a token's kind by its global value
+  ([`docs/styles.md`](styles.md), "Token scopes"), so a union such as
+  `Token<PxValue | AutoValue>` is a compile error (the `OneKind` constraint), as is
+  `Token.create(cond ? px(1) : auto)`.
+- **Token scopes.** `token.with(value)` is the token's declaration for a subtree: a value of
+  its kind, or another token of its kind (`accent.with(brand)`). Declarations go in a style
+  block's `tokens` (the base or a state block) or on a node:
+
+  ```ts
+  const panel = Style.define({ tokens: [page.with(rgba(0.1, 0.1, 0.12)), accent.with(brand)] });
+  const card = Style.define({ states: [{ when: State.hover, tokens: [cardBg.with(hover)] }] });
+  node.setTokens(accent.with(rgba(1, 0, 0)));
+  node.unsetTokens(accent);
+  ```
+
+  `Token.local<V>()` makes a token with no global value, only what scopes declare; `unset()`
+  turns a token local. Values a token can't hold throw a `RangeError`.
 
 ### Text
 

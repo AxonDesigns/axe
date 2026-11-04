@@ -5,6 +5,7 @@ views of one buffer, so encoding never goes through a DataView."""
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 from idl_model import HANDLES, SCALARS, Check, Enum, Field, Record, Schema, TailItem, ValueSpec
@@ -257,9 +258,10 @@ def record_interface(s: Schema, r: Record, name: str | None = None) -> list[str]
     for f in user_fields(r):
         out += doc(f.doc, "  ")
         out.append(f"  readonly {camel(f.name)}: {ts_type(s, f)};")
+    optional = optional_tails(r)
     for t in r.tail:
         out += doc(t.doc, "  ")
-        out.append(f"  readonly {camel(t.name)}: {tail_type(s, t)};")
+        out.append(f"  readonly {camel(t.name)}{'?' if t.name in optional else ''}: {tail_type(s, t)};")
     out.append("}")
     out.append("")
     return out
@@ -291,7 +293,7 @@ def assigned_value(r: Record, f: Field, src: str) -> str | None:
     if f.assign == "header":
         return str(r.size)
     if f.assign == "header0":
-        return "0"
+        return f"(full ? {r.size} : 0)" if short_header_fields(r) else "0"
     if f.assign == "stride":
         return str(r.tail_item(f.assign_ref).record.size)
     if f.assign == "count":
@@ -341,12 +343,30 @@ def commands_ts(s: Schema) -> str:
     return "\n".join(out)
 
 
+def optional_tails(r: Record) -> set[str]:
+    """Tail items counted by an appended field: optional in a record, none when absent, so
+    code written before them still compiles."""
+    by_name = {f.name: f for f in r.fields}
+    return {t.name for t in r.tail if t.count_field in by_name and by_name[t.count_field].since}
+
+
+def with_optional(r: Record, lines: list[str]) -> list[str]:
+    names = optional_tails(r)
+    for n in names:
+        pat = re.compile(r"\bv\." + camel(n) + r"\b")
+        lines = [pat.sub(f"(v.{camel(n)} ?? NONE)", line) for line in lines]
+    return lines
+
+
 def record_writers(s: Schema) -> list[str]:
     """Size and writer functions for records in tails (spans, entries, blocks)."""
-    out = []
+    out = ["/** What an optional tail array of a record is when absent. */",
+           "const NONE: readonly never[] = Object.freeze([]);",
+           ""]
     for r in s.records.values():
         if r.name in ("rect", "text_style"):
             continue
+        start = len(out)
         name = pascal(r.name)
         if r.size_field:
             out += size_function(s, r)
@@ -362,18 +382,47 @@ def record_writers(s: Schema) -> list[str]:
             a = assigned_value(r, f, "v.")
             return a
 
-        out += write_words(leaves(s, r, "v.", 0, vals), "word")
-        out.append(f"  at += {r.size};")
+        lvs = leaves(s, r, "v.", 0, vals)
+        if short_header_fields(r):
+            out.append(f"  const full = {full_expr(r, 'v.')};")
+            out += write_words([lf for lf in lvs if lf.offset < r.original], "word")
+            out.append("  if (full) {")
+            out += ["  " + line for line in write_words([lf for lf in lvs if lf.offset >= r.original], "word")]
+            out.append("  }")
+            out.append(f"  at += full ? {r.size} : {r.original};")
+        else:
+            out += write_words(lvs, "word")
+            out.append(f"  at += {r.size};")
         out += write_tail(s, r, "v.", "at")
         out.append("  return at;")
         out.append("}")
         out.append("")
+        out[start:] = with_optional(r, out[start:])
     return out
+
+
+def short_header_fields(r: Record) -> list[Field]:
+    """As in the C generator: a record with a header(0) field writes only its original fields,
+    with header 0, while every appended field is 0."""
+    if not any(f.assign == "header0" for f in r.fields):
+        return []
+    return [f for f in r.fields if f.since]
+
+
+def full_expr(r: Record, src: str) -> str:
+    """Whether a short-header record is written whole (an appended field isn't 0)."""
+    terms = []
+    for f in short_header_fields(r):
+        terms.append(f"{src}{camel(f.assign_ref)}.length !== 0" if f.assign == "count" else f"{src}{camel(f.name)} !== 0")
+    return " || ".join(terms)
 
 
 def size_function(s: Schema, r: Record) -> list[str]:
     name = pascal(r.name)
-    out = [f"function sizeof{name}(v: {name}): number {{", f"  let size = {r.size};"]
+    base = f"{full_expr(r, 'v.')} ? {r.size} : {r.original}" if short_header_fields(r) else str(r.size)
+    # The checks run here: encoders size their records before reserving the op, so a
+    # record that throws leaves nothing written.
+    out = [f"function sizeof{name}(v: {name}): number {{"] + record_checks(s, r, "v.") + [f"  let size = {base};"]
     for t in r.tail:
         if t.kind == "array" and t.record and t.record.size_field:
             out.append(f"  for (const x of v.{camel(t.name)}) size += sizeof{pascal(t.record.name)}(x);")
@@ -434,8 +483,33 @@ def write_tail(s: Schema, r: Record, src: str, at: str) -> list[str]:
     return out
 
 
-def check_lines(s: Schema, r: Record, src: str, name: str) -> list[str]:
+def parallel_lines(r: Record, src: str, name: str, indent: str) -> list[str]:
+    """Arrays sharing a count (parallel arrays) must be as long as the one it names."""
     out = []
+    for f in r.fields:
+        if f.assign != "count":
+            continue
+        first = r.tail_item(f.assign_ref)
+        for t in r.tail:
+            if t is not first and t.count_field == f.name:
+                out.append(f"{indent}if ({src}{camel(t.name)}.length !== {src}{camel(first.name)}.length) "
+                           f"throw bad(\"{name}\", \"{t.name}\");")
+    return out
+
+
+def record_checks(s: Schema, r: Record, src: str) -> list[str]:
+    """What a record in a tail checks before it is written: parallel arrays, nonzero ids."""
+    out = parallel_lines(r, src, r.name, "  ")
+    for t in r.tail:
+        v = f"{src}{camel(t.name)}"
+        if any(c.kind == "nonzero" for c in t.checks):
+            out.append(f"  for (let i = 0; i < {v}.length; i++) if (!isUint({v}[i]!, 0xffffffff) || {v}[i] === 0) "
+                       f"throw bad(\"{r.name}\", \"{t.name}\");")
+    return out
+
+
+def check_lines(s: Schema, r: Record, src: str, name: str) -> list[str]:
+    out = parallel_lines(r, "", name, "    ")
     for f in user_fields(r):
         x = f"{src}{camel(f.name)}"
         conds = field_conds(r, f, x)

@@ -269,7 +269,7 @@ static void test_wire(void) {
                            1) == UI_OK);
     CHECK(ui_cmd_set_props(w, n, &(ui_style_decl){UI_STYLE_LAYOUT, ui_px(1)}, 1) == UI_ERR_INVALID_ARGUMENT);
     ui_style_decl decl = {UI_STYLE_TRANSITION(UI_STYLE_LAYOUT), ui_transition(K, D)};
-    CHECK(ui_cmd_define_style(w, 1, &(ui_style_block_desc){0, &decl, 1}, 1) == UI_OK);
+    CHECK(ui_cmd_define_style(w, 1, &(ui_style_block_desc){.decls = &decl, .count = 1}, 1) == UI_OK);
     ui_cmd_writer_destroy(w);
 }
 

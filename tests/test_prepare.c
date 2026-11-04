@@ -251,18 +251,22 @@ static void test_schedulers_match(void) {
 // creates styled nodes and their text has it shaped on workers with the styled values
 // before it applies; a token change later reshapes every paragraph using it on workers,
 // and they all change in the frame that applies the token. Nothing is shaped on the core.
-static bool render_styled(ui_scheduler_kind scheduler, ui_image shots[2], ui_app_stats *stats) {
+// `scoped`: the size comes through token scopes instead ("Token scopes"): the global value
+// is wrong, the style's scope says 14 px, and the change is the parent's own declaration.
+static bool render_styled(ui_scheduler_kind scheduler, bool scoped, ui_image shots[2], ui_app_stats *stats) {
     client c;
     bool ok = open_app(&c, scheduler);
     c.hold_seq = UINT64_MAX;
     ui_handle surface = ui_app_main_surface(c.app), parent, kids[3];
     ui_handle_alloc(c.handles, &parent);
-    ui_cmd_set_token(c.w, 1, ui_px(14));
+    ui_cmd_set_token(c.w, 1, ui_px(scoped ? 30 : 14));
     ui_style_decl body[] = {{UI_STYLE_FONT_FAMILY, ui_string("Noto Sans")}, {UI_STYLE_FONT_SIZE, ui_token_ref(1)},
                             {UI_STYLE_TEXT_COLOR, ui_rgba(1, 1, 1, 1)}, {UI_STYLE_LINE_HEIGHT, ui_number(1.25f)},
                             {UI_STYLE_FLEX_DIRECTION, ui_keyword(UI_FLEX_COLUMN)},
                             {UI_STYLE_BACKGROUND_COLOR, ui_rgba(0.1f, 0.1f, 0.3f, 1)}, {UI_STYLE_FLEX_GROW, ui_number(1)}};
-    ui_cmd_define_style(c.w, 1, &(ui_style_block_desc){0, body, 7}, 1);
+    ui_token_decl size = {1, ui_px(14)};
+    ui_cmd_define_style(c.w, 1, &(ui_style_block_desc){.decls = body, .count = 7, .tokens = &size, .token_count = scoped},
+                        1);
     ui_cmd_create_node(c.w, parent, surface);
     ui_cmd_set_styles(c.w, parent, (uint32_t[]){1}, 1);
     static const char *const lines[] = {"Styled text", "follows its parent", "\xD7\xA9\xD7\x9C\xD7\x95\xD7\x9D"};
@@ -273,7 +277,8 @@ static bool render_styled(ui_scheduler_kind scheduler, ui_image shots[2], ui_app
         ok = ok && ui_cmd_set_text(c.w, kids[i], &d) == UI_OK;
     }
     ok = ok && send(&c) && ui_app_frame(c.app) == UI_OK && ui_app_frame(c.app) == UI_OK && capture(&c, &shots[0]);
-    ui_cmd_set_token(c.w, 1, ui_px(24));
+    if (scoped) ui_cmd_set_token_overrides(c.w, parent, &(ui_token_decl){1, ui_px(24)}, 1);
+    else ui_cmd_set_token(c.w, 1, ui_px(24));
     ok = ok && send(&c) && ui_app_frame(c.app) == UI_OK && capture(&c, &shots[1]);
     if (ok) ui_app_get_stats(c.app, stats);
     close_app(&c);
@@ -281,12 +286,15 @@ static bool render_styled(ui_scheduler_kind scheduler, ui_image shots[2], ui_app
 }
 
 static void test_styled_text(void) {
-    ui_image single[2] = {0}, threaded[2] = {0};
-    ui_app_stats ss, ts;
-    CHECK(render_styled(UI_SCHEDULER_SINGLE, single, &ss));
-    CHECK(render_styled(UI_SCHEDULER_THREADED, threaded, &ts));
+    ui_image single[2] = {0}, threaded[2] = {0}, scoped[2] = {0};
+    ui_app_stats ss, ts, cs;
+    CHECK(render_styled(UI_SCHEDULER_SINGLE, false, single, &ss));
+    CHECK(render_styled(UI_SCHEDULER_THREADED, false, threaded, &ts));
+    CHECK(render_styled(UI_SCHEDULER_THREADED, true, scoped, &cs));
     for (int k = 0; k < 2 && single[k].pixels && threaded[k].pixels; k++)
         CHECK(!memcmp(single[k].pixels, threaded[k].pixels, (size_t)single[k].stride * single[k].height));
+    for (int k = 0; k < 2 && single[k].pixels && scoped[k].pixels; k++) // the same sizes through scopes
+        CHECK(!memcmp(single[k].pixels, scoped[k].pixels, (size_t)single[k].stride * single[k].height));
     if (single[0].pixels && single[1].pixels) {
         // Three lines of 14 x 1.25 px end above y = 60; at 24 px the third line reaches past it.
         bool ink_low[2] = {false, false};
@@ -294,8 +302,8 @@ static void test_styled_text(void) {
             for (uint32_t x = 0; x < WIDTH; x++) ink_low[k] |= pixel(&single[k], x, 70)[0] > 128;
         CHECK(!ink_low[0] && ink_low[1]);
     }
-    const ui_app_stats *all[] = {&ss, &ts};
-    for (int i = 0; i < 2; i++) {
+    const ui_app_stats *all[] = {&ss, &ts, &cs};
+    for (int i = 0; i < 3; i++) {
         CHECK_EQ_INT(all[i]->texts_prepared, 3);
         CHECK_EQ_INT(all[i]->text_shaped_on_core, 0);
         CHECK_EQ_INT(all[i]->glyphs_rasterized_on_core, 0);
@@ -305,6 +313,7 @@ static void test_styled_text(void) {
     for (int k = 0; k < 2; k++) {
         ui_image_free(&single[k]);
         ui_image_free(&threaded[k]);
+        ui_image_free(&scoped[k]);
     }
 }
 

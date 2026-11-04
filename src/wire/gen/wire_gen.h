@@ -151,25 +151,40 @@ typedef struct ui_wire_style_block {
     uint8_t states; // the states a node must have for the block to apply; 0: always
     uint16_t entry_count;
     uint16_t header_bytes;
+    uint16_t token_count; // token declarations: the block's scope for the node's subtree
 } ui_wire_style_block;
-enum { UI_WIRE_STYLE_BLOCK_ORIGINAL = 8, UI_WIRE_STYLE_BLOCK_SIZE = 8 };
+enum { UI_WIRE_STYLE_BLOCK_ORIGINAL = 8, UI_WIRE_STYLE_BLOCK_SIZE = 12 };
 // Reads the fixed part from the first `sent` bytes (at least the original size):
 // fields an older writer didn't send read as 0, fields a newer one appended are skipped.
-static inline void ui_wire_style_block_read(const uint8_t *p, uint32_t sent_unused, ui_wire_style_block *o) {
-    (void)sent_unused;
+static inline void ui_wire_style_block_read(const uint8_t *p, uint32_t sent, ui_wire_style_block *o) {
+    uint8_t full[UI_WIRE_STYLE_BLOCK_SIZE];
+    if (sent < sizeof full) {
+        ui_wire_read_fields(full, sizeof full, p, sent);
+        p = full;
+    }
     o->bytes = ui_wire_get_u16(p + 0);
     o->states = p[2];
     o->entry_count = ui_wire_get_u16(p + 4);
     o->header_bytes = ui_wire_get_u16(p + 6);
+    o->token_count = ui_wire_get_u16(p + 8);
 }
-// Writes the fixed part (UI_WIRE_STYLE_BLOCK_SIZE bytes) and returns the end. Header and record
-// sizes are this version's; counts and lengths are the caller's.
+// The size of the fixed part as written: the original size when every appended field is 0
+// (as an older writer sends it, with header 0), else UI_WIRE_STYLE_BLOCK_SIZE.
+static inline uint32_t ui_wire_style_block_written_size(const ui_wire_style_block *v) {
+    return v->token_count ? UI_WIRE_STYLE_BLOCK_SIZE : UI_WIRE_STYLE_BLOCK_ORIGINAL;
+}
+// Writes the fixed part (ui_wire_style_block_written_size bytes) and returns the end. Counts and
+// lengths are the caller's.
 static inline uint8_t *ui_wire_style_block_write(uint8_t *p, const ui_wire_style_block *v) {
+    bool full = v->token_count;
     ui_wire_put_u16(p + 0, v->bytes);
     p[2] = (uint8_t)v->states;
     p[3] = 0;
     ui_wire_put_u16(p + 4, v->entry_count);
-    ui_wire_put_u16(p + 6, (uint16_t)0);
+    ui_wire_put_u16(p + 6, (uint16_t)(full ? UI_WIRE_STYLE_BLOCK_SIZE : 0));
+    if (!full) return p + UI_WIRE_STYLE_BLOCK_ORIGINAL;
+    ui_wire_put_u16(p + 8, v->token_count);
+    ui_wire_put_u16(p + 10, (uint16_t)0);
     return p + UI_WIRE_STYLE_BLOCK_SIZE;
 }
 // Where the variable data starts: the header size it carries (0 stands for the original).
@@ -182,11 +197,21 @@ static inline uint32_t ui_wire_style_block_size(const uint8_t *p) { return (uint
 // Where the variable data of a framed style_block sits.
 typedef struct ui_wire_style_block_tail {
     const uint8_t *entries; // entry_count style_entry records
+    const uint8_t *tokens; // the declared tokens
+    const uint8_t *token_values; // their values, in order (property 0), as set_token's
 } ui_wire_style_block_tail;
 static inline void ui_wire_style_block_tail_of(const uint8_t *p, const ui_wire_style_block *h, ui_wire_style_block_tail *t) {
     uint32_t off = ui_wire_style_block_header_size(p);
     t->entries = p + off;
+    for (uint32_t i = 0; i < h->entry_count; i++) off += ui_wire_style_entry_size(p + off);
+    t->tokens = p + off;
+    off += 4 * (uint32_t)h->token_count;
+    t->token_values = p + off;
     (void)h;
+}
+// Element i of `tokens`.
+static inline uint32_t ui_wire_style_block_tokens_at(const ui_wire_style_block_tail *t, uint32_t i) {
+    return ui_wire_get_u32(t->tokens + 4u * i);
 }
 
 // ---- create_node -----------------------------------------------------------------------------
@@ -916,6 +941,62 @@ static inline uint8_t *ui_wire_request_layout_write(uint8_t *p, const ui_wire_re
 // Appends a request_layout op. Counts and lengths in *v must describe the data passed; padding is
 // zeroed. UI_ERR_INVALID_ARGUMENT if the op would be too large, UI_ERR_OUT_OF_MEMORY.
 ui_result ui_wire_request_layout_put(ui_wire_buf *b, const ui_wire_request_layout *v);
+
+// ---- set_token_overrides ---------------------------------------------------------------------
+// command 20: node, u16 header_bytes (12), u16 count, u32 tokens[count], then count entries
+// (property 0): the node's own token declarations (see [docs/styles.md](styles.md), "Token
+// scopes"); unset removes one
+typedef struct ui_wire_set_token_overrides {
+    ui_handle node;
+    uint16_t header_bytes;
+    uint16_t count;
+} ui_wire_set_token_overrides;
+enum { UI_WIRE_SET_TOKEN_OVERRIDES_ORIGINAL = 12, UI_WIRE_SET_TOKEN_OVERRIDES_SIZE = 12 };
+// Reads the fixed part from the first `sent` bytes (at least the original size):
+// fields an older writer didn't send read as 0, fields a newer one appended are skipped.
+static inline void ui_wire_set_token_overrides_read(const uint8_t *p, uint32_t sent_unused, ui_wire_set_token_overrides *o) {
+    (void)sent_unused;
+    o->node = ui_wire_get_handle(p + 0);
+    o->header_bytes = ui_wire_get_u16(p + 8);
+    o->count = ui_wire_get_u16(p + 10);
+}
+// Writes the fixed part (UI_WIRE_SET_TOKEN_OVERRIDES_SIZE bytes) and returns the end. Header and record
+// sizes are this version's; counts and lengths are the caller's.
+static inline uint8_t *ui_wire_set_token_overrides_write(uint8_t *p, const ui_wire_set_token_overrides *v) {
+    ui_wire_put_handle(p + 0, v->node);
+    ui_wire_put_u16(p + 8, (uint16_t)UI_WIRE_SET_TOKEN_OVERRIDES_SIZE);
+    ui_wire_put_u16(p + 10, v->count);
+    return p + UI_WIRE_SET_TOKEN_OVERRIDES_SIZE;
+}
+// Where the variable data starts: the header size it carries (0 stands for the original).
+static inline uint32_t ui_wire_set_token_overrides_header_size(const uint8_t *p) {
+    uint32_t n = ui_wire_get_u16(p + 8);
+    return n ? n : UI_WIRE_SET_TOKEN_OVERRIDES_ORIGINAL;
+}
+// Where the variable data of a framed set_token_overrides sits.
+typedef struct ui_wire_set_token_overrides_tail {
+    const uint8_t *tokens; // count u32
+    const uint8_t *values; // count style_entry records
+} ui_wire_set_token_overrides_tail;
+static inline void ui_wire_set_token_overrides_tail_of(const uint8_t *p, const ui_wire_set_token_overrides *h, ui_wire_set_token_overrides_tail *t) {
+    uint32_t off = ui_wire_set_token_overrides_header_size(p);
+    t->tokens = p + off;
+    off += 4 * (uint32_t)h->count;
+    t->values = p + off;
+    (void)h;
+}
+// Element i of `tokens`.
+static inline uint32_t ui_wire_set_token_overrides_tokens_at(const ui_wire_set_token_overrides_tail *t, uint32_t i) {
+    return ui_wire_get_u32(t->tokens + 4u * i);
+}
+// NULL when the op's values are in range, else the name of the first field that isn't (drops in the
+// core, refusals in writers). `tokens`: the decoded tokens (count of them).
+const char *ui_wire_set_token_overrides_check(const ui_wire_set_token_overrides *v, const uint32_t *tokens);
+// Appends a set_token_overrides op. Counts and lengths in *v must describe the data passed; padding
+// is zeroed. Self-sized data (`<name>_bytes`, a multiple of 4) is reserved, and *<name> points
+// where the caller writes it. UI_ERR_INVALID_ARGUMENT if the op would be too large,
+// UI_ERR_OUT_OF_MEMORY.
+ui_result ui_wire_set_token_overrides_put(ui_wire_buf *b, const ui_wire_set_token_overrides *v, const uint32_t *tokens, uint32_t values_bytes, uint8_t **values);
 
 // ---- frame_committed -------------------------------------------------------------------------
 // event 1: surface handle, u64 frame_id, u64 predicted_present_ns

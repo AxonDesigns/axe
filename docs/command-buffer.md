@@ -84,6 +84,7 @@ the [op history](#op-history) lists appended fields.
 | 17 | `set_state` | node, `u32 mask`, `u32 value` | 16 |
 | 18 | `move_node` | node, parent handle (a node, or a surface for a root-level node), `before` handle (a sibling under that parent; null appends) | 24 |
 | 19 | `request_layout` | node, `u32 request_id`: answered by `layout_measured` ([`docs/layout.md`](layout.md), "Measurement") | 12 |
+| 20 | `set_token_overrides` | node, `u16 header_bytes` (12), `u16 count`, `u32 tokens[count]`, then `count` entries (property 0): the node's own token declarations (see [`docs/styles.md`](styles.md), "Token scopes"); `unset` removes one | 12 + variable |
 <!-- /idl:commands -->
 
 `set_color`, `set_corner_radius` and `set_clip` set the node's overrides of the matching
@@ -317,7 +318,8 @@ Ops and events change without a version bump as long as each change follows thes
   - only a payload smaller than the original size is a framing error, which rejects the
     buffer.
 - **Variable-length ops carry their header size** (`set_text`, `append_text`,
-  `load_font`, `define_style` and its blocks, `set_styles`, `set_props`), and `set_text` also
+  `load_font`, `define_style` and its blocks, `set_styles`, `set_props`,
+  `set_token_overrides`), and `set_text` also
   carries its span size. Style entries carry their size in words. Readers find the variable data
   from these sizes, never from their own idea of the layout. A size of 0 stands for the
   original size: writers from before the size fields existed left those bytes 0. Data
@@ -328,6 +330,13 @@ Ops and events change without a version bump as long as each change follows thes
 - **Behavior an old reader must not silently skip** needs a new opcode, which old readers
   drop and count, or a flag bit that readers check. `set_clip`, for example, drops the op
   when a flag it doesn't know is set.
+- **New variable data** goes after the old, counted by an appended field (0: none, what
+  older writers sent), in a record whose header says where its data starts. A style block's
+  token declarations (milestone 3a.1) follow its entries this way; a block without them keeps
+  the original 8-byte header, so buffers that don't use them are byte for byte as before.
+- **Checked against an older reader.** CI builds the base commit's reader and runs the
+  fixtures a change adds through it (`docs/idl.md`, "The older reader"): ops it knows must
+  decode as before, and ops it doesn't must be skipped.
 - **Bump the version** only for changes these rules can't express: a field that changes
   meaning or encoding, a removed field, or a framing change. Readers reject buffers with a
   version they don't know.
@@ -343,6 +352,7 @@ listed are at their original size.
 | `set_text` (8) | header 64, span 36 | `line_height` (f32 at 64) and `align` (u8 at 68): 62d0e10, "Text alignment and line height". span `language` (u16 at 14, formerly reserved): 461c82d, "Per-span language". `header_bytes` (u16 at 14, formerly reserved) and `span_bytes` (u16 at 28, formerly reserved): m1.1, "Milestone 1.1, wire evolution rules". `from_node` (u16 at 70) and span `from_node` (u8 at 13, formerly reserved): ae568d4, "Shaping properties in styles, prepared on workers" |
 | `append_text` (9) | header 12 | `header_bytes` (u16 at 10, formerly reserved): m1.1, "Milestone 1.1, wire evolution rules" |
 | `load_font` (11) | header 8 | `header_bytes` (u16 at 6, formerly reserved): m1.1, "Milestone 1.1, wire evolution rules" |
+| `define_style` (12) | header 8, block 8 | block `token_count` (u16 at 8): m3a.1, "Milestone 3a.1, token scopes" |
 <!-- /idl:history -->
 
 ## Flow control and ordering

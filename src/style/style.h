@@ -44,9 +44,17 @@ static inline bool ui_istr_eq(const char *a, const char *b) {
     return n == ui_istr_len(b) && !__builtin_memcmp(a, b, n);
 }
 
+// A token declaration (docs/styles.md, "Token scopes"): the token's value for a node and its
+// subtree. Decoded as entries are: colors linear, strings interned.
+typedef struct ui_scope_decl {
+    uint32_t token;
+    ui_value value;
+} ui_scope_decl;
+
 typedef struct ui_style_block {
     uint8_t states; // ui_state bits that must all be set; 0: base
     uint32_t first, count;
+    uint32_t decl_first, decl_count; // its token declarations, in ui_style_def.decls
 } ui_style_block;
 
 typedef struct ui_style_def {
@@ -56,9 +64,24 @@ typedef struct ui_style_def {
     uint32_t block_count;
     ui_style_entry *entries;
     uint32_t entry_count;
-    uint32_t *tokens; // ids of the tokens its entries reference directly
+    ui_scope_decl *decls;
+    uint32_t decl_count;
+    uint32_t *tokens; // ids of the tokens its entries and declarations reference directly
     uint32_t token_count;
 } ui_style_def;
+
+// A token id's bit in 64-bit filters of token ids.
+static inline uint64_t ui_token_bit(uint32_t id) { return 1ull << ((id * 0x9E3779B1u) >> 26); }
+
+// A scope: the token declarations of one node, which apply to it and its subtree. Looking a
+// token up for a node walks its scope and the enclosing ones, nearest first; a token no scope
+// declares (or none in a way its type takes) has its global value.
+typedef struct ui_scope {
+    struct ui_scope *parent;       // the enclosing scope; NULL: none (global values)
+    uint64_t filter;               // ui_token_bit of every token declared here
+    ui_scope_decl *decls;          // sorted by token, one each: the last in cascade order. Copies:
+    uint32_t count, capacity;      // strings aren't referenced, as in computed values
+} ui_scope;
 
 typedef struct ui_token {
     uint32_t id;    // 0: free slot
@@ -161,6 +184,21 @@ bool ui_styles_destroy(ui_styles *s, uint32_t id);
 bool ui_styles_set_token(ui_styles *s, const uint8_t *payload, uint32_t *id);
 const ui_style_def *ui_styles_find(const ui_styles *s, uint32_t id);
 
+// Decodes `count` token declarations: their ids at `ids`, their values (entries of property
+// 0) at `values` (validated framing), into out (room for count). Values of a kind this
+// version doesn't know are skipped. False if one is invalid: a 0 token, or a value a token
+// can't hold (`override` allows UI_VALUE_UNSET); nothing is then kept. Strings are interned:
+// the caller owns a reference to each.
+bool ui_scope_decl_decode(ui_styles *s, const uint8_t *ids, const uint8_t *values, uint32_t count, bool override,
+                          ui_scope_decl *out, uint32_t *out_count);
+bool ui_value_eq(const ui_value *a, const ui_value *b);
+
+// Sets a scope's declarations to those in `list`, in cascade order: the last of each token
+// wins. False if out of memory (the scope is then empty).
+bool ui_scope_set(ui_scope *sc, const ui_scope_decl *const *list, uint32_t count);
+void ui_scope_free(ui_scope *sc);
+const ui_scope_decl *ui_scope_find(const ui_scope *sc, uint32_t token);
+
 // Decodes `count` entries starting at p (validated framing) into out (room for count).
 // Entries with an unknown property or kind are skipped. False if a known one is invalid
 // (nothing is then kept). Strings are interned: the caller owns a reference to each.
@@ -190,11 +228,29 @@ typedef struct ui_style_view {
     const ui_styles *over; // NULL: the styles alone
     const uint32_t *gone_defs, *gone_tokens;
     uint32_t gone_def_count, gone_token_count;
+    // The scope of the node being computed (NULL: none), in which every link of a token
+    // chain is looked up (docs/styles.md, "Token scopes"), and where to note the tokens read
+    // (ui_token_bit of every link followed, NULL: nowhere).
+    const ui_scope *scope;
+    uint64_t *read;
 } ui_style_view;
 
 static inline ui_style_view ui_style_view_of(const ui_styles *s) { return (ui_style_view){.styles = s}; }
 const ui_style_def *ui_style_view_find(const ui_style_view *v, uint32_t id);
 bool ui_style_view_token_value(const ui_style_view *v, const ui_value *value, ui_value *out);
+
+// A token's type: the kind of its global value, followed through global aliases. A token
+// with no global value (never set, unset, or reached through an alias to such a token) is
+// local: untyped, and its declarations are taken as they are. One in a global cycle is
+// invalid: its declarations and references are ignored.
+enum { UI_TOKEN_LOCAL = 0, UI_TOKEN_INVALID = -1 };
+int ui_style_view_token_type(const ui_style_view *v, uint32_t token);
+// Whether a scope's declaration of `token` is taken (its value matches the token's type), so
+// it hides the enclosing scopes' and the global value.
+bool ui_style_view_scope_takes(const ui_style_view *v, uint32_t token, const ui_value *value);
+// Whether the chain from `token`, followed for the node of v->scope, may read one of the ids
+// in `set` (alias targets checked for their type count; by filter, so it may say yes wrongly).
+bool ui_style_view_chain_reads(const ui_style_view *v, uint32_t token, const uint32_t *set, uint32_t count);
 
 // Every property's initial value.
 void ui_computed_init(ui_computed *c);
@@ -210,9 +266,19 @@ void ui_layout_style_init(ui_layout_style *l);
 //  2. Computing: starting values (ui_computed_start: initial values, and the parent's for
 //     inherited properties; the caller then puts set_text's in), then every entry of the
 //     cascade in order. Tokens are read then, so a token change only computes again.
+//     The node's token declarations come out with it, if `decls` isn't NULL: those of its
+//     matching blocks in the same order, then its own (`own`).
 bool ui_style_cascade(const ui_style_view *v, const uint32_t *ids, uint32_t count, uint8_t state,
                       const ui_style_entry *overrides, uint32_t override_count,
                       const ui_style_entry ***list, uint32_t *len, uint32_t *cap);
+typedef struct ui_decl_list {
+    const ui_scope_decl **items;
+    uint32_t count, capacity;
+} ui_decl_list;
+bool ui_style_cascade_decls(const ui_style_view *v, const uint32_t *ids, uint32_t count, uint8_t state,
+                            const ui_style_entry *overrides, uint32_t override_count,
+                            const ui_style_entry ***list, uint32_t *len, uint32_t *cap,
+                            const ui_scope_decl *own, uint32_t own_count, ui_decl_list *decls);
 void ui_computed_start(ui_computed *out, const ui_computed *parent);
 // Returns UI_STYLE_INHERITS_OTHER when a non-inherited property took `inherit`: the node
 // then follows every change of its parent, not only of the inherited values. *text_set

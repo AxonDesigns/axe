@@ -136,7 +136,7 @@ static void encode_case(ui_cmd_writer *w, const char *name) {
             {UI_STYLE_TRANSITION(UI_STYLE_LAYOUT), ui_transition(170, 24)},
         };
         ui_style_decl hover[] = {{UI_STYLE_BACKGROUND_COLOR, ui_token_ref(7)}};
-        ui_style_block_desc blocks[] = {{0, base, UI_ARRAY_LEN(base)}, {UI_STATE_HOVER | UI_STATE_PRESSED, hover, 1}};
+        ui_style_block_desc blocks[] = {{.decls = base, .count = UI_ARRAY_LEN(base)}, {.states = UI_STATE_HOVER | UI_STATE_PRESSED, .decls = hover, .count = 1}};
         ui_cmd_define_style(w, 1, blocks, 2);
         ui_cmd_define_style(w, 2, NULL, 0);
         ui_style_decl overrides[] = {{UI_STYLE_BORDER_WIDTH, ui_px(2)}, {UI_STYLE_WIDTH, ui_unset()}};
@@ -145,6 +145,18 @@ static void encode_case(ui_cmd_writer *w, const char *name) {
         ui_cmd_set_token(w, 4, ui_token_ref(3));
         ui_cmd_set_token(w, 5, ui_string("x"));
         ui_cmd_set_token(w, 3, ui_unset());
+    } else if (!strcmp(name, "scopes")) {
+        // Token declarations: a block with some (12-byte header), one without (8), and a node's.
+        ui_style_decl base[] = {{UI_STYLE_BACKGROUND_COLOR, ui_token_ref(3)}};
+        ui_token_decl scope[] = {{3, ui_rgba(0.25f, 0.5f, 1, 1)}, {4, ui_token_ref(5)}, {6, ui_string("Noto Serif")}};
+        ui_token_decl hover[] = {{3, ui_px(2)}};
+        ui_style_block_desc blocks[] = {{.decls = base, .count = 1, .tokens = scope, .token_count = 3},
+                                        {.states = UI_STATE_HOVER, .tokens = hover, .token_count = 1},
+                                        {.states = UI_STATE_PRESSED, .decls = base, .count = 1}};
+        ui_cmd_define_style(w, 1, blocks, 3);
+        ui_token_decl own[] = {{3, ui_rgba(1, 0, 0, 1)}, {9, ui_unset()}, {10, ui_keyword(2)}};
+        ui_cmd_set_token_overrides(w, a, own, 3);
+        ui_cmd_set_token_overrides(w, a, NULL, 0);
     } else if (!strcmp(name, "text")) {
         // As @axe/core's setText writes it: one family list, a language, spans, an ellipsis.
         static const char *const families[] = {"Noto Sans, sans-serif", "Noto Serif"};

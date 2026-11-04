@@ -1,7 +1,8 @@
 # Styles
 
 How a node's paint (and, from the layout milestone on, its layout) is described: interned
-styles applied by ID, per-node overrides, theme tokens, state variants and transitions.
+styles applied by ID, per-node overrides, theme tokens and their scopes, state variants and
+transitions.
 The choices behind it are logged in `docs/decisions.md` (Milestone 2); the byte layout of
 every op is below and in `docs/command-buffer.md`.
 
@@ -84,6 +85,58 @@ token are computed again ("Resolution" below).
     width).
 - **Removing a token** (`set_token` with `unset`) is the same as never defining it.
 
+### Token scopes
+
+A subtree can give tokens values of its own, as CSS custom properties do, so part of the
+screen can be themed differently with no script involved.
+
+- **Declarations.** A token declaration is a token and a value: anything a token holds,
+  another token included. They come in three places:
+  - a style's base block, for every node listing the style;
+  - its state blocks, for nodes in those states (a hovered card can re-theme its subtree);
+  - the node itself (`set_token_overrides`, where `unset` removes one).
+- **Precedence.** A node's declarations are ordered as its entries are (specificity, then
+  list position, then block), followed by its own; the last one of a token wins.
+- **Lookup.** A node's value for a token is the nearest declaration of it, on the node itself
+  or an ancestor; otherwise the token's global value.
+- **Aliases resolve where they are used.** When a value refers to another token, each link of
+  the chain is looked up again in the scope of the node using the value. Declaring a palette
+  token in a subtree therefore changes every token aliased to it there.
+- **Kinds.** A token's kind is the kind of its global value, followed through global aliases,
+  and a declaration must have it. One that doesn't is ignored, and the scope around it, or
+  the global value, shows. A declaration that is an alias must name a token of the same kind.
+  - **Local tokens.** A token never set, or unset, is local: it has no kind, and every
+    declaration of it is taken. The property reading it checks the value, as always.
+  - **Aliases to local tokens** are taken whatever their token's kind (the chain's end is
+    checked by the property).
+  - **Global cycles.** A token in a cycle of global values is invalid: its declarations and
+    the references to it are ignored, like an undefined token. Debug builds report it once
+    per change.
+- **Cycles in a scope.** A chain that loops as a node sees it makes the declaration reading
+  it absent for that node only, like an undefined token. Floyd's walk follows the chain as
+  that node looks it up.
+- **Moving a node** (`move_node`) into another scope changes what it and its subtree read.
+- **Transitions** apply to values that change because a scope did, as to any other change.
+
+**Compared with CSS custom properties.** In CSS a custom property is computed on the element
+that declares it, and descendants inherit the computed result. In Axe nothing is computed
+where a token is declared: every link is looked up where the value is used.
+
+```css
+:root  { --blue: #36f; --accent: var(--blue); }
+.panel { --blue: #f63; }
+.panel button { background: var(--accent); } /* #36f: --accent was computed at :root */
+```
+
+With `accent` set globally to `token(blue)` and a panel declaring `blue: #f63`, a button in
+the panel that reads `token(accent)` is `#f63`: `accent` is followed at the button, where
+`blue` is the panel's. To get CSS's result, declare `accent` itself in the panel. Three
+smaller differences:
+- a declaration's value can't be `inherit` or `initial`, as a token's can't;
+- tokens have kinds, as CSS properties registered with `@property` have a syntax;
+- a cycle in CSS makes the custom property invalid at computed-value time, which is close
+  to this.
+
 ### Resolution
 
 Once per frame, after applying, the nodes whose values may have changed are computed again,
@@ -97,10 +150,18 @@ parents first. How much of a node is computed depends on what changed:
   (a paint value moves or starts its transition; a paragraph shapes again only if its
   family, size, weight, slant or language changed). Direction belongs to the last family,
   which means everything: it decides how every family's logical properties map.
-- **A token change** computes, for each node with an entry reading the token (directly or
-  through a chain), only those entries' families. The cascade isn't gathered again: a
+- **A token change** computes, for each node with an entry reading the token (directly, through
+  a chain, or through a scope's alias), only those entries' families. The cascade isn't gathered again: a
   token never changes which entries apply. If the new value is one the property can't
   take, the entry counts as absent while computing, and the lower one shows.
+- **A scope change** (a node's declarations differ after its styles, state or own
+  declarations change) computes the node, then queues the descendants that read a changed
+  token, for the families of the entries reading it. A descendant whose own scope, or one
+  between, takes the token hides the change from its subtree, which is skipped once every
+  changed token is hidden. Each node keeps a filter of every token on the chains it followed,
+  which is how readers are found without an index.
+- **A move into another scope** queues the subtree's nodes reading a token either chain of
+  scopes declares.
 - **An inherited change** computes the children for the text family only. A change of
   direction, or a child that takes `inherit` on a property that doesn't inherit, computes
   everything.
@@ -111,7 +172,9 @@ parents first. How much of a node is computed depends on what changed:
   the scene) are resolved in one walk of the tree in order.
 - **Cost.** A token that every one of 10,005 nodes reads, for a background, takes about
   0.8–0.9 ms to resolve; an inherited text color changed at the root, about 2 ms
-  ([`docs/layout.md`](layout.md), "Benchmarks").
+  ([`docs/layout.md`](layout.md), "Benchmarks"). Switching a scope over 5,000 nodes that
+  read its token takes 0.4–0.7 ms on a quiet run (medians up to 1.1 ms on a busy machine);
+  with an inherited text color as well, 0.7–1.4 ms.
 
 ### States
 
@@ -262,10 +325,15 @@ All are in wire v0. Older readers drop them as unknown ops.
 | 15 | `set_props` | node, `u16 header_bytes` (12), `u16 entry_count`, then the entries |
 | 16 | `set_token` | `u32 id` (not 0), then one entry whose property is 0 |
 | 17 | `set_state` | node, `u32 mask`, `u32 value` |
+| 20 | `set_token_overrides` | node, `u16 header_bytes` (12), `u16 count`, `u32 tokens[count]` (not 0), then `count` entries whose property is 0 |
 
-A **block** starts with an 8-byte header: `u16 block_bytes` (header included), `u8 states`,
-`u8` reserved, `u16 entry_count`, `u16 header_bytes` (8; 0 = 8). Its entries follow at
-`header_bytes`.
+A **block** starts with its header: `u16 block_bytes` (header included), `u8 states`, `u8`
+reserved, `u16 entry_count`, `u16 header_bytes` (0 = 8), and since milestone 3a.1 `u16
+token_count` and a `u16` reserved. Its entries follow at `header_bytes`, then its token
+declarations: `u32 tokens[token_count]` (not 0), then `token_count` entries whose property is
+0, as `set_token`'s. A block without declarations is written with the 8-byte header and
+`header_bytes` 0, exactly as before; one with declarations has a 12-byte header. An older
+reader starts at `header_bytes` and skips what follows the entries.
 
 An **entry** is `u16 property`, `u8 kind`, `u8 words` (its size in 4-byte words, header
 included), then the value:
@@ -289,7 +357,9 @@ included), then the value:
   payload.
 - **Invalid values** drop the op: a known property with a kind it doesn't take, a value out
   of range, `unset` in a style, a 0 id, a string longer than its entry, empty, with a NUL,
-  or not UTF-8. The writer refuses these too (`UI_ERR_INVALID_ARGUMENT`).
+  or not UTF-8; a token declaration with a 0 token or a value a token can't hold. The
+  writer refuses these too (`UI_ERR_INVALID_ARGUMENT`). Declarations of a kind the reader
+  doesn't know are skipped, as entries are.
 - **Strings are interned:** equal strings share one copy, referenced by the entries,
   tokens and nodes that use them, and freed after the frame in which the last reference
   went away.
@@ -350,6 +420,8 @@ one-pixel distance ramp), plus one or two pixels where an inner curve between a 
 
 ## Limitations
 
+- A token's kind is exactly its global value's: a token can't be "a length or `auto`".
+  Kind classes wait for a need.
 - Clipping is rectangular; rounded clips need masks in the layers.
 - Layers are drawn again every frame. Caching them comes with damage tracking.
 - No z-index: paint order is tree order.

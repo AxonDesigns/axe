@@ -187,6 +187,15 @@ against the IDL on master (CI runs it). Extend `tests/test_wire_compat.c` so buf
 older and newer writers still apply. Bump `UI_WIRE_VERSION` (`wire` in the IDL) only for a
 change the rules can't express.
 
+Add command fixtures of what a change writes (`tests/wire/fixtures/cmd-*.bin`; dump each
+with `test_wire_fixtures --write <file>.bin` and read the dump before committing it). CI's
+`idl` job builds the base commit's reader and runs every fixture added since through it; to
+check locally:
+
+```sh
+python3 -I tools/wire/old_reader.py --base origin/master
+```
+
 ## Decisions
 
 Choices the architecture leaves open go in [docs/decisions.md](docs/decisions.md), under

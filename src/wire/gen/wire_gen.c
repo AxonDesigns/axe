@@ -308,6 +308,26 @@ ui_result ui_wire_request_layout_put(ui_wire_buf *b, const ui_wire_request_layou
     return UI_OK;
 }
 
+const char *ui_wire_set_token_overrides_check(const ui_wire_set_token_overrides *v, const uint32_t *tokens) {
+    for (uint32_t i = 0; i < v->count; i++)
+        if (!(tokens[i] != 0)) return "tokens";
+    return NULL;
+}
+
+ui_result ui_wire_set_token_overrides_put(ui_wire_buf *b, const ui_wire_set_token_overrides *v, const uint32_t *tokens, uint32_t values_bytes, uint8_t **values) {
+    if (values_bytes % 4) return UI_ERR_INVALID_ARGUMENT;
+    uint64_t size = UI_WIRE_SET_TOKEN_OVERRIDES_SIZE + (uint64_t)(4 * (uint32_t)v->count) + (uint64_t)values_bytes;
+    if (size > UI_WIRE_MAX_PAYLOAD) return UI_ERR_INVALID_ARGUMENT;
+    uint8_t *p = ui_wire_buf_op(b, UI_OP_SET_TOKEN_OVERRIDES, (uint32_t)size);
+    if (!p) return UI_ERR_OUT_OF_MEMORY;
+    p = ui_wire_set_token_overrides_write(p, v);
+    for (uint32_t i = 0; i < v->count; i++) p = ui_wire_put_u32(p, tokens[i]);
+    *values = p;
+    p += values_bytes;
+    (void)p;
+    return UI_OK;
+}
+
 ui_result ui_wire_frame_committed_put(ui_wire_buf *b, const ui_wire_frame_committed *v) {
     uint64_t size = UI_WIRE_FRAME_COMMITTED_SIZE;
     if (size > UI_WIRE_MAX_PAYLOAD) return UI_ERR_INVALID_ARGUMENT;
@@ -402,6 +422,11 @@ static bool walk_style_block(const uint8_t *p, uint32_t bytes, uint32_t count, u
         uint32_t entries_end;
         if (!walk_style_entry(q + off, (uint32_t)(size - off), h.entry_count, &entries_end)) return false;
         off += entries_end;
+        off += (uint64_t)h.token_count * 4;
+        if (off > size) return false;
+        uint32_t token_values_end;
+        if (!walk_style_entry(q + off, (uint32_t)(size - off), h.token_count, &token_values_end)) return false;
+        off += token_values_end;
         if (off > size) return false;
         at += size;
     }
@@ -576,6 +601,21 @@ static bool frame_command_request_layout(const uint8_t *p, uint32_t size) {
     return true;
 }
 
+static bool frame_command_set_token_overrides(const uint8_t *p, uint32_t size) {
+    if (size < UI_WIRE_SET_TOKEN_OVERRIDES_ORIGINAL) return false;
+    uint32_t header = ui_wire_set_token_overrides_header_size(p);
+    if (header < UI_WIRE_SET_TOKEN_OVERRIDES_ORIGINAL || header % 4 || header > size) return false;
+    ui_wire_set_token_overrides h;
+    ui_wire_set_token_overrides_read(p, header < UI_WIRE_SET_TOKEN_OVERRIDES_SIZE ? header : UI_WIRE_SET_TOKEN_OVERRIDES_SIZE, &h);
+    uint64_t off = header;
+    off += (uint64_t)h.count * 4;
+    if (off > size) return false;
+    uint32_t values_end;
+    if (!walk_style_entry(p + off, (uint32_t)(size - off), h.count, &values_end)) return false;
+    off += values_end;
+    return off <= size;
+}
+
 static bool frame_event_frame_committed(const uint8_t *p, uint32_t size) {
     if (size < UI_WIRE_FRAME_COMMITTED_ORIGINAL) return false;
     (void)p;
@@ -639,6 +679,7 @@ bool ui_wire_command_framed(uint16_t opcode, const uint8_t *payload, uint32_t si
     case UI_OP_SET_STATE: return frame_command_set_state(payload, size);
     case UI_OP_MOVE_NODE: return frame_command_move_node(payload, size);
     case UI_OP_REQUEST_LAYOUT: return frame_command_request_layout(payload, size);
+    case UI_OP_SET_TOKEN_OVERRIDES: return frame_command_set_token_overrides(payload, size);
     default: return true; // unknown: skipped
     }
 }

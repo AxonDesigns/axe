@@ -78,15 +78,15 @@ static uint32_t paragraph_slot;
 static void build(ui_scene *s, ui_cmd_writer *w) {
     ui_cmd_set_token(w, 1, ui_rgba(0.95f, 0.95f, 0.97f, 1));
     ui_style_decl base[] = {{UI_STYLE_BACKGROUND_COLOR, ui_token_ref(1)}};
-    ui_cmd_define_style(w, 1, &(ui_style_block_desc){0, base, 1}, 1);
+    ui_cmd_define_style(w, 1, &(ui_style_block_desc){.decls = base, .count = 1}, 1);
     ui_style_decl card[] = {{UI_STYLE_WIDTH, ui_px(180)}, {UI_STYLE_FLEX_DIRECTION, ui_keyword(UI_FLEX_COLUMN)},
                             {UI_STYLE_PADDING_TOP, ui_px(8)}, {UI_STYLE_PADDING_RIGHT, ui_px(8)},
                             {UI_STYLE_PADDING_BOTTOM, ui_px(8)}, {UI_STYLE_PADDING_LEFT, ui_px(8)},
                             {UI_STYLE_ROW_GAP, ui_px(4)}, {UI_STYLE_BORDER_WIDTH, ui_px(1)}};
-    ui_cmd_define_style(w, 2, &(ui_style_block_desc){0, card, 8}, 1);
+    ui_cmd_define_style(w, 2, &(ui_style_block_desc){.decls = card, .count = 8}, 1);
     ui_style_decl footer[] = {{UI_STYLE_JUSTIFY_CONTENT, ui_keyword(UI_FLEX_SPACE_BETWEEN)},
                               {UI_STYLE_ALIGN_ITEMS, ui_keyword(UI_FLEX_CENTER)}};
-    ui_cmd_define_style(w, 3, &(ui_style_block_desc){0, footer, 2}, 1);
+    ui_cmd_define_style(w, 3, &(ui_style_block_desc){.decls = footer, .count = 2}, 1);
     uint32_t slot = 1;
     ui_handle root = {slot++, 1}, grid = {slot++, 1};
     ui_cmd_create_node(w, root, surface);

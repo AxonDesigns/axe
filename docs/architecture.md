@@ -141,6 +141,7 @@ Styles are typed objects:
 - **State variants** (hover, pressed, focused, disabled, selected) are resolved in the core, never through a JS round-trip.
 - **Transitions declared in the style** animate property changes on the core thread.
 - **Theme tokens** with light, dark and high-contrast variants; system preferences for reduced motion, text scale and accent color are respected.
+- **Token scopes:** a subtree can give tokens values of its own (a style block's declarations, including state blocks, or the node's), like CSS custom properties but with aliases resolved where they are used. Themed regions and hover re-theming need no JS (docs/styles.md, "Token scopes").
 - **Units:** logical pixels, percentages, fr, auto. Invalid styles fail at compile time.
 
 ## Rendering
