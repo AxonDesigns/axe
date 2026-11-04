@@ -8,7 +8,7 @@
 import { EventType, NULL_HANDLE, type Handle, type Property, type Rect } from "@axe/wire";
 import { Surface } from "./app.js";
 import { commands, debug, on, reportLeak } from "./runtime.js";
-import { Style, entries, tokenArrays, unset, type AnyToken, type Overrides, type TokenDecl, type Transitions } from "./style.js";
+import { Style, entries, tokenArrays, unset, type AnyToken, type Overrides, type StyleEntry, type TokenDecl, type Transitions } from "./style.js";
 import { setText, type TextOptions } from "./text.js";
 
 // ---- Handles and the tree ---------------------------------------------------------------
@@ -101,12 +101,13 @@ function unlink(slot: number): void {
 // The subtree in pre-order (the order C frees handles in, so both reuse slots alike).
 function subtree(slot: number): number[] {
   const out: number[] = [];
-  const walk = (s: number) => {
-    out.push(s);
-    for (let c = firstChild[s]!; c !== NONE; c = nextSibling[c]!) walk(c);
-  };
-  walk(slot);
+  walk(slot, out);
   return out;
+}
+
+function walk(s: number, out: number[]): void {
+  out.push(s);
+  for (let c = firstChild[s]!; c !== NONE; c = nextSibling[c]!) walk(c, out);
 }
 
 // ---- Leaks (debug builds) -------------------------------------------------------------------
@@ -173,6 +174,8 @@ export interface SpringOptions {
   readonly damping: number;
 }
 
+const ADOPT = Symbol("adopt");
+
 /** A node of the scene. Created under a node or a surface; owned by the app until
  * destroy(). */
 export class Node {
@@ -182,7 +185,14 @@ export class Node {
   // is also its own unregister token).
   readonly #lease: { slot: number; generation: number } | null;
 
-  private constructor(parent: Node | Surface, before: Node | null) {
+  private constructor(parent: Node | Surface | typeof ADOPT, before: Node | number | null) {
+    if (parent === ADOPT) {
+      // A view of a node something else owns (@axe/ui's): no create op, no leak watch.
+      this.#slot = before as number;
+      this.handle = Object.freeze({ index: this.#slot, generation: generation[this.#slot]! });
+      this.#lease = null;
+      return;
+    }
     const parentSlot = parent instanceof Surface ? SURFACE : parent.#checked("create a child of");
     const slot = allocSlot();
     this.#slot = slot;
@@ -198,7 +208,13 @@ export class Node {
     wrapped[slot] = 1;
     this.#lease = leaks ? { slot, generation: this.handle.generation } : null;
     if (this.#lease) leaks!.register(this, this.#lease, this.#lease);
-    if (before) this.moveTo(parent, before);
+    if (before) this.moveTo(parent, before as Node);
+  }
+
+  /** @internal A Node over a live node owned elsewhere (@axe/ui hands these to refs). */
+  static adopt(slot: number): Node {
+    if (!alive[slot]) throw new StaleNodeError(`slot ${slot} holds no node`);
+    return new Node(ADOPT, slot);
   }
 
   /** A new node, last among `parent`'s children (a surface's for a root-level node). */
@@ -325,3 +341,100 @@ export class Node {
     return new Promise((resolve, reject) => requests.set(id, { resolve, reject, node: this.handle }));
   }
 }
+
+// ---- Slots (@axe/core/internal) -------------------------------------------------------------
+// The same tree and ops without Node objects, for @axe/ui: its owners own the nodes, so there
+// is nothing for the leak registry to watch, and a Node per node would cost memory at 10,000
+// rows. A parent is a slot, or a surface for a root-level node.
+
+export type SlotParent = number | Surface;
+
+const handles: Handle[] = [];
+
+/** The handle of a live slot (cached per generation: ops take handle objects). */
+export function slotHandle(slot: number): Handle {
+  const h = handles[slot];
+  if (h && h.generation === generation[slot]) return h;
+  return (handles[slot] = { index: slot, generation: generation[slot]! });
+}
+
+function parentHandle(parent: SlotParent): Handle {
+  return typeof parent === "number" ? slotHandle(parent) : parent.handle;
+}
+
+/** A new node under `parent`, before `before` (a child of it; NONE appends). */
+export function slotCreate(parent: SlotParent, before: number): number {
+  const slot = allocSlot();
+  firstChild[slot] = lastChild[slot] = NONE;
+  try {
+    commands.createNode(slotHandle(slot), parentHandle(parent));
+  } catch (e) {
+    freeSlot(slot);
+    throw e;
+  }
+  const p = typeof parent === "number" ? parent : SURFACE;
+  link(slot, p, NONE);
+  if (before !== NONE) slotMove(slot, parent, before);
+  return slot;
+}
+
+/** Moves a node under `parent`, before `before` (NONE: last). */
+export function slotMove(slot: number, parent: SlotParent, before: number): void {
+  commands.moveNode(slotHandle(slot), parentHandle(parent), before === NONE ? NULL_HANDLE : slotHandle(before));
+  unlink(slot);
+  link(slot, typeof parent === "number" ? parent : SURFACE, before);
+}
+
+/** Destroys a node and its subtree; their slots are free for reuse. */
+export function slotDestroy(slot: number): void {
+  commands.destroyNode(slotHandle(slot));
+  unlink(slot);
+  for (const s of subtree(slot)) freeSlot(s);
+}
+
+export function slotAlive(slot: number): boolean {
+  return alive[slot] === 1;
+}
+
+/** A node's children, in order. */
+export function slotChildren(slot: number): number[] {
+  const out: number[] = [];
+  for (let c = firstChild[slot]!; c !== NONE; c = nextSibling[c]!) out.push(c);
+  return out;
+}
+
+export function slotParent(slot: number): number {
+  return parentOf[slot]!;
+}
+
+export function slotSetStyles(slot: number, ids: readonly number[]): void {
+  commands.setStyles(slotHandle(slot), ids as number[]);
+}
+
+export function slotSetProps(slot: number, decls: Overrides | undefined, transitions?: Transitions): void {
+  commands.setProps(slotHandle(slot), entries(decls, transitions, true));
+}
+
+/** Sets overrides from wire entries (unset removes one). */
+export function slotSetEntries(slot: number, list: readonly StyleEntry[]): void {
+  commands.setProps(slotHandle(slot), list as StyleEntry[]);
+}
+
+export function slotSetTokens(slot: number, decls: readonly TokenDecl[]): void {
+  const { tokens, tokenValues } = tokenArrays(decls);
+  commands.setTokenOverrides(slotHandle(slot), tokens, tokenValues);
+}
+
+export function slotUnsetTokens(slot: number, tokens: readonly number[]): void {
+  commands.setTokenOverrides(slotHandle(slot), tokens as number[], tokens.map(() => ({ property: 0, value: unset })));
+}
+
+export function slotSetState(slot: number, mask: number, value: number): void {
+  commands.setState(slotHandle(slot), mask, value);
+}
+
+export function slotSetText(slot: number, text: string, options: TextOptions): void {
+  setText(slotHandle(slot), text, options);
+}
+
+export { NONE as NO_SLOT };

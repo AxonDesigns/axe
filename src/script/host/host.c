@@ -530,6 +530,18 @@ static ui_js_val native_report_leak(ui_js *js, const ui_js_call_info *call) {
     return ui_js_undefined(js);
 }
 
+// reportError(value, context): reports `value` as an uncaught exception (stderr and
+// UI_TRACE_SCRIPT_EXCEPTION) without throwing, for errors @axe/ui catches with no error boundary
+// to take them. `context` ("in an effect of Card") goes where the host's own say "in a timer".
+static ui_js_val native_report_error(ui_js *js, const ui_js_call_info *call) {
+    ui_script_host *h = host_of(call);
+    char *context = call->argc > 1 ? ui_js_to_utf8(js, call->args[1], NULL) : NULL;
+    ui_js_throw(js, call->argc > 0 ? call->args[0] : ui_js_undefined(js));
+    report_exception(h, context && context[0] ? context : "reported");
+    free(context);
+    return ui_js_undefined(js);
+}
+
 typedef struct native_entry {
     const char *name;
     uint32_t length;
@@ -560,7 +572,7 @@ static bool install(ui_script_host *h) {
         {"setDispatcher", 1, native_set_dispatcher}, {"setFlush", 1, native_set_flush},
         {"commandBuffer", 0, native_command_buffer}, {"growCommandBuffer", 1, native_grow_commands},
         {"submitCommands", 1, native_submit},        {"animationTime", 0, native_animation_time},
-        {"reportLeak", 3, native_report_leak},
+        {"reportLeak", 3, native_report_leak},       {"reportError", 2, native_report_error},
     };
     ui_js_val exports = ui_js_object(js), args = ui_js_array(js);
     ok = ok && add_natives(h, exports, host_fns, UI_ARRAY_LEN(host_fns));

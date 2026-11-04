@@ -1,8 +1,9 @@
 # TypeScript
 
-Apps are written in TypeScript against `@axe/core`, bundled by esbuild into one ES module,
-and run by the script host on the logic thread ([`script.md`](script.md)). This milestone's
-API is imperative and minimal; signals, TSX and hot reload (milestone 3b) build on it.
+Apps are written in TypeScript, bundled by esbuild into one ES module, and run by the script
+host on the logic thread ([`script.md`](script.md)). This page is `@axe/core`, the imperative
+layer. Apps are normally written with `@axe/ui`'s signals and components on top of it
+([`ui.md`](ui.md)).
 
 ```ts
 import { app, Node, Style, Token, loadFont, px, rgba, spring, keyword, FlexDirection, State } from "@axe/core";
@@ -37,6 +38,7 @@ All in `ts/`, an npm workspace:
 | --- | --- |
 | `@axe/wire` | Generated from `idl/wire.idl` ([`idl.md`](idl.md)): the enums, a `CommandWriter` with one method per op, `decodeEvent`, style value types and validators. Hand-written beside it: the writer's buffer, `EventReader`, u64 and UTF-8 helpers (`utf8OffsetFromUtf16`, `utf16OffsetFromUtf8`, `Utf8OffsetMap`). |
 | `@axe/core` | The app, surfaces, nodes, styles, tokens, text, fonts, measurement; the binding to the host (`axe:host`). |
+| `@axe/ui` | Signals, components, control flow, context, `style()` with sugar, themes ([`ui.md`](ui.md)). It re-exports `@axe/core`, so an app imports from one place. |
 | `@axe/testing` | `test`, `expect`, and clock control for tests run by `axe-test-js`. |
 
 `ts/types/host.d.ts` declares what the host provides (the globals in
@@ -94,6 +96,10 @@ allocator is the C one's, generations and LIFO free list) and writes `create_nod
   ([`docs/styles.md`](styles.md), "Token scopes"), so a union such as
   `Token<PxValue | AutoValue>` is a compile error (the `OneKind` constraint), as is
   `Token.create(cond ? px(1) : auto)`.
+- **Sugar.** `Token.create`, `token.with` and `token.set` also take plain values: a number is
+  px, a string a color (`"#36f"`, `"rgb(51, 102, 255)"`), a percentage (`"50%"`), `"auto"` or
+  `"none"`. An invalid hex color is a compile error; anything else invalid is a `RangeError`.
+  `parseColor` is the parser.
 - **Token scopes.** `token.with(value)` is the token's declaration for a subtree: a value of
   its kind, or another token of its kind (`accent.with(brand)`). Declarations go in a style
   block's `tokens` (the base or a state block) or on a node:

@@ -25,10 +25,17 @@
       "@axe/core": [
         "./packages/core/src/index.ts"
       ],
+      "@axe/core/internal": [
+        "./packages/core/src/internal.ts"
+      ],
       "@axe/testing": [
         "./packages/testing/src/index.ts"
+      ],
+      "@axe/ui": [
+        "./packages/ui/src/index.ts"
       ]
-    }
+    },
+    "resolveJsonModule": true
   },
   "include": [
     "packages/*/src/**/*.ts",
@@ -36,6 +43,7 @@
     "types/**/*.d.ts",
     "../examples/**/*.ts",
     "../tests/ts/**/*.ts",
-    "../bench/**/*.ts"
+    "../bench/**/*.ts",
+    "../tests/ui/*.json"
   ]
 }

@@ -152,6 +152,11 @@ function wireStyle(o: TextStyleOptions, strings: Strings): { style: TextStyle; s
   return { style: { family, weight, slant, fromNode: ~set & SPAN_FIELDS, language, size, color }, set };
 }
 
+// Languages are numbered after the families in the string region.
+function relabel(s: TextStyle, families: number): TextStyle {
+  return s.language ? { ...s, language: s.language + families } : s;
+}
+
 export function setText(node: Handle, text: string, o: TextOptions): void {
   const bytes = encodeUtf8(text);
   check(bytes.length <= MAX_TEXT, "length (at most 16 MiB)");
@@ -188,11 +193,9 @@ export function setText(node: Handle, text: string, o: TextOptions): void {
     const w = wireStyle(sp, strings);
     return { start: map!.toUtf8(sp.start), end: map!.toUtf8(sp.end), style: w.style };
   });
-  // Languages are numbered after the families in the string region.
   const families = strings.families.length;
-  const relabel = (s: TextStyle): TextStyle => (s.language ? { ...s, language: s.language + families } : s);
-  const style = relabel(base.style);
-  const spanRecords = wireSpans.map((s) => ({ ...s, style: relabel(s.style) }));
+  const style = relabel(base.style, families);
+  const spanRecords = wireSpans.map((s) => ({ ...s, style: relabel(s.style, families) }));
   const region = strings.region();
   const ellipsis = o.ellipsis === undefined || o.ellipsis === null ? new Uint8Array(0) : encodeUtf8(o.ellipsis);
   check(ellipsis.length <= MAX_ELLIPSIS, "ellipsis (at most 64 bytes)");

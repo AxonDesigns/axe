@@ -5,7 +5,8 @@
   "description": "Apps, surfaces, nodes, styles and tokens over the wire.",
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./internal": "./src/internal.ts"
   },
   "dependencies": {
     "@axe/wire": "0.0.0"

@@ -83,9 +83,11 @@ Logic runs in turns, one per event buffer the core sends ([`command-buffer.md`](
    `@axe/core` registered. A
    **microtask checkpoint follows each event and each timer callback**, as on the web, where
    each is a task: a Promise continuation runs before the next event's handler.
-4. **Flush.** `@axe/core` finishes the turn's command buffer, the host appends its wire
-   timer's re-arm, and the logic actor sends it: **one command buffer per turn**, possibly
-   none. It applies atomically at a frame boundary, as every command buffer does.
+4. **Flush.** `@axe/core` runs the `app.onTurnEnd` handlers, then `@axe/ui`'s bindings and
+   effects ([`ui.md`](ui.md), "Signals"), and finishes the turn's command buffer. The host
+   appends its wire timer's re-arm, and the logic actor sends it: **one command buffer per
+   turn**, possibly none. It applies atomically at a frame boundary, as every command buffer
+   does.
 
 Guarantees:
 
@@ -174,8 +176,10 @@ The globals, and nothing else of the web or of Node:
 
 The globals are defined by a short prelude (`src/script/host/prelude.js`) over a few natives.
 `@axe/core` reaches the host through the module `axe:host`, which isn't for apps: the
-dispatcher and flush hooks, the command storage, the turn's animation time, the arguments
-and leak reports.
+dispatcher and flush hooks, the command storage, the turn's animation time, the arguments,
+leak reports, and `reportError`. `reportError` reports an error that `@axe/ui` caught with
+no error boundary to take it, exactly as an uncaught exception is reported (stderr and
+`UI_TRACE_SCRIPT_EXCEPTION`), without throwing.
 
 **Commands and events cross without copies.** The event buffer is an ArrayBuffer over the
 core's bytes for the length of the turn. The command buffer is written in place into host

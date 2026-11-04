@@ -34,6 +34,15 @@ export function onTurnEnd(fn: () => void): () => void {
   return () => remove(turnEnd, fn);
 }
 
+let beforeFlush: (() => void) | null = null;
+
+/** @internal Sets the one hook that runs after every onTurnEnd handler, just before the turn's
+ * commands are finished: @axe/ui's effect scheduler, so effects see the writes the turn-end
+ * handlers made, and what they write goes into the same buffer. */
+export function setBeforeFlush(fn: (() => void) | null): void {
+  beforeFlush = fn;
+}
+
 function remove<T>(list: T[], item: T): void {
   const i = list.indexOf(item);
   if (i >= 0) list.splice(i, 1);
@@ -62,6 +71,7 @@ host.setDispatcher((events, type, at) => {
 
 host.setFlush(() => {
   for (const fn of turnEnd.slice()) fn();
+  beforeFlush?.();
   const bytes = commands.finish(WIRE_VERSION);
   if (bytes) commands.adopt(host.submitCommands(bytes.length));
 });

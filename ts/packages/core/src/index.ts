@@ -3,6 +3,14 @@
 export { app, Surface, type FrameInfo, type SurfaceSize } from "./app.js";
 export { Node, StaleNodeError, type Layout, type NodeOptions, type SpringOptions } from "./node.js";
 export { loadFont, FontLoadError } from "./fonts.js";
+export {
+  parseColor,
+  type ColorString,
+  type PercentString,
+  type PropSugar,
+  type SugarOf,
+  type ValidColor,
+} from "./sugar.js";
 export { type TextOptions, type TextSpanOptions, type TextStyleOptions } from "./text.js";
 export {
   Style,

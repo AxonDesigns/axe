@@ -804,6 +804,40 @@ def styles_ts(s: Schema) -> str:
     out.append("export const inheritedProps: ReadonlySet<number> = new Set([" +
                ", ".join(str(p.id) for p in s.style_props if "inherited" in p.flags) + "]);")
     out.append("")
+    # What style sugar (@axe/ui's style()) needs: the kinds each property takes, and the names
+    # of its keywords.
+    vk = s.enums["value_kind"]
+    out.append("/** The value kinds each property takes (token references, inherit and initial aside), in")
+    out.append(" * the IDL's order: what a plain number or string in style sugar becomes. */")
+    out.append("export const stylePropKinds: { readonly [K in keyof StylePropValues]: readonly number[] } = {")
+    for p in s.style_props:
+        if not p.declarable:
+            continue
+        ks = []
+        for v in p.values:
+            k = vk.value(v.kind).value
+            if k not in ks:
+                ks.append(k)
+        out.append(f"  {camel(p.name)}: [{', '.join(str(k) for k in ks)}],")
+    out.append("};")
+    out.append("")
+    out.append("/** Each keyword property's keywords, by their CSS-style names (\"row-reverse\"). */")
+    out.append("export const styleKeywords = {")
+    for p in s.style_props:
+        if not p.declarable:
+            continue
+        for v in p.values:
+            if v.kind != "keyword" or not v.enum:
+                continue
+            e = s.enums[v.enum]
+            names = v.allowed or [x.name for x in e.values]
+            pairs = ", ".join(f'"{n.replace("_", "-")}": {e.value(n).value}' for n in names)
+            out.append(f"  {camel(p.name)}: {{ {pairs} }},")
+    out.append("} as const;")
+    out.append("")
+    out.append("/** The keyword properties. */")
+    out.append("export type KeywordPropName = keyof typeof styleKeywords;")
+    out.append("")
     return "\n".join(out)
 
 

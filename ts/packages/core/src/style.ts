@@ -27,6 +27,7 @@ import {
   type StyleBlock as WireStyleBlock,
 } from "@axe/wire";
 import { commands } from "./runtime.js";
+import { sugarToken, type ColorString, type PercentString, type SugarOf, type ValidColor } from "./sugar.js";
 
 // ---- Values ---------------------------------------------------------------------------------
 
@@ -95,9 +96,16 @@ export class Token<V extends TokenType & OneKind<V>> {
   }
 
   /** A new token holding `value` (or referring to another token of its kind). Its kind is the
-   * value's: one kind, which scopes must give it too. */
-  static create<V extends TokenType & OneKind<V>>(value: V | Token<V>): Token<V> {
-    return new Token<V>(value);
+   * value's: one kind, which scopes must give it too. Sugar: a number is px, a string a color
+   * ("#36f", "rgb(51, 102, 255)"), a percentage ("50%"), "auto" or "none". */
+  static create(value: number): Token<PxValue>;
+  static create<const S extends ColorString>(value: ValidColor<S>): Token<ColorValue>;
+  static create(value: PercentString): Token<PercentValue>;
+  static create(value: "auto"): Token<AutoValue>;
+  static create(value: "none"): Token<NoneValue>;
+  static create<V extends TokenType & OneKind<V>>(value: V | Token<V>): Token<V>;
+  static create(value: unknown): Token<never> {
+    return new Token(tokenInput(value, "Token.create") as never);
   }
 
   /** A local token: no global value, only what scopes declare for it. The core doesn't check
@@ -106,9 +114,10 @@ export class Token<V extends TokenType & OneKind<V>> {
     return new Token<V>(null);
   }
 
-  /** This token's declaration of `value` for a scope (its kind, or another token of its kind). */
-  with(value: V | Token<V>): TokenDecl {
-    const v = valueOf(value);
+  /** This token's declaration of `value` for a scope (its kind, or another token of its kind;
+   * sugar as in create). */
+  with<const S extends V | Token<V> | SugarOf<V>>(value: ValidColor<S>): TokenDecl {
+    const v = valueOf(tokenInput(value, `Token ${this.id}`) as V | Token<V>);
     if (!styleTokenValueValid(v)) throw new RangeError(`Token ${this.id}: a token can't hold that value`);
     return { token: this.id, value: v };
   }
@@ -117,9 +126,11 @@ export class Token<V extends TokenType & OneKind<V>> {
     return this.#value;
   }
 
-  set(value: V | Token<V>): void {
-    write(this.id, value);
-    this.#value = value;
+  /** Sets the global value (sugar as in create). */
+  set<const S extends V | Token<V> | SugarOf<V>>(value: ValidColor<S>): void {
+    const v = tokenInput(value, `Token ${this.id}`) as V | Token<V>;
+    write(this.id, v);
+    this.#value = v;
   }
 
   /** Removes the token's global value: it becomes local, and declarations using it count as
@@ -128,6 +139,13 @@ export class Token<V extends TokenType & OneKind<V>> {
     commands.setToken(this.id, { property: 0, value: unset });
     this.#value = null;
   }
+}
+
+// A token's value: a Token or a value object as it is, sugar parsed.
+function tokenInput(value: unknown, what: string): TokenType | TokenRef {
+  if (value instanceof Token) return value;
+  if (typeof value === "object" && value !== null && "kind" in value) return value as TokenType;
+  return sugarToken(value, what) as TokenType;
 }
 
 /** What helpers take for a token: any Token, whatever its kind. */

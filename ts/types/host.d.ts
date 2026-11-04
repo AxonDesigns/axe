@@ -70,6 +70,10 @@ declare module "axe:host" {
   /** Reports, in debug builds, a subtree that became unreachable from JS without being
    * destroyed. */
   export function reportLeak(index: number, generation: number, nodes: number): void;
+  /** Reports `error` as uncaught (stderr and the hook API's script exception), without
+   * throwing: for errors @axe/ui catches that no error boundary takes. `context` says where
+   * ("in an effect of Card"). */
+  export function reportError(error: unknown, context: string): void;
   /** True in debug builds of the host. */
   export const debug: boolean;
   /** The app's arguments (axe-run's arguments after `--`). */

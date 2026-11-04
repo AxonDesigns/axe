@@ -3,6 +3,179 @@
 Choices the architecture document leaves open, recorded as they are made. Newest
 milestone first.
 
+## Milestone 3b.1: signals and components
+
+### The user's choices in review
+- **The split:** 3b.1 is signals and components; 3b.2 the TSX transform, templates and the
+  language benchmarks; 3b.3 hot reload.
+- **One Rust toolchain, 1.97,** for wgpu-native and, from 3b.2, axe-tsx on the current oxc.
+  There is no second toolchain; oxc 0.133.0 on 1.93 would have been the fallback had wgpu-native
+  broken.
+- **The signal API:** `count()`, `count.set(v)`, `count.update(f)`.
+- **No `batch`.** Effects always run at the end of the turn, so writes are batched already.
+- **The benchmark thresholds** as proposed, plus a JS heap of at most 2 KB per row after
+  mounting list10k (B2).
+- **`destroy_template`** comes with the template ops (3b.2). `@axe/ui` releases a template variant
+  once no instance and no provider uses it.
+- **Inline styles are overrides,** constant or dynamic, as inline styles beat state rules in CSS.
+  From 3b.2, constant inline values compile into the template's `set_props`.
+- **Hot reload is in-process** (3b.3). The socket comes with the automation protocol.
+- **Requested additions:**
+  - the transform warns when a component destructures its props (3b.2);
+  - `ts_typecheck`'s time is reported before and after the style types (below).
+
+### Rust 1.97
+- **`rust-toolchain.toml` is the one source.** CMake reads its channel and forces
+  `Rust_TOOLCHAIN`, so build directories configured under 1.93 follow it. wgpu-native's own file
+  still says 1.93; Corrosion runs the pinned toolchain.
+- **Checked on 1.97.1:**
+  - release, debug, asan and tsan suites: 46/46 each;
+  - the fuzz preset's tests: 5/5;
+  - the Callgrind guard in CI's image (with 1.97 added): every case within 0.3%.
+
+  wgpu-native gains two unused-variable warnings in `conv.rs`, and nothing else changed.
+
+### Signals
+- **Push-pull with three states:** clean, check and dirty.
+  - A write marks its direct observers dirty and everything downstream check, and queues the
+    effects it reaches.
+  - A computed in check refreshes its sources in order. It runs only if one of them changed,
+    which a version per link tells.
+  - This is glitch-free for diamonds, and an unchanged value stops propagation.
+- **Links are reused across runs:** a run reading the same sources in the same order allocates
+  nothing. A run links each source once, however often it reads it.
+- **Scheduling:**
+  - a new `setBeforeFlush` hook in `@axe/core` runs the flush after every `app.onTurnEnd`
+    handler, so their writes land in the same buffer;
+  - bindings run before effects, each in creation order (by id), and effects' writes queue
+    further rounds;
+  - after 100 rounds the flush reports "effects did not settle" and leaves the rest queued.
+- **Bindings run when created,** so nodes get their initial values in the same ops. A binding
+  that read nothing is dropped after its first run.
+- **Errors:**
+  - a computed's error is rethrown to its readers until a source changes;
+  - an effect's or binding's error goes to the nearest boundary, or is reported, and the effect
+    stays subscribed;
+  - reports go through a new host function, `reportError`, as uncaught exceptions are, with the
+    component stack.
+
+### Ownership and regions
+- **Owners:**
+  - children are kept in an array, disposed newest first;
+  - an owner disposed on its own is popped if newest, and otherwise left until half the array is
+    disposed, then compacted, so a long list's rows go in O(1);
+  - only the owner disposed first removes nodes (one `destroy_node` per top-level node); its
+    descendants' nodes are inside them or beside them in its region.
+- **Regions, not placeholder nodes.** Dynamic content lives in a region (a run of a parent's
+  children). To insert, it finds the first node after it, so the scene equals the imperative
+  one. A test compares a tree's ops against the same tree built with `Node` calls.
+- **Elements are descriptions,** mounted where they are inserted. Children therefore mount under
+  the component that places them and see its context. This is how `Provider` works with no
+  special case.
+- **`@axe/core/internal`:**
+  - a slot-level node API (`slotCreate`, `slotMove`, `slotDestroy`, setters) with no `Node`
+    objects and no leak registry: owners own the nodes;
+  - `Node.adopt(slot)` gives refs a non-owning `Node`.
+
+### For
+- **Keyed by item, or `key(item)`;** repeated keys pair up in order.
+- **The fewest moves.** Kept rows not in a longest increasing subsequence of their old positions
+  move once each. The tests count the `move_node` ops: one for moving the last item to the
+  front, n − 1 for a reversal.
+- **Two passes, both linear:**
+  1. from the end, the kept rows go into place (`following`, the first node after them, is
+     carried along) and new rows get empty regions that remember their anchor node;
+  2. front to back, the new rows mount before their anchors.
+
+  So the first mount and rows added at the end need no `move_node`. A first version mounted new
+  rows from the end with a move each. A second found each new row's place by walking past the
+  empty regions after it: 10,000 rows took 16 s. The anchors fixed it.
+
+### Styles
+- **Value sugar is in `@axe/core`** (`sugar.ts`): `Token.create`, `with` and `set` take it too.
+  `style()` and inline styles are in `@axe/ui`.
+- **The generator emits what sugar needs:**
+  - `stylePropKinds`, the value kinds each property takes, in the IDL's order;
+  - `styleKeywords`, each keyword property's names in CSS spelling, subsets included.
+- **`tests/ui/style_sugar_cases.json`** is the shared table that `@axe/ui`'s tests and, from
+  3b.2, axe-tsx's must both pass.
+- **Colors:** `#rgb`, `#rrggbb`, `#rrggbbaa`, `rgb(r, g, b)` and `rgba(r, g, b, a)` (`#rgba` isn't
+  accepted).
+  - **Types:** hex digits and lengths are checked at type level, through a homomorphic mapped
+    parameter (`S extends CheckBlock<S> ? S : CheckBlock<S>`). The error names the fix: `invalid
+    color "#ggg": use #rgb, #rrggbb or #rrggbbaa`. The `S & Check<S>` pattern only says "not
+    assignable to never".
+  - **rgb() and rgba()** are `rgb(${string})` to the type checker, checked at run time (and at
+    compile time for constants, from 3b.2).
+- **Static props apply once, with no binding.** A prop is dynamic when it is a getter or holds a
+  function, and a Text when any prop or part is.
+- **Themes:** `ThemeProvider` is a context provider plus a View whose style holds the theme's
+  token declarations. View and Text put the theme's default first in their style list.
+
+### The leaf-text rule
+- **Types:** `View`'s children exclude strings, numbers and Spans; `Text`'s exclude nodes. The
+  type tests check all four.
+- **At run time:** the same misplacements throw, with a message pointing to `<Text>`. In 3b.2
+  the transform reports intrinsic misnesting at compile time, since every JSX expression is one
+  `JSX.Element` type.
+
+### Type-checking time
+`tsc` over the repository (15 runs each, local, with a browser busy):
+
+| Tree | Best | Median |
+| --- | --- | --- |
+| master | 75 ms | 87 ms |
+| this milestone | 107 ms | 112–134 ms |
+| this milestone without the color and keyword checks | 95 ms | 98 ms |
+
+The checks cost about 14 ms over roughly 30 `style()` calls in the tests, which isn't noticeable,
+so they stay. The rest is the new package and its tests.
+
+### First measurements
+Release, `axe-run` headless, with a browser busy (load 5–6). These are preliminary; 3b.2's
+benchmarks are the real ones.
+
+| Case | Cost |
+| --- | --- |
+| A signal | 1.2 us |
+| A computed, created and read with one source | 7.5 us |
+| A binding with one source | 6.2 us |
+| A tracked read (link included) | about 2.5 us |
+| 10,000 For rows, each a View and a bound Text | about 600 ms |
+| The same with static text | about 370 ms |
+| 1,000 writes | 2–3 ms |
+| Flushing 1,000 text bindings | 30–55 ms |
+| Reversing 10,000 rows | about 65 ms |
+
+- **QuickJS's pace:** about 0.1 us per property write, 0.9 us per small object. So the
+  graph's objects are small:
+  - computeds (`Memo`) carry their source fields, and bindings and effects don't;
+  - flags, state and kind share one integer;
+  - the run's cursor and id are module variables.
+- **No named closures on hot paths.** `--keep-names` makes each one a `__name` call, about 1 us.
+  The signal getter, Text's setter, `setText`'s relabel, the subtree walk and the color parser
+  were rewritten to avoid them.
+- **What 3b.2 must still win:**
+  - `setText`'s encoding (about 16 us), which dominates the text cases: the lean `set_text` the
+    plan has;
+  - static structure: templates.
+
+  B2 (mount at most 300 ms, update turns at p99 at most 4 ms) and B3 (at most 8 ms) aren't met
+  by this runtime alone.
+
+### Benchmark guard
+In CI's image, on the final code:
+
+| Case | Change | Why |
+| --- | --- | --- |
+| `bench_script/startup_source` | +5.40% | The frozen cards app bundles `@axe/core`, which grew (value sugar, the slot API), so there is more source to compile. Intended. |
+| `bench_script/script_encode` | −5.32% | `setText` no longer creates a named closure per call. |
+| `bench_script/script_dispatch` | +1.77% | Within the threshold. |
+| `bench_script/startup_bytecode` | −0.40% | |
+| Layout and text cases | unchanged | |
+
+Per CONTRIBUTING.md, the baselines are updated from CI's artifact in a commit of their own.
+
 ## Milestone 3a.2: merge cleanup
 
 ### The TSan failure in script_host
