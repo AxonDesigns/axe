@@ -1,6 +1,10 @@
 # ThreadSanitizer suppressions for the tsan test preset: races inside third-party code we
 # don't build with TSan and can't fix. Never suppress a race in our own code here; fix it.
 #
-# Mesa's llvmpipe (lavapipe, the CI driver) destroys a fence's mutex and condition variable
-# while its rasterizer threads may still touch them (lp_fence.c).
+# Mesa's llvmpipe (lavapipe, the CI driver) destroys a fence's mutex while its rasterizer
+# threads may still touch it (lp_fence_destroy). Matched by function where Mesa has symbols
+# (Arch, via debuginfod) and by library where it doesn't (Ubuntu's packages, in CI): the
+# reports there show only libvulkan_lvp.so offsets. A race with a frame in lavapipe is
+# lavapipe's to fix.
 race:lp_fence_destroy
+race:libvulkan_lvp.so

@@ -78,8 +78,14 @@ visibly snapped when it stopped. There were two causes.
 - **lavapipe only:** the test preset sets `VK_DRIVER_FILES` to lavapipe's ICD (both file
   names distributions use), since TSan segfaults inside NVIDIA's proprietary driver.
   `script_host` crashed that way locally before. CI has only lavapipe anyway.
-- **Suppressions:** one, Mesa's `lp_fence_destroy` (llvmpipe destroys a fence's mutex
+- **Suppressions:** Mesa's `lp_fence_destroy` race (llvmpipe destroys a fence's mutex
   while its threads may still touch it). Races in our code are fixed, not suppressed.
+  - **By library too.** The first CI run failed 15 GPU tests with 45 reports of this race.
+    Ubuntu's Mesa has no symbols, so the frames read `libvulkan_lvp.so+0x...` and the
+    function-name suppression didn't match; Arch resolves them, so it passed locally.
+  - It now also suppresses `race:libvulkan_lvp.so`, any race with a frame inside lavapipe.
+    Verified in the Ubuntu CI image: 41 of 41 pass. Our races still fail: with the old head
+    step, `font_loading` still reports `core.c:482 in head_step`.
 - **First run:** the whole suite passes with no reports in our code.
 - **Proved:** with the head step's old order put back, the preset failed
   `font_loading` 3 times out of 3, reporting `data race ... core.c:482 in head_step`. With
