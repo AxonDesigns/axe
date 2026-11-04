@@ -1,23 +1,27 @@
 {
   "threshold_percent": 2,
-  "reason": "Baselines from the guard's first run on master in its final form (M2.2); counts unchanged from CI run 41675753054, now stamped with their run",
+  "reason": "Milestone 3a adds bench_script's four CPU cases (script_dispatch, script_encode, startup_bytecode, startup_source); the other cases are unchanged",
   "source": {
-    "run_id": 41687697393,
+    "run_id": 41724216260,
     "run_attempt": 1,
     "workflow": "ci",
-    "event": "push",
-    "ref": "master",
-    "commit": "2927f9ecd171003084adf83b771cbb902251d99f",
-    "url": "https://github.com/AxonDesigns/axe/actions/runs/41687697393"
+    "event": "workflow_dispatch",
+    "ref": "m3a",
+    "commit": "a4f0777e29ae52eefc5985ec77ba3e1feb958677",
+    "url": "https://github.com/AxonDesigns/axe/actions/runs/41724216260"
   },
   "counts": {
     "bench_layout/full_cold": 95100610,
     "bench_layout/full_warm": 41165845,
-    "bench_layout/incremental": 5885285,
+    "bench_layout/incremental": 5885265,
     "bench_layout/inherited": 4616441,
     "bench_layout/token": 5494150,
+    "bench_script/script_dispatch": 36241281,
+    "bench_script/script_encode": 476195302,
+    "bench_script/startup_bytecode": 14312255,
+    "bench_script/startup_source": 36374783,
     "bench_text/raster": 24977607,
     "bench_text/relayout": 6048054,
-    "bench_text/shape": 65580203
+    "bench_text/shape": 65491685
   }
 }
