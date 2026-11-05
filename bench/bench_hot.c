@@ -136,8 +136,10 @@ static int editor(void *arg) {
             fflush(stdout);
         }
     }
-    ui_app_quit(run.app);
-    return 0;
+    // ui_app_quit is for the main thread, which is in ui_app_run. There is nothing to save.
+    if (config.failed) printf("%d edits timed out\n", config.failed);
+    fflush(stdout);
+    _exit(config.failed ? 1 : 0);
 }
 
 static void wake_core(void *user) { ui_app_request_turn(user); }
@@ -183,10 +185,8 @@ int main(int argc, char **argv) {
     thrd_t thread;
     thrd_create(&thread, editor, NULL);
     ui_app_run(run.app);
-    thrd_join(thread, NULL);
-    ui_dev_session_stop(session);
+    ui_dev_session_stop(session); // the window closed before the edits finished
     ui_app_destroy(run.app);
     ui_dev_channel_destroy(channel);
-    if (config.failed) printf("%d edits timed out\n", config.failed);
-    return config.failed ? 1 : 0;
+    return 1;
 }

@@ -75,8 +75,9 @@ measures 22 KB per version with no hot reload, so what grows is the engine's own
 - **inotify only.** Other platforms implement `watch.h` when they arrive.
 
 ### Measurements
-Latency and heap: docs/ui.md, "Hot reload". A component edit is 32 ms at p50 and 36 ms at p95 in a
-Debug build, against the 200 ms target.
+Latency and heap: docs/ui.md, "Hot reload". A component edit is 33 ms at p50 and 39 ms at p95 in a
+Debug build, against the 200 ms target. The Callgrind guard needs no new baselines: every case is
+within 0.2%. No fuzz run: no fuzz target reaches what changed in the core (the turn request).
 
 ## Milestone 3b.2: the TSX transform, templates and the language benchmarks
 

@@ -491,10 +491,10 @@ component edit was under 200 ms at p95.
 
 | Edit | p50 | p95 |
 | --- | --- | --- |
-| Component | 32.1 ms | 36.3 ms |
-| Style only | 26.1 ms | 28.1 ms |
-| Template | 30.8 ms | 34.2 ms |
-| Non-component module | 30.2 ms | 34.2 ms |
+| Component | 32.6 ms | 38.8 ms |
+| Style only | 25.1 ms | 27.9 ms |
+| Template | 31.0 ms | 34.7 ms |
+| Non-component module | 30.9 ms | 35.9 ms |
 
 About 15 ms of each is the debounce, which lets a burst of saves become one update.
 
