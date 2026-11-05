@@ -439,13 +439,20 @@ function isBoundary(file: string): boolean {
   return modules.get(file)?.boundary ?? true;
 }
 
+// A hot value, or a plain object or array of them (`export const S = { card: style(...) }`).
+function isHotValue(v: unknown, depth = 0): boolean {
+  if ((typeof v !== "object" && typeof v !== "function") || v === null) return false;
+  if (hotValues.has(v)) return true;
+  if (typeof v === "function" || depth > 4) return false;
+  const proto = Object.getPrototypeOf(v) as unknown;
+  if (proto !== Object.prototype && proto !== Array.prototype) return false;
+  const values = Object.values(v);
+  return values.length > 0 && values.every((x) => isHotValue(x, depth + 1));
+}
+
 function boundaryExports(ns: Record<string, unknown>): boolean {
   const names = Object.keys(ns);
-  if (!names.length) return false;
-  return names.every((k) => {
-    const v = ns[k];
-    return (typeof v === "object" || typeof v === "function") && v !== null && hotValues.has(v);
-  });
+  return names.length > 0 && names.every((k) => isHotValue(ns[k]));
 }
 
 // What must be evaluated again for `changed`, and whether that reaches the entry, through which

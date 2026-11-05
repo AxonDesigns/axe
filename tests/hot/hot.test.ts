@@ -88,6 +88,23 @@ export function App() {
   expect(s()).toBe(9);
 });
 
+test("a style-only edit of a styles module re-runs no component", async () => {
+  const styles = (padding: number): string => `import { style } from "@axe/ui";
+export const S = { card: style({ padding: ${padding} }), nested: { other: style({ gap: 2 }) } };
+`;
+  const view = `${P}import { View } from "@axe/ui";
+import { S } from "./styles";
+export function App() {
+  return <View style={S.card} />;
+}
+`;
+  await edit({ "c15/styles.ts": styles(4), "c15/app.tsx": view, "main.tsx": entry("c15") });
+  const runs = hotState().runs("c15/app.tsx", "App");
+  await edit({ "c15/styles.ts": styles(8) });
+  expect(hotState().runs("c15/app.tsx", "App")).toBe(runs);
+  expect(hotState().overlay).toBe(null);
+});
+
 test("a template edit keeps state", async () => {
   const v = (extra: string): string => `${P}import { Text, View, signal } from "@axe/ui";
 export function App() {
