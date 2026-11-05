@@ -99,6 +99,8 @@ declare module "axe:test" {
   export function gc(): void;
   /** Writes the surface as a PPM after the next frame. */
   export function capture(path: string): void;
+  export function heapUsed(): number;
+  export function heapDetail(): { objects: number; functions: number; bytecodeBytes: number; stringBytes: number };
   /** Hot reload's tests: writes or (null) deletes files of the app, and posts their rebuild. */
   export function hotEdit(files: Record<string, string | null>): void;
   /** Saves a file as an editor does, for the watcher to see. */

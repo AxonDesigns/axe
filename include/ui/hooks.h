@@ -15,7 +15,7 @@
 extern "C" {
 #endif
 
-#define UI_HOOKS_VERSION 2u // 1: script events, `text` and `duration_ns` (milestone 3a); 2: COMMANDS_APPLIED (3b)
+#define UI_HOOKS_VERSION 3u // 1: script events, `text` and `duration_ns` (milestone 3a); 2: COMMANDS_APPLIED (3b); 3: SCRIPT_HOT_UPDATE (3b.3)
 #define UI_HOOKS_MAX_SUBSCRIBERS 8u
 
 typedef struct ui_app ui_app;
@@ -52,6 +52,9 @@ typedef enum ui_trace_kind {
     // `surface`); `time_ns` is when the logic thread sent it. With PRESENTED for that frame, the
     // time from a turn's writes to the screen.
     UI_TRACE_COMMANDS_APPLIED,
+    // Since version 3, in development builds: a turn applied a hot update and flushed it;
+    // `duration_ns` is the time since the file event behind it (0: the first build).
+    UI_TRACE_SCRIPT_HOT_UPDATE,
 } ui_trace_kind;
 
 typedef struct ui_trace_event {
@@ -63,7 +66,7 @@ typedef struct ui_trace_event {
     uint64_t refresh_ns;   // PRESENTED only; 0 if unknown
     // Since version 1: script events only (NULL otherwise). Valid during the callback.
     const char *text;
-    uint64_t duration_ns;  // SCRIPT_LONG_TASK only
+    uint64_t duration_ns;  // SCRIPT_LONG_TASK and SCRIPT_HOT_UPDATE only
 } ui_trace_event;
 
 typedef void (*ui_trace_fn)(void *user, const ui_trace_event *event);

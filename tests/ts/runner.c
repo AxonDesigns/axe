@@ -17,6 +17,7 @@
 //                    "write", "rename", "recreate", or "delete" with no text)
 //   hotWatching()    AXE_DEV: the app started under the watcher (--watch)
 //   capture(path)    writes the surface as a PPM after the next frame
+//   heapUsed()       the JS heap's size in bytes
 // Without requests the runner keeps making frames (preparation, font loads); a test that
 // neither steps nor finishes within the frame budget fails.
 //
@@ -252,6 +253,25 @@ static ui_js_val t_c_events(ui_js *js, const ui_js_call_info *call) {
     return ab;
 }
 
+static ui_js_val t_heap_used(ui_js *js, const ui_js_call_info *call) {
+    (void)call;
+    ui_js_memory m;
+    ui_js_memory_stats(js, &m);
+    return ui_js_number(js, (double)m.used_bytes);
+}
+
+static ui_js_val t_heap_detail(ui_js *js, const ui_js_call_info *call) {
+    (void)call;
+    ui_js_memory m;
+    ui_js_memory_stats(js, &m);
+    ui_js_val o = ui_js_object(js);
+    ui_js_set(js, o, "objects", ui_js_number(js, (double)m.objects));
+    ui_js_set(js, o, "functions", ui_js_number(js, (double)m.functions));
+    ui_js_set(js, o, "bytecodeBytes", ui_js_number(js, (double)m.bytecode_bytes));
+    ui_js_set(js, o, "stringBytes", ui_js_number(js, (double)m.string_bytes));
+    return o;
+}
+
 static ui_js_val t_capture(ui_js *js, const ui_js_call_info *call) {
     runner *r = call->data;
     char *path = call->argc ? ui_js_to_utf8(js, call->args[0], NULL) : NULL;
@@ -345,6 +365,8 @@ static void setup(void *user, ui_js *js) {
     ui_js_set(js, m, "cBuffer", ui_js_function(js, "cBuffer", 1, t_c_buffer, user));
     ui_js_set(js, m, "cEvents", ui_js_function(js, "cEvents", 0, t_c_events, user));
     ui_js_set(js, m, "capture", ui_js_function(js, "capture", 1, t_capture, user));
+    ui_js_set(js, m, "heapUsed", ui_js_function(js, "heapUsed", 0, t_heap_used, user));
+    ui_js_set(js, m, "heapDetail", ui_js_function(js, "heapDetail", 0, t_heap_detail, user));
 #ifdef AXE_DEV
     ui_js_set(js, m, "hotEdit", ui_js_function(js, "hotEdit", 1, t_hot_edit, user));
     ui_js_set(js, m, "hotSave", ui_js_function(js, "hotSave", 3, t_hot_save, user));

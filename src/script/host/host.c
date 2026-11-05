@@ -796,7 +796,9 @@ void ui_script_host_turn(ui_script_host *h, const uint8_t *events, size_t size, 
     if (!h->loaded) load(h);
 #ifdef AXE_DEV
     // Updates apply at the turn's start, before its events, as a task of their own.
+    bool hot_update = false;
     if (h->dev && ui_dev_take(h->dev)) {
+        hot_update = true;
         task_begin(h);
         if (!ui_dev_deliver(h->dev)) report_exception(h, "applying a hot update");
         task_end(h, "applying a hot update");
@@ -837,6 +839,12 @@ void ui_script_host_turn(ui_script_host *h, const uint8_t *events, size_t size, 
         append_timer(h, next == NO_DEADLINE ? UI_WIRE_TIMER_CANCEL : next);
         h->armed = next;
     }
+#ifdef AXE_DEV
+    if (hot_update) {
+        uint64_t event_ns = ui_dev_take_event_ns(h->dev);
+        UI_HOOK_SCRIPT(h->env.hooks, UI_TRACE_SCRIPT_HOT_UPDATE, "", event_ns ? ui_monotonic_ns() - event_ns : 0);
+    }
+#endif
     ui_js_scope_close(js, scope);
     *cmds = h->out;
     *cmds_size = h->out_size;

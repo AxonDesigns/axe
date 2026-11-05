@@ -59,3 +59,11 @@ target_compile_definitions(bench_ui_live PRIVATE _DEFAULT_SOURCE AXE_SOURCE_DIR=
 target_link_libraries(bench_ui_live PRIVATE ui m)
 add_dependencies(bench_ui_live bench_ui_bundles)
 ui_target_warnings(bench_ui_live)
+
+# Hot reload's latency (docs/ui.md, "Hot reload"): needs AXE_DEV.
+if(AXE_DEV)
+    add_executable(bench_hot bench_hot.c)
+    target_compile_definitions(bench_hot PRIVATE _DEFAULT_SOURCE UI_HOT_APP_DIR="${CMAKE_CURRENT_SOURCE_DIR}/apps/hot")
+    target_link_libraries(bench_hot PRIVATE axe_dev m)
+    ui_target_warnings(bench_hot)
+endif()

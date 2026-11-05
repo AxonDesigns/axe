@@ -67,6 +67,7 @@
     "../bench/**/*.tsx"
   ],
   "exclude": [
+    "../bench/apps/hot",
     "../tests/tsx/**"
   ]
 }

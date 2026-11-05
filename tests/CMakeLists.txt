@@ -318,6 +318,10 @@ if(AXE_DEV)
     axe_hot_driver(hot_watch.test)
     add_test(NAME ts_hot_watch COMMAND axe-test-js --dev "${CMAKE_CURRENT_BINARY_DIR}/hot/run-watch" --watch "${CMAKE_CURRENT_BINARY_DIR}/hot/hot_watch.test.js")
     set_tests_properties(ts_hot_watch PROPERTIES ENVIRONMENT "UI_GPU=software" TIMEOUT 300)
+    # Long sessions: what 200 edits of a component leave in the JS heap.
+    axe_hot_driver(hot_heap.test)
+    add_test(NAME ts_hot_heap COMMAND axe-test-js --dev "${CMAKE_CURRENT_BINARY_DIR}/hot/run-heap" "${CMAKE_CURRENT_BINARY_DIR}/hot/hot_heap.test.js")
+    set_tests_properties(ts_hot_heap PROPERTIES ENVIRONMENT "UI_GPU=software" TIMEOUT 300)
     # The scene after an update equals a fresh build of the new version, in the same state.
     axe_hot_driver(hot_scene.test)
     add_test(NAME hot_scene COMMAND ${CMAKE_COMMAND} -DRUNNER=$<TARGET_FILE:axe-test-js>

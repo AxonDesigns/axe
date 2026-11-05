@@ -62,7 +62,29 @@ async function drive(): Promise<void> {
   await nextTurn();
 }
 
-test(`the scene (${mode})`, async () => {
+async function shot(path: string): Promise<void> {
+  await step(50);
+  await nextTurn();
+  capture(path);
+  await step(50);
+  await nextTurn();
+}
+
+// The overlay: on top of the last scene, which is back exactly when the error is fixed.
+if (mode === "overlay") {
+  test("the overlay", async () => {
+    const good = { "styles.ts": styles("#def"), "app.tsx": view("v2", "") };
+    await edit({ ...good, "main.tsx": main });
+    await drive();
+    await shot(`${out}-before.ppm`);
+    await edit({ "app.tsx": `export function App( {\n` });
+    expect(hotState().overlay ?? "").toContain("app.tsx:");
+    await shot(`${out}-error.ppm`);
+    await edit(good);
+    expect(hotState().overlay).toBe(null);
+    await shot(`${out}-after.ppm`);
+  });
+} else test(`the scene (${mode})`, async () => {
   const v2 = { "styles.ts": styles("#def"), "app.tsx": view("v2", "<View />") };
   if (mode === "hot") {
     await edit({ "styles.ts": styles("#fed"), "app.tsx": view("v1", ""), "main.tsx": main });

@@ -143,6 +143,7 @@ static void on_trace(void *user, const ui_trace_event *ev) {
     case UI_TRACE_SCRIPT_REJECTION:
     case UI_TRACE_SCRIPT_LONG_TASK:
     case UI_TRACE_SCRIPT_LEAK:
+    case UI_TRACE_SCRIPT_HOT_UPDATE:
         break; // the script host logs these itself
     case UI_TRACE_COMMANDS_APPLIED:
         break; // per buffer: bench_ui_live measures with it
