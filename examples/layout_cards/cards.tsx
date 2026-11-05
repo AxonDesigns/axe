@@ -43,7 +43,7 @@ export function App() {
         <Text style={[S.title, { width: "100%" }]} {...textOptions} size={15} weight={650}>
           A panel in the other theme: its scope aliases every token
         </Text>
-        {panelCards.map((id) => <Card id={id} />)}
+        {panelCards().map((id) => <Card id={id} />)}
       </View>
       <For each={cards()}>{(id: number) => <Card id={id} />}</For>
     </View>

@@ -207,6 +207,11 @@ bool ui_js_eval_module(ui_js *js, const char *name, const ui_js_module_source *s
 // Ownership: free() *out.
 bool ui_js_compile_module(ui_js *js, const char *name, const char *src, size_t len, uint8_t **out,
                           size_t *size);
+// The namespace of a module the loader provided and that has been evaluated. False, with nothing
+// pending, for one the loader didn't provide. Use this rather than import() to look at a module
+// loaded as a dependency: an engine may never settle import() of a module that finished as
+// someone else's dependency and has top-level await below it (QuickJS-ng 0.18 doesn't).
+bool ui_js_module_namespace(ui_js *js, const char *name, ui_js_val *out);
 // Evaluates a classic script; *result is its completion value.
 bool ui_js_eval_script(ui_js *js, const char *name, const char *src, size_t len, ui_js_val *result);
 

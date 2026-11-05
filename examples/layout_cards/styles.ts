@@ -1,7 +1,7 @@
 // layout_cards' styles. A style-only edit here re-runs no component.
 
 import { spring, style } from "@axe/ui";
-import { I, KEYS, T } from "./theme";
+import { I, T } from "./theme";
 
 const colorSpring = spring(90, 19);
 export const S = {
@@ -33,7 +33,7 @@ export const S = {
     width: "100%", flexWrap: "wrap", alignItems: "start", padding: 16, rowGap: 12, columnGap: 14,
     cornerRadius: 14, borderWidth: 1, backgroundColor: T.page, borderColor: T.border,
     transitions: { backgroundColor: colorSpring, borderColor: colorSpring },
-    tokens: KEYS.map((k) => T[k].with(I[k])),
+    tokens: (Object.keys(T) as (keyof typeof T)[]).map((k) => T[k].with(I[k])),
   }),
 };
 

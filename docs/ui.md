@@ -403,8 +403,11 @@ refuses the flag. Bundles hold none of this: the transform writes its registrati
    many instances ran. The shuffle, the theme and what is hovered carry on.
 3. **Break it:** delete a `}` in `cards.tsx`. The app keeps running under an overlay with the
    file, the line and the message. Put the `}` back, and the overlay goes.
-4. **In `state.ts`,** change `SHUFFLE_MS`. Its importers include `main.tsx`, so this is a full
-   reload, and the log says why. The module's signals still keep their values.
+4. **In `theme.ts`,** change a color. It changes in place, because the module exports only tokens.
+   `state.ts` is the same: it exports only signals, so editing it keeps every value and runs
+   nothing that imports it.
+5. **In `cycles.ts`,** change `SHUFFLE_MS`. It exports plain functions and `main.tsx` imports them,
+   so this is a full reload, and the log says why. The signals in `state.ts` keep their values.
 
 ### What keeps state
 
@@ -413,7 +416,8 @@ refuses the flag. Bundles hold none of this: the transform writes its registrati
 | A `style()` | The same style id is redefined. Nothing runs. | All kept |
 | A component's body or JSX | Its instances run again in place, with the same props at the same position | Kept (below) |
 | An inline style | Part of the template, since 3b.2: the same as editing JSX | Kept |
-| A module that isn't a boundary | Its importers are evaluated again, up to boundaries, and the components of those importers run again | Kept |
+| A boundary (below) | Evaluated again; its importers aren't, and what changed takes effect through the references they hold | Kept |
+| Any other module | Its importers are evaluated again, up to boundaries, and the components of those importers run again | Kept |
 | Reaching the entry | A full reload: the new app mounts, then the old one unmounts, and the log says why | Component state lost; module-level signals kept |
 
 **A signal keeps its value** when its key (its binding's name and ordinal in the component or
@@ -426,17 +430,30 @@ no way of being told what changed. Their state is put aside by path (a component
 under its parent, a `<For>` row by its key) and restored when the same path appears. A row keeps
 its state when its list was reordered.
 
-**Boundaries.** A module exporting only components, styles, templates, tokens, themes and contexts
-(or plain objects and arrays of them, like `export const S = { card: style(...) }`) is a boundary:
-its exports keep their identity, so its importers keep working with no change. Components are
-stable proxies over their latest version. Any other export makes a module's importers evaluate
-again, because they hold what it exported.
+**Boundaries.** A module is a boundary when every export stays valid across a new version, so
+what imports it keeps working with no change, and the update stops there:
+
+| Export | Why it is stable |
+| --- | --- |
+| A component | A proxy over its latest version |
+| A module-level `signal()` | The same object; its value is kept by the rule above |
+| A module-level `computed()` | A getter over the latest version, which readers follow |
+| A `style()`, `token()`, `theme()`, `context()`, template | The same object or id, redefined |
+| A plain object or array of these | `export const S = { card: style(...) }` |
+
+Any other export (a plain function, a constant, a class, a plain object of values) can't be
+replaced under its importers, so they are evaluated again, on up to the next boundary. To keep a
+module hot, keep plain functions out of it: `layout_cards` has `state.ts`, signals only, and
+`cycles.ts`, the functions that change them.
+
+Only a direct call is stable: `const count = signal(0)`, or `{ count: signal(0) }`. A signal or
+token made in a loop or a helper isn't, and its module isn't a boundary.
 
 **Module-level state.** `signal()` at a module's top level gets the same rule, and stays the same
 object. Each module evaluates under an owner of its own: evaluating it again first disposes the
 previous version's effects, computeds, cleanups, timers and `app.onTurnEnd`, `onTurnStart` and
 `onSurface` handlers, so nothing runs twice. A callback that outlives the top level (`surface.onFrame`)
-needs `runWithOwner(getOwner(), ...)` to keep timers under it: see `layout_cards/main.tsx`.
+needs the owner kept for it ([Owners and callbacks](#owners-and-callbacks)).
 
 **Keep the entry small.** Reaching the entry is always a full reload, so an entry that is one mount
 call, with the app's state in a module of its own, makes every other edit hot:
@@ -452,9 +469,47 @@ app.onSurface((s) => mount(App, s));
 - A component's local variables that aren't signals.
 - A signal inside a callback or helper called more than once in a module's top level: only direct
   calls in a module's top level, or in a component, are told apart.
-- Values a helper makes: tokens from a loop get new ids when their module evaluates again
-  (`layout_cards/theme.ts`).
+- Values a helper makes: tokens from a loop get new ids when their module evaluates again.
 - Anything in a `For` row whose key changed.
+
+### Owners and callbacks
+
+An owner is what stops a timer or an effect when its code is replaced. Code that runs later (an
+event, `surface.onFrame`, a promise continuation) has no owner unless you bring it along. With
+`--dev`, a `setTimeout`, `setInterval`, `effect` or `computed` that starts with no owner is warned
+about, once per place, with its original file and line:
+
+```
+cycles.ts:42: setInterval with no owner: nothing stops it, so a new version of this code adds another. Keep the owner with runWithOwner(getOwner(), ...) (docs/ui.md, "Owners and callbacks")
+```
+
+Keep the owner where you still have it, and run the callback under it:
+
+```ts
+const owner = getOwner();
+surface.onFrame(() => runWithOwner(owner, startCycles));
+```
+
+Timers started at a module's top level, or under `runWithOwner` with its owner, stop with that
+version of the module. Timers inside a component aren't stopped for you: use `onCleanup`.
+
+### Top-level await
+
+`await` at a module's top level works in any app module, at startup and across updates:
+
+- **The module keeps its owner.** What it creates after the `await` belongs to it, as before.
+- **The app waits, the running version doesn't.** At startup the app starts when the await ends.
+  An update commits when the await ends, so the old version keeps running and handling events.
+- **A rejected await** is an evaluation error: the overlay, and the last version keeps running.
+- **A newer save replaces an update still waiting,** since what it waits for may never come. The
+  replaced module stops at its next `await`.
+
+`for await` at a module's top level is a build error with `--dev`, because the loop's own awaits
+can't hand the owner back. Move it into an async function and await that:
+
+```
+data.ts:3:1: error: `for await` at a module's top level doesn't work with hot reload: move it into an async function and await that (docs/ui.md, "Top-level await")
+```
 
 ### Errors
 

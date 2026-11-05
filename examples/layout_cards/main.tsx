@@ -9,12 +9,12 @@
 //   layout_cards_tsx --headless --at S --out f.ppm [-- ...]
 //
 // Its headless images equal the C version's (CTest: layout_cards_equivalence). With --dev, edits
-// to cards.tsx and styles.ts apply while it runs (docs/ui.md, "Hot reload").
+// to anything but this file and cycles.ts apply in place (docs/ui.md, "Hot reload").
 
 import { app, getOwner, loadFont, mount, runWithOwner } from "@axe/ui";
 import { App } from "./cards";
-import { populate, startCycles } from "./state";
-import { setTheme } from "./theme";
+import { populate, startCycles } from "./cycles";
+import "./theme";
 
 loadFont(`${AXE_SOURCE_DIR}/tests/fonts/NotoSans-VF.ttf`).catch((e) => console.error(e));
 
@@ -28,6 +28,6 @@ app.onSurface((s) => {
   const owner = getOwner();
   const off = s.onFrame(() => {
     off();
-    runWithOwner(owner, () => startCycles(setTheme));
+    runWithOwner(owner, startCycles);
   });
 });

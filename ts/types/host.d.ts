@@ -83,6 +83,8 @@ declare module "axe:host" {
   export function hotImporters(file: string): string[];
   export function hotSourceMap(name: string): string | undefined;
   export function hotFiles(): string[];
+  /** The exports of a module that has been evaluated. */
+  export function hotNamespace(name: string): Record<string, unknown> | undefined;
   export const hotEntry: string;
   /** True in debug builds of the host. */
   export const debug: boolean;
@@ -100,6 +102,8 @@ declare module "axe:test" {
   /** Writes the surface as a PPM after the next frame. */
   export function capture(path: string): void;
   export function heapUsed(): number;
+  /** A file of the repository, as text. */
+  export function readText(path: string): string;
   export function heapDetail(): { objects: number; functions: number; bytecodeBytes: number; stringBytes: number };
   /** Hot reload's tests: writes or (null) deletes files of the app, and posts their rebuild. */
   export function hotEdit(files: Record<string, string | null>): void;

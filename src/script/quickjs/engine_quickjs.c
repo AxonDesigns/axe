@@ -17,6 +17,11 @@ typedef struct native_module {
     JSValue exports;
 } native_module;
 
+typedef struct loaded_module {
+    char *name;
+    JSModuleDef *module; // the runtime's, for as long as it lives
+} loaded_module;
+
 struct ui_js {
     JSRuntime *rt;
     JSContext *ctx;
@@ -29,6 +34,8 @@ struct ui_js {
     void *poll_user;
     native_module *modules;
     uint32_t module_count;
+    loaded_module *loaded; // what the host's loader provided
+    uint32_t loaded_count;
     uint32_t live_refs;
     bool compiling; // ui_js_compile_module: imports get empty stand-ins (they bind when evaluated)
 };
@@ -203,6 +210,16 @@ static JSModuleDef *load_module(JSContext *ctx, const char *name, void *opaque) 
     if (JS_IsException(v)) return NULL;
     JSModuleDef *m = JS_VALUE_GET_PTR(v);
     JS_FreeValue(ctx, v); // the runtime holds the module
+    loaded_module *grown = realloc(js->loaded, (js->loaded_count + 1) * sizeof *grown);
+    char *copy = strdup(name);
+    if (!grown || !copy) {
+        if (grown) js->loaded = grown;
+        free(copy);
+        JS_ThrowOutOfMemory(ctx);
+        return NULL;
+    }
+    js->loaded = grown;
+    js->loaded[js->loaded_count++] = (loaded_module){copy, m};
     return m;
 }
 
@@ -256,6 +273,8 @@ void ui_js_destroy(ui_js *js) {
     }
     if (js->rt) JS_FreeRuntime(js->rt);
     free(js->modules);
+    for (uint32_t i = 0; i < js->loaded_count; i++) free(js->loaded[i].name);
+    free(js->loaded);
     free(js->vals);
     free(js);
 }
@@ -598,6 +617,16 @@ bool ui_js_eval_module(ui_js *js, const char *name, const ui_js_module_source *s
     }
     *result = push(js, JS_EvalFunction(js->ctx, m)); // takes m
     return result->id != 0;
+}
+
+bool ui_js_module_namespace(ui_js *js, const char *name, ui_js_val *out) {
+    *out = (ui_js_val){0};
+    for (uint32_t i = js->loaded_count; i-- > 0;) {
+        if (strcmp(js->loaded[i].name, name)) continue;
+        *out = push(js, JS_GetModuleNamespace(js->ctx, js->loaded[i].module));
+        return out->id != 0;
+    }
+    return false;
 }
 
 bool ui_js_compile_module(ui_js *js, const char *name, const char *src, size_t len, uint8_t **out, size_t *size) {

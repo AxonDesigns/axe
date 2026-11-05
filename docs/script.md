@@ -224,7 +224,8 @@ In `AXE_DEV` builds (Debug, by default) an app can run from modules instead of a
   at least, so the update applies in a real turn with a time.
 - **The turn.** After the turn's time is set, and before its first event, the host moves what was
   posted into its module table and calls the hot runtime as a task of its own, with a microtask
-  checkpoint. Importing a module settles within that checkpoint, unless it uses top-level await.
+  checkpoint. Importing a module settles within that checkpoint, unless it awaits something slower
+  at its top level. Then the update stays open across turns, which run normally.
 - **The first turn.** The host evaluates a bootstrap that imports `@axe/ui/hot`, and the first batch
   goes through the normal path, the entry included. So an entry that doesn't build has something to
   show the error.
@@ -235,7 +236,7 @@ In `AXE_DEV` builds (Debug, by default) an app can run from modules instead of a
 - **Packages** resolve to `pkg:/` names, files in the prebuilt directory.
 
 `@axe/ui/hot` reaches the table through `axe:host` functions that exist only in this mode
-(`hotBegin`, `hotCommit`, `hotRevert`, `hotImporters`, `hotSourceMap`, `hotFiles`).
+(`hotBegin`, `hotCommit`, `hotRevert`, `hotImporters`, `hotSourceMap`, `hotFiles`, `hotNamespace`).
 
 The hooks API reports each update (`UI_TRACE_SCRIPT_HOT_UPDATE`, version 3) with the time since its
 file event.

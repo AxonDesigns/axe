@@ -418,6 +418,199 @@ export function App() {
   expect(probe["lib"]).toBe(2);
 });
 
+test("signals and computeds are stable, so their module is a boundary", async () => {
+  const state = (init: number, factor: number): string => `import { computed, signal } from "@axe/ui";
+export const count = signal(${init});
+export const scaled = computed(() => count() * ${factor});
+`;
+  const app = `${P}import { Text, View, signal } from "@axe/ui";
+import { count, scaled } from "./state";
+function Shows() {
+  probe.shown = scaled;
+  return <Text>{scaled()}</Text>;
+}
+export function App() {
+  probe.count = count;
+  return <View><Shows /></View>;
+}
+`;
+  await edit({ "c17/state.ts": state(1, 2), "c17/app.tsx": app, "main.tsx": entry("c17") });
+  const scaled = probe["shown"] as () => number;
+  const runs = hotState().runs("c17/app.tsx", "Shows");
+  sig<number>("count").set(3);
+  await nextTurn();
+  expect(scaled()).toBe(6);
+  const reloads = hotState().fullReloads;
+  await edit({ "c17/state.ts": state(1, 10) });
+  expect(hotState().runs("c17/app.tsx", "Shows")).toBe(runs); // nothing below it ran
+  expect(hotState().fullReloads).toBe(reloads);
+  expect(sig<number>("count")()).toBe(3);
+  expect(scaled()).toBe(30); // the importer's reference reaches the new version
+  sig<number>("count").set(4);
+  await nextTurn();
+  expect(scaled()).toBe(40);
+});
+
+test("a module exporting a plain function still propagates", async () => {
+  const util = (n: number): string => `export function twice(x: number) { return x * ${n}; }\n`;
+  const app = `${P}import { Text, View } from "@axe/ui";
+import { twice } from "./util";
+export function App() {
+  probe.result = twice(2);
+  return <View><Text>x</Text></View>;
+}
+`;
+  await edit({ "c18/util.ts": util(2), "c18/app.tsx": app, "main.tsx": entry("c18") });
+  expect(probe["result"]).toBe(4);
+  const runs = hotState().runs("c18/app.tsx", "App");
+  await edit({ "c18/util.ts": util(3) });
+  expect(probe["result"]).toBe(6);
+  expect(hotState().runs("c18/app.tsx", "App")).toBe(runs + 1);
+});
+
+test("what starts with no owner is warned about once per place, with its location", async () => {
+  const app = `${P}import { View, effect } from "@axe/ui";
+export function App() {
+  return <View />;
+}
+function later() {
+  setTimeout(() => {}, 1);
+  setInterval(() => {}, 1000);
+  effect(() => {});
+}
+probe.later = later;
+`;
+  await edit({ "c19/app.tsx": app, "main.tsx": entry("c19") });
+  const before = hotState().warnings.length;
+  const later = probe["later"] as () => void;
+  later(); // here there is no owner: this test runs in a promise continuation
+  later();
+  await nextTurn();
+  const new_ = hotState().warnings.slice(before);
+  expect(new_.length).toBe(3);
+  expect(new_[0] ?? "").toContain("c19/app.tsx:7");
+  expect(new_[0] ?? "").toContain("setTimeout with no owner");
+  expect(new_[0] ?? "").toContain("runWithOwner");
+  expect(new_[1] ?? "").toContain("setInterval");
+  expect(new_[2] ?? "").toContain("effect");
+});
+
+test("a top-level await at startup: the app waits, and the module keeps its owner", async () => {
+  const data = (n: number, delay: number): string => `${P}import { effect, onCleanup, signal, style } from "@axe/ui";
+await new Promise((r) => setTimeout(r, ${delay}));
+export const data = signal(${n});
+export const version = ${n};
+export const card = style({ padding: 2 });
+effect(() => { probe.log.push("effect ${n} " + data()); });
+onCleanup(() => probe.log.push("gone ${n}"));
+const id = setInterval(() => probe.log.push("timer ${n}"), 100);
+`;
+  const app = `${P}import { Text, View } from "@axe/ui";
+import { card, data, version } from "./data";
+export function App() {
+  probe.version = version;
+  probe.data = data;
+  return <View style={card}><Text>{data()}</Text></View>;
+}
+`;
+  probe.log.length = 0;
+  const before = hotState().updates;
+  probe["version"] = 0;
+  hotEdit({ "c20/data.ts": data(1, 30), "c20/app.tsx": app, "main.tsx": entry("c20") });
+  while (hotState().updates === before) await nextTurn();
+  await nextTurn();
+  expect(probe["version"]).toBe(0); // the await hasn't finished: the previous app is still up
+  await step(40);
+  await nextTurn();
+  expect(probe["version"]).toBe(1);
+  expect(hotState().overlay).toBe(null);
+  await step(0);
+  expect(probe.log).toContain("effect 1 1"); // created after the await
+
+  // Across a hot reload: same thing, and the signal keeps its value and object.
+  const held = sig<number>("data");
+  held.set(5);
+  await nextTurn();
+  probe.log.length = 0;
+  await edit({ "c20/data.ts": data(2, 30).replace("signal(2)", "signal(1)") });
+  expect(probe["version"]).toBe(1); // still waiting
+  await step(40);
+  await nextTurn();
+  expect(probe["version"]).toBe(2);
+  expect(sig<number>("data")).toBe(held);
+  expect(held()).toBe(5);
+  expect(probe.log).toContain("gone 1"); // the old version's owner went, at the commit
+  probe.log.length = 0;
+  await step(100);
+  expect(probe.log).toContain("timer 2"); // a timer made after the await is owned
+  expect(probe.log.includes("timer 1")).toBe(false);
+});
+
+test("a rejected top-level await keeps the last version, and a catch still has its owner", async () => {
+  const data = (body: string): string => `${P}import { onCleanup } from "@axe/ui";
+${body}
+export const version = "ok";
+`;
+  const app = `${P}import { View } from "@axe/ui";
+import { version } from "./data";
+export function App() {
+  probe.version = version;
+  return <View />;
+}
+`;
+  await edit({ "c21/data.ts": data("await null;"), "c21/app.tsx": app, "main.tsx": entry("c21") });
+  expect(probe["version"]).toBe("ok");
+  await edit({ "c21/data.ts": data(`await Promise.reject(new Error("no data"));`) });
+  expect(hotState().overlay ?? "").toContain("no data");
+  expect(probe["version"]).toBe("ok");
+  probe.log.length = 0;
+  await edit({ "c21/data.ts": data(`try { await Promise.reject(new Error("x")); } catch { onCleanup(() => probe.log.push("caught")); }`) });
+  expect(hotState().overlay).toBe(null);
+  await edit({ "c21/data.ts": data("await null;") });
+  expect(probe.log).toContain("caught");
+});
+
+test("a top-level await that never settles doesn't hold later saves back", async () => {
+  const data = (body: string, n: number): string => `${body}
+export const version = ${n};
+`;
+  const app = `${P}import { View } from "@axe/ui";
+import { version } from "./data";
+export function App() {
+  probe.version = version;
+  return <View />;
+}
+`;
+  await edit({ "c22/data.ts": data("", 1), "c22/app.tsx": app, "main.tsx": entry("c22") });
+  await edit({ "c22/data.ts": data("await new Promise(() => {});", 2) });
+  expect(probe["version"]).toBe(1);
+  await edit({ "c22/data.ts": data("", 3) });
+  await nextTurn();
+  expect(probe["version"]).toBe(3);
+  expect(hotState().overlay).toBe(null);
+  // And one that finishes after it was replaced stops where it is.
+  await edit({ "c22/data.ts": data(`await new Promise((r) => setTimeout(r, 20)); (globalThis as any).probe.zombie = 1;`, 4) });
+  await edit({ "c22/data.ts": data("", 5) });
+  await nextTurn();
+  expect(probe["version"]).toBe(5);
+  await step(30);
+  await nextTurn();
+  expect(probe["zombie"]).toBe(undefined);
+  expect(probe["version"]).toBe(5);
+});
+
+test("for await at a module's top level is a build error", async () => {
+  await edit({ "c23/bad.ts": `for await (const x of [1]) {}\n`, "c23/app.tsx": `import { View } from "@axe/ui";
+import "./bad";
+export function App() {
+  return <View />;
+}
+`, "main.tsx": entry("c23") });
+  expect(hotState().overlay ?? "").toContain("for await");
+  await edit({ "c23/bad.ts": `async function f() { for await (const x of [1]) { void x; } }\nawait f();\n` });
+  expect(hotState().overlay).toBe(null);
+});
+
 test("no update reported an uncaught error", () => {
   const uncaught = hooks().filter((h) => h.kind === 0 && !h.text.includes("hot reload"));
   expect(uncaught.map((h) => h.text)).toEqual([]);

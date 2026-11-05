@@ -9,7 +9,7 @@ import * as host from "axe:host";
 import { Node, Style, Token, app, type Surface } from "@axe/core";
 import { mountInto } from "./elements.js";
 import { FAMILY, Scope, collect, keepSignal, nextEpoch, restart, type Family } from "./hotcore.js";
-import { Owner, contextOf, dispose, disposeOwned, getOwner, nearestHot, onCleanup, runWithOwner, setErrorSink, swapOwner, type Signal } from "./reactive.js";
+import { Owner, contextOf, dispose, disposeOwned, getOwner, nearestHot, onCleanup, runWithOwner, setErrorSink, setOwnerlessSink, signal, swapOwner, type Signal } from "./reactive.js";
 import { style as defineStyle, styleDesc, type StyleInput } from "./style.js";
 import { dropUnusedVariants, redefineTemplate, template as makeTemplate, type Template, type TemplateNode } from "./template.js";
 import type { Theme, ThemeDesc } from "./theme.js";
@@ -25,6 +25,8 @@ class ModuleRec {
   readonly templates = new Set<string>();
   readonly styles = new Set<string>();
   boundary = false;
+  /** Its update was abandoned: if a top-level await resumes it, it stops there. */
+  dead = false;
 
   constructor(readonly file: string) {
     this.owner.name = file;
@@ -151,6 +153,7 @@ function keyedSignal(full: string, hash: string, fresh: Signal<unknown>): Signal
   const old = keyed.get(full);
   if (!old) {
     keyed.set(full, { hash, value: fresh });
+    hotValues.add(fresh);
     return fresh;
   }
   if (old.hash === hash) return old.value as Signal<unknown>;
@@ -160,6 +163,23 @@ function keyedSignal(full: string, hash: string, fresh: Signal<unknown>): Signal
     s.set(fresh.peek());
   });
   return s;
+}
+
+// A computed belongs to its module's version, so what importers hold is a getter over the latest
+// one: a signal, so readers subscribe to the swap too.
+function keyedComputed(full: string, fresh: () => unknown): () => unknown {
+  const old = keyed.get(full);
+  if (!old) {
+    const current = signal(fresh);
+    const stable = (): unknown => current()();
+    keyed.set(full, { hash: "", value: stable, desc: current });
+    hotValues.add(stable);
+    return stable;
+  }
+  const current = old.desc as Signal<() => unknown>;
+  const before = current.peek();
+  stage(() => current.set(fresh), () => current.set(before));
+  return old.value as () => unknown;
 }
 
 function keyedToken(full: string, hash: string, fn: () => Token<never>, args: unknown[]): unknown {
@@ -229,6 +249,8 @@ function keyedCall(m: ModuleRec, kind: string, key: string, hash: string, fn: (.
   switch (kind) {
     case "signal":
       return keyedSignal(full, hash, fn(...args) as Signal<unknown>);
+    case "computed":
+      return keyedComputed(full, fn(...args) as () => unknown);
     case "style":
       return keyedStyle(m, full, hash, args[0] as unknown as StyleInput);
     case "token":
@@ -257,8 +279,31 @@ function leave(_m: ModuleRec): void {
   evaluating = null;
 }
 
+/** Thrown into a module whose update was abandoned while it awaited. */
+class Superseded extends Error {
+  override name = "Superseded";
+}
+
+type Settled = { ok: true; value: unknown } | { ok: false; error: unknown };
+
+// A top-level await. While it waits, other modules and the app's events run, so the module gives
+// up the owner; `resume` is on the module's side of the await, so taking it back can't be
+// interleaved with anything, and a rejection is thrown from there, where a try can catch it.
+function pause(m: ModuleRec, value: unknown): Promise<Settled> {
+  if (evaluating === m) leave(m);
+  return Promise.resolve(value).then((v) => ({ ok: true, value: v }), (e) => ({ ok: false, error: e }));
+}
+
+function resume(m: ModuleRec, settled: Settled): unknown {
+  if (m.dead) throw new Superseded("a newer version replaced this module while it awaited");
+  ownerBefore = swapOwner(m.owner);
+  evaluating = m;
+  if (!settled.ok) throw settled.error;
+  return settled.value;
+}
+
 /** What axe-tsx --dev writes calls to. */
-export const hot = { enter, leave, component, template, keyed: keyedCall };
+export const hot = { enter, leave, pause, resume, component, template, keyed: keyedCall };
 
 // ---- Module-level subscriptions ----------------------------------------------------------------
 
@@ -308,7 +353,10 @@ const realTimeout = G.setTimeout, realInterval = G.setInterval, realClear = G.cl
 function ownedTimer(start: typeof realTimeout, once: boolean): typeof realTimeout {
   return (fn, ms, ...args) => {
     const m = moduleOf();
-    if (!m) return start(fn, ms, ...args);
+    if (!m) {
+      if (!getOwner()) warnNoOwner(once ? "setTimeout" : "setInterval");
+      return start(fn, ms, ...args);
+    }
     const timers = moduleTimers(m);
     const id = start((...a: unknown[]) => {
       if (once) timers.delete(id);
@@ -397,6 +445,23 @@ function describe(e: unknown): string {
   return where ? `${where}: ${text}` : text;
 }
 
+// What starts with no owner is never stopped, by hot reload or by anything else. Said once per
+// place, where a stack can tell the place.
+const warned = new Set<string>();
+const warnings: string[] = [];
+
+function warnNoOwner(what: string): void {
+  const at = locate(new Error().stack ?? "");
+  if (!at || warned.has(`${what} ${at}`)) return;
+  warned.add(`${what} ${at}`);
+  const text = `${at}: ${what} with no owner: nothing stops it, so a new version of this code adds another. ` +
+    `Keep the owner with runWithOwner(getOwner(), ...) (docs/ui.md, "Owners and callbacks")`;
+  warnings.push(text);
+  console.warn(text);
+}
+
+setOwnerlessSink(warnNoOwner);
+
 // ---- The overlay --------------------------------------------------------------------------------
 
 const overlayNodes = new Map<Surface, Node>();
@@ -431,9 +496,12 @@ function drawOverlay(): void {
 
 let started = false;
 let running = false;
+let abandon: (() => void) | null = null; // set while an update waits for a top-level await
+const SUPERSEDED = Symbol("superseded");
 let queued: { file: string; deleted: boolean; error?: string }[] = [];
 const pending = new Set<string>();
 const counters = { updates: 0, fullReloads: 0, rejected: 0 };
+const exportsOf = new Map<string, Record<string, unknown>>();
 
 function isBoundary(file: string): boolean {
   return modules.get(file)?.boundary ?? true;
@@ -496,7 +564,10 @@ function checkDangling(deleted: string[]): void {
 function abort(t: Txn, committed: boolean): void {
   host.hotRevert();
   if (committed) for (const revert of t.reverts.reverse()) revert();
-  for (const m of t.created) dispose(m.owner);
+  for (const m of t.created) {
+    m.dead = true;
+    dispose(m.owner);
+  }
   swapOwner(ownerBefore);
   ownerBefore = null;
   evaluating = null;
@@ -606,27 +677,38 @@ async function apply(changes: { file: string; deleted: boolean; error?: string }
     const t: Txn = { commits: [], reverts: [], created: [], changed: new Set(), surfaces: [] };
     txn = t;
     const namespaces: { file: string; ns: Record<string, unknown> }[] = [];
+    // Importing settles in this turn's checkpoint, unless a module awaits something slower. Then
+    // the running app carries on, and a newer save replaces this update rather than waiting for
+    // it, since what it waits for may never come.
+    const superseded = new Promise<never>((_, reject) => {
+      abandon = () => reject(SUPERSEDED);
+    });
+    const load = (name: string): Promise<Record<string, unknown>> =>
+      Promise.race([import(name) as Promise<Record<string, unknown>>, superseded]);
     try {
       const files = [...dirty];
       const names = host.hotBegin(files);
+      // A file an earlier import already evaluated isn't imported again: import() of a module that
+      // finished as a dependency, with top-level await below it, never settles in QuickJS.
       for (let i = 0; i < files.length; i++) {
-        const ns = (await import(names[i]!)) as Record<string, unknown>;
-        namespaces.push({ file: files[i]!, ns });
+        if (!t.created.some((m) => m.file === files[i])) await load(names[i]!);
       }
-      // Modules imported on the way, statically: what they export decides what they are too.
       for (const m of t.created) {
-        if (namespaces.some((n) => n.file === m.file)) continue;
         const [name] = host.hotBegin([m.file]);
-        namespaces.push({ file: m.file, ns: (await import(name!)) as Record<string, unknown> });
+        const ns = host.hotNamespace(name!);
+        if (ns) namespaces.push({ file: m.file, ns });
       }
     } catch (e) {
+      abandon = null;
       abort(t, false);
+      if (e === SUPERSEDED) return; // `pending` still has its files
       runtimeError = describe(e);
       console.error(`hot reload: ${runtimeError}`);
       counters.rejected++;
       drawOverlay();
       return;
     }
+    abandon = null;
     // A module that stopped being a boundary needs its importers too.
     if (pass === 0 && !full && namespaces.some(({ file, ns }) => isBoundary(file) && modules.has(file) && !boundaryExports(ns))) {
       abort(t, false);
@@ -647,6 +729,7 @@ function commit(t: Txn, namespaces: { file: string; ns: Record<string, unknown> 
     const m = created.get(file);
     if (m) m.boundary = boundaryExports(ns);
   }
+  for (const { file, ns } of namespaces) exportsOf.set(file, ns);
   const old = t.created.map((m) => modules.get(m.file)).filter((m) => m !== undefined);
   txn = null;
   evaluating = null;
@@ -721,7 +804,10 @@ function cleanUp(m: ModuleRec, prev: ModuleRec | null): void {
 
 async function deliver(changes: { file: string; deleted: boolean; error?: string }[]): Promise<void> {
   queued.push(...changes);
-  if (running) return;
+  if (running) {
+    abandon?.();
+    return;
+  }
   running = true;
   try {
     while (queued.length) {
@@ -742,10 +828,20 @@ realOnSurface(() => {
 });
 
 /** For tests: what hot reload did. */
-export function hotState(): { overlay: string | null; updates: number; fullReloads: number; rejected: number; runs(file: string, name: string): number } {
+export function hotState(): {
+  overlay: string | null;
+  updates: number;
+  fullReloads: number;
+  rejected: number;
+  warnings: readonly string[];
+  runs(file: string, name: string): number;
+  exports(file: string): Record<string, unknown> | undefined;
+} {
   return {
     overlay: overlayMessage(),
     ...counters,
+    warnings,
     runs: (file, name) => families.get(`${file}:${name}`)?.runs ?? 0,
+    exports: (file) => exportsOf.get(file),
   };
 }

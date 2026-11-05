@@ -95,6 +95,7 @@ function adopt(child: AnyOwner, parent: AnyOwner | null): void {
 
 let currentOwner: AnyOwner | null = null;
 let errorSink: ((error: unknown, owner: Owner | null) => void) | null = null;
+let ownerlessSink: ((what: string) => void) | null = null;
 let listener: Computation | null = null;
 /** The run in progress: sources record it when tracked, so a run links each source once. */
 let runId = 0;
@@ -123,6 +124,12 @@ export function swapOwner(o: Owner | null): Owner | null {
  * while an update re-runs components. */
 export function setErrorSink(fn: ((error: unknown, owner: Owner | null) => void) | null): void {
   errorSink = fn;
+}
+
+/** @internal Development only: takes the warning for what starts with no owner, so it can say
+ * where, once per place. */
+export function setOwnerlessSink(fn: ((what: string) => void) | null): void {
+  ownerlessSink = fn;
 }
 
 /** The owner code is running under (components, effects, control flow), or null. */
@@ -565,12 +572,20 @@ export interface ComputedOptions<T> {
   readonly equals?: false | ((a: T, b: T) => boolean);
 }
 
+function warnNoOwner(what: string): void {
+  AXE_DEV: if (ownerlessSink) {
+    ownerlessSink(what);
+    return;
+  }
+  if (debug) console.warn(`${what} outside a component, an effect or a root: it is never disposed`);
+}
+
 /** A value derived from signals and other computeds: computed when read, again only after
  * something it read changed, and owned by the current owner. A thrown error is rethrown to its
  * readers until then. */
 export function computed<T>(fn: (prev: T | undefined) => T, options?: ComputedOptions<T>): () => T {
   const c = new Memo(fn, options?.equals, currentOwner);
-  if (!currentOwner && debug) console.warn("computed outside a component, an effect or a root: it is never disposed");
+  if (!currentOwner) warnNoOwner("computed");
   return () => readComputed<T>(c);
 }
 
@@ -580,7 +595,7 @@ export function computed<T>(fn: (prev: T | undefined) => T, options?: ComputedOp
  * new run and when it is disposed. */
 export function effect(fn: () => void): void {
   const c = new Computation(fn, EFFECT, currentOwner);
-  if (!currentOwner && debug) console.warn("effect outside a component, an effect or a root: it is never disposed");
+  if (!currentOwner) warnNoOwner("effect");
   if (c.flags & DISPOSED) return;
   c.flags |= QUEUED;
   queue.push(c);

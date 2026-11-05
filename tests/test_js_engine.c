@@ -440,6 +440,13 @@ static const versioned_module versioned[] = {
     {"app:/syntax.js?v=1", "export const = 1;\n"},
     {"app:/x.js?v=1", "import { y } from './y.js?v=1'; export const x = () => 'x' + y();\n"},
     {"app:/y.js?v=1", "import { x } from './x.js?v=1'; export const y = () => 'y'; export const usesX = () => x;\n"},
+    {"app:/tla.js?v=1", "await null; export const value = 'tla';\n"},
+    {"app:/tla-top.js?v=1", "import { value } from './tla.js?v=1'; export const top = value + '!';\n"},
+    {"app:/tla-own.js?v=1", "await null; export const own = 'own';\n"},
+    {"app:/tla-order.js?v=1", "globalThis.order = ['a']; await null; globalThis.order.push('b');\n"},
+    {"app:/tla-mid.js?v=1", "import { value } from './tla2.js?v=1'; export const mid = value;\n"},
+    {"app:/tla2.js?v=1", "await null; export const value = 'deep';\n"},
+    {"app:/tla-root.js?v=1", "import { mid } from './tla-mid.js?v=1'; export const root = mid;\n"},
     {"app:/p.js?v=1", "import { q } from './q.js?v=1'; export const p = 1;\n"},
     {"app:/q.js?v=1", "import { p } from './p.js?v=1'; export const q = p + 1;\n"},
 };
@@ -508,6 +515,32 @@ static void test_dynamic_import(void) {
             free(text);
         }
     }
+
+    // Top-level await: in the imported module itself, and in a module it imports.
+    ui_js_val own = eval(js, "globalThis.ownDone = load('app:/tla-own.js?v=1').then((m) => m.own)");
+    ui_js_run_microtasks(js, NULL, NULL);
+    CHECK(ui_js_promise_get(js, own, &value) == UI_JS_FULFILLED && equals(js, value, "own"));
+    ui_js_val nested = eval(js, "load('app:/tla-top.js?v=1').then((m) => m.top)");
+    ui_js_run_microtasks(js, NULL, NULL);
+    CHECK(ui_js_promise_get(js, nested, &value) == UI_JS_FULFILLED && equals(js, value, "tla!"));
+    // Importing again what top-level await already finished.
+    ui_js_val again = eval(js, "load('app:/tla.js?v=1').then((m) => m.value)");
+    ui_js_run_microtasks(js, NULL, NULL);
+    CHECK(ui_js_promise_get(js, again, &value) == UI_JS_FULFILLED && equals(js, value, "tla"));
+    ui_js_val again_top = eval(js, "load('app:/tla-top.js?v=1').then((m) => m.top)");
+    ui_js_run_microtasks(js, NULL, NULL);
+    CHECK(ui_js_promise_get(js, again_top, &value) == UI_JS_FULFILLED && equals(js, value, "tla!"));
+
+    // A namespace reads a module that finished as a dependency, which import() can't (engine.h):
+    // tla-mid has an async dependency and was evaluated for tla-root.
+    ui_js_val root = eval(js, "load('app:/tla-root.js?v=1').then((m) => m.root)");
+    ui_js_run_microtasks(js, NULL, NULL);
+    CHECK(ui_js_promise_get(js, root, &value) == UI_JS_FULFILLED && equals(js, value, "deep"));
+    ui_js_val ns, mid;
+    CHECK(ui_js_module_namespace(js, "app:/tla-mid.js?v=1", &ns));
+    CHECK(ui_js_get(js, ns, "mid", &mid) && equals(js, mid, "deep"));
+    CHECK(!ui_js_module_namespace(js, "app:/never.js", &ns) && ui_js_is_empty(ns));
+    CHECK(!ui_js_take_exception(js, NULL, NULL));
 
     // A cycle links and runs.
     ui_js_val cycle = eval(js, "load('app:/x.js?v=1').then((m) => m.x())");

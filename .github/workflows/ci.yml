@@ -1,9 +1,8 @@
-# Linux CI: builds the debug, asan and tsan presets and runs every test headless on lavapipe
+# Linux CI: builds the debug, release, asan and tsan presets and runs every test headless on lavapipe
 # (tsan: ThreadSanitizer, which catches data races on every run, not only when the timing
 # exposes them; tools/tsan/), and
 # runs each libFuzzer target from its seed corpus (the fuzz preset's tests). Longer fuzzing
-# runs nightly in fuzz.yml. bench-callgrind guards the benchmarks' instruction counts (and, being
-# the one release build, checks that it holds no hot reload), idl
+# runs nightly in fuzz.yml. bench-callgrind guards the benchmarks' instruction counts, idl
 # checks the wire IDL's generated code and evolution rules (and has the base's reader read
 # the new fixtures), and actionlint checks the workflows. A manual run can be limited to the benchmark guard.
 # The wgpu-native build (vendored crates + Cargo target dir) is cached per preset, keyed on
@@ -37,7 +36,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        preset: [debug, asan, tsan, fuzz]
+        preset: [debug, release, asan, tsan, fuzz]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -120,7 +119,7 @@ jobs:
         run: cmake --preset release
 
       - name: Build
-        run: cmake --build --preset release --target bench_layout bench_text bench_script bench_ui axe-run layout_cards_tsx_bundle
+        run: cmake --build --preset release --target bench_layout bench_text bench_script bench_ui
 
       - name: Save vendored crates
         if: always() && steps.setup.outputs.vendor-key != '' && steps.setup.outputs.vendor-hit != 'true'
@@ -135,9 +134,6 @@ jobs:
         with:
           path: build/release/cargo
           key: ${{ steps.setup.outputs.cargo-key }}
-
-      - name: Release holds no hot reload
-        run: ctest --preset release --no-tests=error -R '^(axe_run_refuses_dev|bundle_no_dev_code)$'
 
       - name: Count and compare
         run: python3 -I tools/bench/callgrind.py --build build/release --out callgrind-counts.json

@@ -108,6 +108,11 @@ impl<'s, 'a> Compiler<'s, 'a> {
         }
     }
 
+    /// `for await` can't hand the module's owner back between its awaits (--dev).
+    pub fn top_level_for_await(&mut self, offset: u32) {
+        self.error(offset, "`for await` at a module's top level doesn't work with hot reload: move it into an async function and await that (docs/ui.md, \"Top-level await\")");
+    }
+
     /// What a module-level name was imported as: (module, imported name).
     pub fn import_of(&self, name: &str) -> Option<(&str, &str)> {
         self.imports.get(name).map(|(m, i)| (m.as_str(), i.as_str()))
@@ -633,6 +638,7 @@ impl<'c, 's, 'a> Finder<'c, 's, 'a> {
             Expression::Identifier(id) => {
                 let kind = match imported(id.name.as_str())? {
                     "signal" => "signal",
+                    "computed" => "computed",
                     "style" => "style",
                     "token" => "token",
                     "theme" => "theme",
@@ -687,10 +693,42 @@ impl<'c, 's, 'a> Visit<'a> for Finder<'c, 's, 'a> {
         if let (Some(name), Some(d)) = (&scope, &mut self.c.dev) {
             d.component = Some(name.clone());
         }
-        oxc_ast_visit::walk::walk_function(self, it, flags);
-        if let (Some(_), Some(d)) = (&scope, &mut self.c.dev) {
-            d.component = None;
+        if let Some(d) = &mut self.c.dev {
+            d.functions += 1;
         }
+        oxc_ast_visit::walk::walk_function(self, it, flags);
+        if let Some(d) = &mut self.c.dev {
+            d.functions -= 1;
+            if scope.is_some() {
+                d.component = None;
+            }
+        }
+    }
+    fn visit_arrow_function_expression(&mut self, it: &ArrowFunctionExpression<'a>) {
+        if let Some(d) = &mut self.c.dev {
+            d.functions += 1;
+        }
+        oxc_ast_visit::walk::walk_arrow_function_expression(self, it);
+        if let Some(d) = &mut self.c.dev {
+            d.functions -= 1;
+        }
+    }
+    // A top-level await gives up the module's owner while it waits, and takes it back after.
+    fn visit_await_expression(&mut self, it: &AwaitExpression<'a>) {
+        if self.c.dev.as_ref().is_none_or(|d| d.functions > 0) {
+            oxc_ast_visit::walk::walk_await_expression(self, it);
+            return;
+        }
+        let inner = it.argument.span();
+        self.reps.push((Span::new(it.span.start, inner.start), dev::await_start()));
+        self.visit_expression(&it.argument);
+        self.reps.push((Span::new(inner.end, it.span.end), "))".to_string()));
+    }
+    fn visit_for_of_statement(&mut self, it: &ForOfStatement<'a>) {
+        if it.r#await && self.c.dev.as_ref().is_some_and(|d| d.functions == 0) {
+            self.c.top_level_for_await(it.span.start);
+        }
+        oxc_ast_visit::walk::walk_for_of_statement(self, it);
     }
     fn visit_variable_declarator(&mut self, it: &VariableDeclarator<'a>) {
         let Some(d) = &mut self.c.dev else {

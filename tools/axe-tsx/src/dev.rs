@@ -2,11 +2,12 @@
 //!
 //! - Each top-level component is registered with a hash of its source, so an instance re-runs
 //!   only when its component changed.
-//! - `signal`, `style`, `token`, `theme` and `context` calls get a key (their binding's name and
+//! - `signal`, `computed`, `style`, `token`, `theme` and `context` calls get a key (their binding's name and
 //!   an ordinal) and a hash of their arguments, so a new version of the module finds what the
 //!   previous one made.
 //! - Templates get a key the same way.
-//! - The module brackets its top level with enter and leave, so what it creates has an owner.
+//! - The module brackets its top level with enter and leave, so what it creates has an owner, and
+//!   a top-level await gives the owner up while it waits.
 
 use std::collections::HashMap;
 
@@ -36,6 +37,8 @@ pub struct Dev {
     pub component: Option<String>,
     /// Binding names around the code being visited: `S`, then `S.card` inside its property.
     pub names: Vec<String>,
+    /// How many functions the code being visited is in: 0 at the module's top level.
+    pub functions: u32,
     ordinals: HashMap<(String, String), u32>,
 }
 
@@ -65,6 +68,11 @@ impl Dev {
 /// The rewritten start of a keyed call: replaces its callee and opening parenthesis.
 pub fn keyed_call(kind: &str, key: &str, args_hash: &str, callee: &str) -> String {
     format!("_$hot.keyed(_$m, {}, {}, {}, {callee}, ", quoted(kind), quoted(key), quoted(args_hash))
+}
+
+/// What replaces `await ` at the top level; `))` closes it.
+pub fn await_start() -> String {
+    "_$hot.resume(_$m, await _$hot.pause(_$m, ".to_string()
 }
 
 pub fn head(file: &str) -> String {

@@ -1,7 +1,7 @@
-// layout_cards' theme: its tokens, and what switches them. Colors here hold the app's state, so an
-// edit here reaches main.tsx and is a full reload.
+// layout_cards' theme. It exports tokens only, each made by a call of its own, so they keep their
+// ids and this module is a hot reload boundary: edit a color here and it changes in place.
 
-import { Token, type ColorValue, rgba } from "@axe/ui";
+import { Token, app, type ColorValue, rgba } from "@axe/ui";
 import { dark } from "./state";
 
 // Theme tokens, light and dark, in the C version's order (so their ids match); then the
@@ -20,12 +20,38 @@ const THEMES: [Theme, Theme] = [
     hover: rgba(0.12, 0.18, 0.31),
   },
 ];
-export const KEYS = Object.keys(THEMES[0]) as Key[];
-const tokens = (t: Theme) => Object.fromEntries(KEYS.map((k) => [k, Token.create(t[k])])) as Record<Key, Token<ColorValue>>;
-export const T = tokens(THEMES[dark.peek() ? 1 : 0]);
-export const I = tokens(THEMES[dark.peek() ? 0 : 1]);
+const KEYS = Object.keys(THEMES[0]) as Key[];
+const current = THEMES[dark.peek() ? 1 : 0], other = THEMES[dark.peek() ? 0 : 1];
+export const T = {
+  page: Token.create(current.page),
+  card: Token.create(current.card),
+  border: Token.create(current.border),
+  title: Token.create(current.title),
+  body: Token.create(current.body),
+  muted: Token.create(current.muted),
+  accent: Token.create(current.accent),
+  accentText: Token.create(current.accentText),
+  hover: Token.create(current.hover),
+};
+export const I = {
+  page: Token.create(other.page),
+  card: Token.create(other.card),
+  border: Token.create(other.border),
+  title: Token.create(other.title),
+  body: Token.create(other.body),
+  muted: Token.create(other.muted),
+  accent: Token.create(other.accent),
+  accentText: Token.create(other.accentText),
+  hover: Token.create(other.hover),
+};
 
-export function setTheme(): void {
-  for (const key of KEYS) T[key].set(THEMES[dark.peek() ? 1 : 0][key]);
-  for (const key of KEYS) I[key].set(THEMES[dark.peek() ? 0 : 1][key]);
-}
+// The tokens follow `dark`, at the end of a turn that changed it, and when this module is
+// evaluated again, so an edit to a color above shows. A turn handler, not an effect: this module
+// has no owner in a bundle.
+let applied: boolean | null = null;
+app.onTurnEnd(() => {
+  if (applied === dark.peek()) return;
+  applied = dark.peek();
+  for (const key of KEYS) T[key].set(THEMES[applied ? 1 : 0][key]);
+  for (const key of KEYS) I[key].set(THEMES[applied ? 0 : 1][key]);
+});

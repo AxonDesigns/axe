@@ -17,6 +17,7 @@
 //                    "write", "rename", "recreate", or "delete" with no text)
 //   hotWatching()    AXE_DEV: the app started under the watcher (--watch)
 //   capture(path)    writes the surface as a PPM after the next frame
+//   readText(path)   a file of the repository, as text
 //   heapUsed()       the JS heap's size in bytes
 // Without requests the runner keeps making frames (preparation, font loads); a test that
 // neither steps nor finishes within the frame budget fails.
@@ -272,6 +273,24 @@ static ui_js_val t_heap_detail(ui_js *js, const ui_js_call_info *call) {
     return o;
 }
 
+static ui_js_val t_read_text(ui_js *js, const ui_js_call_info *call) {
+    char *name = call->argc ? ui_js_to_utf8(js, call->args[0], NULL) : NULL;
+    char path[8192];
+    snprintf(path, sizeof path, "%s/%s", AXE_SOURCE_DIR, name ? name : "");
+    free(name);
+    FILE *f = fopen(path, "rb");
+    if (!f) return ui_js_throw_error(js, UI_JS_TYPE_ERROR, "can't read a file");
+    fseek(f, 0, SEEK_END);
+    long n = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    char *text = malloc((size_t)n);
+    size_t got = text ? fread(text, 1, (size_t)n, f) : 0;
+    fclose(f);
+    ui_js_val v = ui_js_string(js, text ? text : "", got);
+    free(text);
+    return v;
+}
+
 static ui_js_val t_capture(ui_js *js, const ui_js_call_info *call) {
     runner *r = call->data;
     char *path = call->argc ? ui_js_to_utf8(js, call->args[0], NULL) : NULL;
@@ -365,6 +384,7 @@ static void setup(void *user, ui_js *js) {
     ui_js_set(js, m, "cBuffer", ui_js_function(js, "cBuffer", 1, t_c_buffer, user));
     ui_js_set(js, m, "cEvents", ui_js_function(js, "cEvents", 0, t_c_events, user));
     ui_js_set(js, m, "capture", ui_js_function(js, "capture", 1, t_capture, user));
+    ui_js_set(js, m, "readText", ui_js_function(js, "readText", 1, t_read_text, user));
     ui_js_set(js, m, "heapUsed", ui_js_function(js, "heapUsed", 0, t_heap_used, user));
     ui_js_set(js, m, "heapDetail", ui_js_function(js, "heapDetail", 0, t_heap_detail, user));
 #ifdef AXE_DEV

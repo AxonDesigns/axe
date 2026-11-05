@@ -603,6 +603,16 @@ static ui_js_val native_source_map(ui_js *js, const ui_js_call_info *call) {
     return out;
 }
 
+// hotNamespace(name): the exports of a module that has been evaluated.
+static ui_js_val native_namespace(ui_js *js, const ui_js_call_info *call) {
+    char *name = call->argc ? ui_js_to_utf8(js, call->args[0], NULL) : NULL;
+    if (!name) return call->argc ? (ui_js_val){0} : ui_js_undefined(js);
+    ui_js_val out;
+    bool found = ui_js_module_namespace(js, name, &out);
+    free(name);
+    return found ? out : ui_js_undefined(js);
+}
+
 static ui_js_val native_files(ui_js *js, const ui_js_call_info *call) {
     ui_dev *d = call->data;
     ui_js_val out = ui_js_array(js);
@@ -624,7 +634,7 @@ bool ui_dev_install(ui_dev *d, ui_js_val exports) {
         {"hotSetHandler", 1, native_set_handler}, {"hotBegin", 1, native_begin},
         {"hotCommit", 0, native_commit},          {"hotRevert", 0, native_revert},
         {"hotImporters", 1, native_importers},    {"hotSourceMap", 1, native_source_map},
-        {"hotFiles", 0, native_files},
+        {"hotFiles", 0, native_files},            {"hotNamespace", 1, native_namespace},
     };
     for (size_t i = 0; i < sizeof fns / sizeof fns[0]; i++) {
         ui_js_val f = ui_js_function(js, fns[i].name, fns[i].length, fns[i].fn, d);

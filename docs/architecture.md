@@ -490,6 +490,7 @@ Budgets are enforced in CI with benchmarks from the first milestone. Targets mar
 | M3a.1, M3a.2 | Token scopes; merge cleanup (bench apps, C API evolution rules) | Done, `v0.3.1-m3a.1` |
 | M3b.1, M3b.2 | Signals and components (`@axe/ui`); the TSX transform, templates and the language benchmarks | Done, `v0.3.2-m3b.2` |
 | M3b.3 | Hot reload | Done |
+| M3b.4 | Hot reload follow-ups: stable modules as boundaries, the release suite in CI, owner-less warnings, top-level await | Done |
 | M3c | The core's frame cost (below) | Next |
 | M4 | Input, scrolling and virtualized lists | Planned |
 

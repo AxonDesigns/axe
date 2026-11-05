@@ -3,6 +3,49 @@
 Choices the architecture document leaves open, recorded as they are made. Newest
 milestone first.
 
+## Milestone 3b.4: hot reload follow-ups
+
+### Stable modules are boundaries
+- **Signals count as stable,** and **computeds are made stable.** A computed belongs to its module's
+  version, so importers hold a getter over a signal holding the latest one. Readers subscribe to
+  the swap, so they follow a new version with nothing running again.
+- **Only direct calls are stable.** A token from a loop has no key of its own.
+- **`layout_cards` changed to meet the rule, not the other way round:**
+  - `cycles.ts` takes the plain functions out of `state.ts`, which is signals only;
+  - `theme.ts` makes each token with a call of its own, and exports nothing else;
+  - the tokens follow `dark` from an `app.onTurnEnd` handler, which a new version replaces, so a
+    color edit shows. Not an effect: a bundle has no module owner, and it would warn;
+  - `nextId` and the panel's cards became signals, so a full reload doesn't reuse ids.
+
+### The release suite in CI
+`release` joins the test matrix, and the two-test step in `bench-callgrind` from 3b.3 goes.
+
+### Owner-less warnings
+- **They replace `debug`'s warning under `--dev`,** for `effect` and `computed`, and add
+  `setTimeout` and `setInterval`. A debug bundle keeps the old warning for the first two: it has no
+  source maps to say where, and nothing in a bundle wraps the timers. So the warning with its
+  location is a `--dev` feature, not a Debug one.
+- **Once per kind and place,** by original file and line.
+- **Only code with an app frame on its stack warns,** so packages and tests don't.
+- **Timers under a component's owner don't warn:** there is an owner, though it doesn't stop them.
+
+### Top-level await
+It works, so it isn't an error; only `for await` is.
+- **The transform wraps each top-level await** in `pause` and `resume`. While it waits, other
+  modules and events run, so the module has to give up the owner. `resume` runs on the module's
+  side of the await, so nothing can run between it and the module's next statement, and a
+  rejection is thrown from there, where a `try` can catch it.
+- **An update can stay open across turns.** Definitions are staged already, so the running app is
+  untouched until the commit.
+- **A newer save abandons an update that is waiting,** because what it awaits may never settle. A
+  module of an abandoned update stops at its `resume`.
+- **A QuickJS-ng 0.18 bug.** `import()` of a module that finished as another's dependency and has
+  async modules below it never settles: `js_evaluate_module` makes a promise and resolves it only
+  when `async_evaluation` is false. 3b.3's hot runtime imported every module again to read its
+  exports, so any top-level await hung the update, silently. It now reads them with the new
+  `ui_js_module_namespace`, which 3b.3's plan said to add if `import()` misbehaved. The vendored
+  engine isn't patched. An app's own `import()` of such a module still hangs.
+
 ## Milestone 3b.3: hot reload
 
 ### The user's choices in review
@@ -74,7 +117,8 @@ measures 22 KB per version with no hot reload, so what grows is the engine's own
   tokens made in a loop (`layout_cards/theme.ts`).
 - **`surface.onFrame` runs outside the module's owner,** so timers it starts need
   `runWithOwner`. `layout_cards/main.tsx` does this.
-- **Top-level await in an app module** can run past the update's checkpoint: it isn't tested.
+- **Top-level await in an app module** can run past the update's checkpoint: it isn't tested
+  (3b.4 tests it, and makes it work).
 - **A removed export** that an unchanged importer still uses keeps working until the importer is
   edited, since a boundary's importers aren't evaluated again.
 - **inotify only.** Other platforms implement `watch.h` when they arrive.
