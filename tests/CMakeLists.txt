@@ -31,7 +31,7 @@ set_tests_properties(headless_spring_rect PROPERTIES
     TIMEOUT 120)
 
 # Internal-API tests that drive a full headless app.
-foreach(name IN ITEMS backpressure stall clock_event)
+foreach(name IN ITEMS backpressure stall clock_event device_loss)
     add_executable(test_${name} test_${name}.c)
     target_include_directories(test_${name} PRIVATE ${PROJECT_SOURCE_DIR}/src)
     target_compile_definitions(test_${name} PRIVATE _DEFAULT_SOURCE)
@@ -40,6 +40,7 @@ foreach(name IN ITEMS backpressure stall clock_event)
     add_test(NAME ${name} COMMAND test_${name})
     set_tests_properties(${name} PROPERTIES ENVIRONMENT "UI_GPU=software" TIMEOUT 120)
 endforeach()
+target_compile_definitions(test_device_loss PRIVATE UI_TEST_FONTS="${CMAKE_CURRENT_SOURCE_DIR}/fonts")
 
 # The Unicode layer: unit tests, then the official conformance files (Unicode 18.0).
 add_executable(test_unicode test_unicode.c)

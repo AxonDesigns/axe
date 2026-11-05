@@ -1,0 +1,11 @@
+{
+    "file_format_version": "1.2.0",
+    "layer": {
+        "name": "VK_LAYER_AXE_device_lost",
+        "type": "GLOBAL",
+        "library_path": "./libVkLayer_axe_device_lost.so",
+        "api_version": "1.3.0",
+        "implementation_version": "1",
+        "description": "Fakes a lost device, for tests"
+    }
+}

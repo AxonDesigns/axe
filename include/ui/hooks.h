@@ -15,7 +15,7 @@
 extern "C" {
 #endif
 
-#define UI_HOOKS_VERSION 3u // 1: script events, `text` and `duration_ns` (milestone 3a); 2: COMMANDS_APPLIED (3b); 3: SCRIPT_HOT_UPDATE (3b.3)
+#define UI_HOOKS_VERSION 4u // 1: script events, `text` and `duration_ns` (milestone 3a); 2: COMMANDS_APPLIED (3b); 3: SCRIPT_HOT_UPDATE (3b.3); 4: DEVICE_LOST and the phases of single GPU calls
 #define UI_HOOKS_MAX_SUBSCRIBERS 8u
 
 typedef struct ui_app ui_app;
@@ -26,6 +26,11 @@ typedef enum ui_phase {
     UI_PHASE_COMMIT,    // core: build and publish display lists
     UI_PHASE_ENCODE,    // render: acquire the target, record and submit GPU work
     UI_PHASE_PRESENT,   // render: per-commit platform state and the present call
+    // Since version 4: single GPU calls, nested in the two phases above, so don't add them to
+    // those. ACQUIRE and SUBMIT are inside ENCODE, and SWAP inside PRESENT.
+    UI_PHASE_ACQUIRE,   // render: wgpuSurfaceGetCurrentTexture, or preparing an offscreen target
+    UI_PHASE_SUBMIT,    // render: wgpuQueueSubmit
+    UI_PHASE_SWAP,      // render: wgpuSurfacePresent
     UI_PHASE_COUNT,
 } ui_phase;
 
@@ -55,6 +60,10 @@ typedef enum ui_trace_kind {
     // Since version 3, in development builds: a turn applied a hot update and flushed it;
     // `duration_ns` is the time since the file event behind it (0: the first build).
     UI_TRACE_SCRIPT_HOT_UPDATE,
+    // Since version 4: the GPU device is lost, once per device, on the render thread. Nothing
+    // draws from here on, and the app keeps running (docs/architecture.md, "Rendering"). The
+    // surface is null.
+    UI_TRACE_DEVICE_LOST,
 } ui_trace_kind;
 
 typedef struct ui_trace_event {

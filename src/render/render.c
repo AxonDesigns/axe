@@ -24,6 +24,7 @@
 #define GLOBALS_STRIDE 256u // minUniformBufferOffsetAlignment's usual (and maximum) value
 #define LAYER_TEXTURE_STEP 64u    // layer textures are sized in steps, so they get reused
 #define LAYER_TEXTURE_FRAMES 120u // unused this many frames, a layer texture is released
+#define LOST_FRAME_NS 16000000L   // with no device to pace them, a window's frames are this far apart
 
 static_assert(sizeof(ui_dl_rect) == RECT_STRIDE, "instance layout must match ui_dl_rect");
 static_assert(sizeof(ui_dl_glyph) == GLYPH_STRIDE, "instance layout must match ui_dl_glyph");
@@ -58,6 +59,7 @@ typedef struct render_surface {
     WGPUCompositeAlphaMode alpha_mode;
     uint32_t width, height;        // current target size
     bool configured, reconfigure;
+    bool image_stuck;              // a lost device left it holding an acquired image
     bool has_content;
     WGPUBuffer uniforms;           // GLOBALS_STRIDE per pass
     uint32_t uniform_slots;
@@ -127,6 +129,8 @@ struct ui_render {
         bool max_frame_latency;
     } caps;
     _Atomic bool device_lost;
+    _Atomic bool destroying;  // our own wgpuDeviceDestroy is coming: not a loss
+    bool lost_reported;
     bool failed;
 };
 
@@ -153,7 +157,8 @@ void ui_gpu_check_thread(const char *fn) {
 static WGPUStringView sv(const char *s) { return (WGPUStringView){s, WGPU_STRLEN}; }
 
 static void report_failure(ui_render *r, ui_result result) {
-    if (r->failed) return;
+    // A lost device isn't a failure: it has its own report, and the app stays up.
+    if (r->failed || atomic_load(&r->device_lost)) return;
     r->failed = true;
     ui_msg msg = {.type = UI_MSG_RENDER_FAILED, .u64 = (uint64_t)result};
     if (ui_queue_push(r->desc.core_queue, &msg) != UI_OK)
@@ -163,13 +168,35 @@ static void report_failure(ui_render *r, ui_result result) {
 static void on_device_lost(WGPUDevice const *device, WGPUDeviceLostReason reason,
                            WGPUStringView message, void *user1, void *user2) {
     (void)device;
+    (void)message; // wgpu-native's says "Device lost", whatever happened
     (void)user2;
     ui_render *r = user1;
-    if (reason == WGPUDeviceLostReason_Destroyed || reason == WGPUDeviceLostReason_CallbackCancelled)
-        return;
-    UI_ERROR(r->log, MODULE, "device lost (%d): %.*s", (int)reason, (int)message.length,
-             message.data);
+    // wgpu-native sends Destroyed for a real loss too (ErrorSinkRaw::handle_error), so only we
+    // can tell our own destroy from one. This runs on whichever thread hit the error, inside
+    // wgpu's error lock, so it sets a flag and nothing else: device_gone() reports.
+    if (reason == WGPUDeviceLostReason_CallbackCancelled || atomic_load(&r->destroying)) return;
     atomic_store(&r->device_lost, true);
+}
+
+// Whether the device is lost, as far as we've been told; reports it the first time. Thread:
+// render.
+static bool device_gone(ui_render *r) {
+    if (!atomic_load(&r->device_lost)) return false;
+    if (!r->lost_reported) {
+        r->lost_reported = true;
+        UI_ERROR(r->log, MODULE, "GPU device lost: nothing more will be drawn (the app keeps running)");
+        UI_HOOK(r->desc.hooks, UI_TRACE_DEVICE_LOST, 0, (ui_handle){0}, 0);
+    }
+    return true;
+}
+
+// Whether the device is alive, asked before any call that would panic if it weren't, which
+// aborts the process: wgpuSurfaceConfigure, wgpuSurfaceGetCurrentTexture and wgpuQueueSubmit.
+// wgpu-native doesn't tell us when a device is lost, and most calls that find out report a
+// validation error. Creating a command encoder is the cheap one that reaches on_device_lost.
+static bool device_alive(ui_render *r) {
+    wgpuCommandEncoderRelease(wgpuDeviceCreateCommandEncoder(r->device, NULL));
+    return !atomic_load(&r->device_lost);
 }
 
 static void on_uncaptured_error(WGPUDevice const *device, WGPUErrorType type,
@@ -436,7 +463,8 @@ static void release_surface(render_surface *s) {
     if (s->border_instances) wgpuBufferRelease(s->border_instances);
     if (s->offscreen_view) wgpuTextureViewRelease(s->offscreen_view);
     if (s->offscreen) wgpuTextureRelease(s->offscreen);
-    if (s->surface) {
+    // wgpu panics on dropping a surface with an image acquired, and it stays acquired forever.
+    if (s->surface && !s->image_stuck) {
         if (s->configured) wgpuSurfaceUnconfigure(s->surface);
         wgpuSurfaceRelease(s->surface);
     }
@@ -623,6 +651,10 @@ static ui_result create_page(ui_render *r, atlas_page *p, uint32_t size, uint16_
 // between display lists (see the protocol in text/atlas.h), so a write is always queued
 // after every draw that was submitted before it.
 static ui_result apply_atlas_update(ui_render *r, const ui_atlas_update *u) {
+    if (atomic_load(&r->device_lost)) {
+        r->atlas_seq = u->seq; // nothing will draw from it
+        return UI_OK;
+    }
     for (uint32_t i = 0; i < u->page_op_count; i++) {
         const ui_atlas_page_op *op = &u->page_ops[i];
         if (op->page >= UI_ATLAS_MAX_PAGES) return UI_ERR_INVALID_ARGUMENT;
@@ -923,7 +955,11 @@ static ui_result encode(ui_render *r, render_surface *s, const ui_display_list *
     free(stack);
     trim_layers(r);
     WGPUCommandBuffer cmd = wgpuCommandEncoderFinish(enc, NULL);
-    wgpuQueueSubmit(r->queue, 1, &cmd);
+    if (device_alive(r)) {
+        UI_HOOK_PHASE_BEGIN(r->desc.hooks, UI_PHASE_SUBMIT, s->handle, dl->frame_id);
+        wgpuQueueSubmit(r->queue, 1, &cmd);
+        UI_HOOK_PHASE_END(r->desc.hooks, UI_PHASE_SUBMIT, s->handle, dl->frame_id);
+    }
     wgpuCommandBufferRelease(cmd);
     wgpuCommandEncoderRelease(enc);
     return UI_OK;
@@ -932,6 +968,10 @@ static ui_result encode(ui_render *r, render_surface *s, const ui_display_list *
 // Draws one display list. Returns false when the frame was skipped (target unavailable).
 static bool draw_window(ui_render *r, render_surface *s, const ui_display_list *dl) {
     UI_HOOK_PHASE_BEGIN(r->desc.hooks, UI_PHASE_ENCODE, s->handle, dl->frame_id);
+    if (!device_alive(r)) {
+        UI_HOOK_PHASE_END(r->desc.hooks, UI_PHASE_ENCODE, s->handle, dl->frame_id);
+        return false;
+    }
     WGPUSurfaceTexture st = WGPU_SURFACE_TEXTURE_INIT;
     // A size change reconfigures before acquiring, so the frame that carries the new size
     // is rendered at it: no stretched frame. One retry covers an outdated swapchain.
@@ -939,7 +979,9 @@ static bool draw_window(ui_render *r, render_surface *s, const ui_display_list *
         if (!s->configured || s->reconfigure || s->width != dl->width || s->height != dl->height)
             configure_window(r, s, dl->width, dl->height);
         st = WGPU_SURFACE_TEXTURE_INIT;
+        UI_HOOK_PHASE_BEGIN(r->desc.hooks, UI_PHASE_ACQUIRE, s->handle, dl->frame_id);
         wgpuSurfaceGetCurrentTexture(s->surface, &st);
+        UI_HOOK_PHASE_END(r->desc.hooks, UI_PHASE_ACQUIRE, s->handle, dl->frame_id);
         if (st.status == WGPUSurfaceGetCurrentTextureStatus_SuccessOptimal ||
             st.status == WGPUSurfaceGetCurrentTextureStatus_SuccessSuboptimal)
             break;
@@ -958,6 +1000,14 @@ static bool draw_window(ui_render *r, render_surface *s, const ui_display_list *
     WGPUTextureView view = wgpuTextureCreateView(st.texture, NULL);
     ui_result res = view ? encode(r, s, dl, view) : UI_ERR_GPU;
     UI_HOOK_PHASE_END(r->desc.hooks, UI_PHASE_ENCODE, s->handle, dl->frame_id);
+    if (atomic_load(&r->device_lost)) {
+        // Lost since the acquire. The image can't be presented, and releasing it unpresented
+        // panics (wgpu-native discards it, which needs a live device), so it stays acquired
+        // and the window keeps its last frame.
+        if (view) wgpuTextureViewRelease(view);
+        s->image_stuck = true;
+        return false;
+    }
 
     UI_HOOK_PHASE_BEGIN(r->desc.hooks, UI_PHASE_PRESENT, s->handle, dl->frame_id);
     ui_present_info info = {
@@ -969,19 +1019,29 @@ static bool draw_window(ui_render *r, render_surface *s, const ui_display_list *
         .scale_120 = dl->scale_120,
     };
     s->platform->vt->surface_pre_present(s->psurface, &info);
-    wgpuSurfacePresent(s->surface);
+    UI_HOOK_PHASE_BEGIN(r->desc.hooks, UI_PHASE_SWAP, s->handle, dl->frame_id);
+    bool presented = wgpuSurfacePresent(s->surface) == WGPUStatus_Success;
+    UI_HOOK_PHASE_END(r->desc.hooks, UI_PHASE_SWAP, s->handle, dl->frame_id);
     UI_HOOK_PHASE_END(r->desc.hooks, UI_PHASE_PRESENT, s->handle, dl->frame_id);
     if (view) wgpuTextureViewRelease(view);
-    wgpuTextureRelease(st.texture);
+    // As above: an unpresented image can't be released with the device lost.
+    if (presented || device_alive(r)) wgpuTextureRelease(st.texture);
+    else s->image_stuck = true;
     if (res != UI_OK) report_failure(r, res);
-    return true;
+    return presented; // no present, no frame callback
 }
 
 static void draw_offscreen(ui_render *r, render_surface *s, const ui_display_list *dl) {
     UI_HOOK_PHASE_BEGIN(r->desc.hooks, UI_PHASE_ENCODE, s->handle, dl->frame_id);
+    if (!device_alive(r)) {
+        UI_HOOK_PHASE_END(r->desc.hooks, UI_PHASE_ENCODE, s->handle, dl->frame_id);
+        return;
+    }
+    UI_HOOK_PHASE_BEGIN(r->desc.hooks, UI_PHASE_ACQUIRE, s->handle, dl->frame_id);
     ui_result res = ensure_offscreen(r, s, dl->width, dl->height);
+    UI_HOOK_PHASE_END(r->desc.hooks, UI_PHASE_ACQUIRE, s->handle, dl->frame_id);
     if (res == UI_OK) res = encode(r, s, dl, s->offscreen_view);
-    if (res == UI_OK) s->has_content = true;
+    if (res == UI_OK && !atomic_load(&r->device_lost)) s->has_content = true;
     UI_HOOK_PHASE_END(r->desc.hooks, UI_PHASE_ENCODE, s->handle, dl->frame_id);
     if (res != UI_OK) report_failure(r, res);
 }
@@ -1013,6 +1073,7 @@ static void on_mapped(WGPUMapAsyncStatus status, WGPUStringView message, void *u
 static ui_result capture(ui_render *r, render_surface *s, ui_image *image) {
     if (s->kind != UI_NATIVE_OFFSCREEN) return UI_ERR_UNSUPPORTED;
     if (!s->has_content) return UI_ERR_WRONG_STATE;
+    if (!device_alive(r)) return UI_ERR_GPU;
     uint32_t bpr = (s->width * 4 + 255) & ~255u;
     uint64_t size = (uint64_t)bpr * s->height;
     WGPUBufferDescriptor bd = WGPU_BUFFER_DESCRIPTOR_INIT;
@@ -1074,6 +1135,22 @@ static ui_result capture(ui_render *r, render_surface *s, ui_image *image) {
 
 static void release_all(ui_render *r);
 
+// Lost devices, never released (release_all). Nothing reads this: it keeps a leak on purpose
+// from looking like an accident to leak checkers.
+typedef struct abandoned_device {
+    WGPUDevice device;
+    struct abandoned_device *next;
+} abandoned_device;
+static _Atomic(abandoned_device *) abandoned_devices;
+
+static void abandon_device(WGPUDevice device) {
+    abandoned_device *a = malloc(sizeof *a);
+    if (!a) return;
+    a->device = device;
+    a->next = atomic_load(&abandoned_devices);
+    while (!atomic_compare_exchange_weak(&abandoned_devices, &a->next, a)) {}
+}
+
 static ui_result render_start(void *self) {
     ui_render *r = self;
     RENDER_SCOPE_ENTER();
@@ -1126,7 +1203,7 @@ static void render_step(void *self) {
     ui_msg msg;
     while (ui_queue_pop(&r->actor.queue, &msg)) handle_message(r, &msg);
 
-    if (atomic_load(&r->device_lost)) report_failure(r, UI_ERR_GPU);
+    bool wait_out = false;
     for (uint32_t i = 0; i < UI_MAX_SURFACES && !r->failed; i++) {
         render_surface *s = &r->surfaces[i];
         if (!s->used) continue;
@@ -1139,11 +1216,22 @@ static void render_step(void *self) {
         if (r->atlas_seq < dl->atlas_seq)
             UI_ERROR(r->log, MODULE, "frame %" PRIu64 " needs atlas update %" PRIu64 ", have %" PRIu64,
                      dl->frame_id, dl->atlas_seq, r->atlas_seq);
-        bool drawn = true;
-        if (s->kind == UI_NATIVE_OFFSCREEN) draw_offscreen(r, s, dl);
-        else drawn = draw_window(r, s, dl);
-        frame_done(r, s, dl->frame_id, !drawn);
+        bool window = s->kind != UI_NATIVE_OFFSCREEN, drawn = false;
+        if (!device_gone(r)) {
+            if (window) {
+                drawn = draw_window(r, s, dl);
+            } else {
+                draw_offscreen(r, s, dl);
+                drawn = true;
+            }
+        }
+        // With no device a window's frames are skipped, which keeps the core applying commands
+        // and logic running; the wait below is what stands in for the refresh.
+        if (device_gone(r) && window) wait_out = true;
+        frame_done(r, s, dl->frame_id, window && !drawn);
     }
+    device_gone(r); // reported even if no surface had a frame to draw
+    if (wait_out) thrd_sleep(&(struct timespec){.tv_nsec = LOST_FRAME_NS}, NULL);
     RENDER_SCOPE_EXIT();
 }
 
@@ -1173,8 +1261,15 @@ static void release_all(ui_render *r) {
     if (r->border_shader) wgpuShaderModuleRelease(r->border_shader);
     if (r->queue) wgpuQueueRelease(r->queue);
     if (r->device) {
-        wgpuDeviceDestroy(r->device);
-        wgpuDeviceRelease(r->device);
+        if (!device_alive(r)) {
+            // Dropping a device waits for its queue, and in wgpu that wait panics if it fails,
+            // as it will on a lost device. So it's never released.
+            abandon_device(r->device);
+        } else {
+            atomic_store(&r->destroying, true);
+            wgpuDeviceDestroy(r->device);
+            wgpuDeviceRelease(r->device);
+        }
     }
     if (r->adapter) wgpuAdapterRelease(r->adapter);
     if (r->instance) wgpuInstanceRelease(r->instance);
@@ -1221,3 +1316,9 @@ void ui_render_destroy(ui_render *r) {
 }
 
 ui_actor *ui_render_actor(ui_render *r) { return &r->actor; }
+
+void *ui_render_native_device(ui_render *r) { return r->device; }
+
+void ui_render_test_lose_device(ui_render *r) {
+    (wgpuDeviceDestroy)(r->device); // in parentheses: not the checked macro, as any thread may call
+}

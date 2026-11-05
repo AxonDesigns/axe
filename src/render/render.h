@@ -41,3 +41,11 @@ typedef struct ui_render ui_render;
 ui_result ui_render_create(const ui_render_desc *desc, ui_render **out);
 void ui_render_destroy(ui_render *r);
 ui_actor *ui_render_actor(ui_render *r);
+
+// Bench-only: the WGPUDevice, so bench_gpu_admin can create objects from a second thread as the
+// GPU admin thread will (docs/gpu-design.md). Valid once the actor has started.
+void *ui_render_native_device(ui_render *r);
+
+// Test-only: leaves the device as a real loss does, invalid with nobody told, by destroying it
+// without saying it's ours. Thread: any, once the actor has started.
+void ui_render_test_lose_device(ui_render *r);

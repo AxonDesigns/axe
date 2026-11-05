@@ -34,7 +34,7 @@ struct ui_trace_printer {
 };
 
 static const char *const phase_names[UI_PHASE_COUNT] = {"apply", "animate", "commit", "encode",
-                                                        "present"};
+                                                        "present", "acquire", "submit", "swap"};
 
 static void interval_add(interval_acc *a, uint64_t t, uint64_t late_threshold) {
     if (a->last_ns && t > a->last_ns) {
@@ -147,6 +147,8 @@ static void on_trace(void *user, const ui_trace_event *ev) {
         break; // the script host logs these itself
     case UI_TRACE_COMMANDS_APPLIED:
         break; // per buffer: bench_ui_live measures with it
+    case UI_TRACE_DEVICE_LOST:
+        break; // the renderer logs it itself
     case UI_TRACE_PREPARE_BEGIN:
         prepare_begin_ns = ev->time_ns;
         break;
