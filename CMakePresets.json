@@ -39,7 +39,8 @@
       "inherits": "base",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "RelWithDebInfo",
-        "UI_SANITIZE": "thread"
+        "UI_SANITIZE": "thread",
+                "AXE_DEV": "ON"
       }
     },
     {

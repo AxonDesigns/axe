@@ -1,5 +1,6 @@
 """Snapshot tests for axe-tsx: tests/tsx/cases/<name>.tsx compiles to <name>.ts.out, and what it
-reports on stderr is <name>.err (absent when nothing). Reviewed as diffs.
+reports on stderr is <name>.err (absent when nothing). Names starting dev_ compile with --dev.
+Reviewed as diffs.
 
     python3 -I tools/axe-tsx/snapshots.py --tsx build/debug/tools/axe-tsx [--update]
 """
@@ -21,7 +22,8 @@ def main() -> int:
     names = sorted(f[:-4] for f in os.listdir(cases) if f.endswith(".tsx"))
     for name in names:
         rel = os.path.join("tests", "tsx", "cases", name + ".tsx")
-        r = subprocess.run([args.tsx, rel], cwd=root, capture_output=True, text=True, timeout=60)
+        flags = ["--dev"] if name.startswith("dev_") else []
+        r = subprocess.run([args.tsx, *flags, rel], cwd=root, capture_output=True, text=True, timeout=60)
         outputs = {".ts.out": r.stdout, ".err": r.stderr}
         for ext, got in outputs.items():
             path = os.path.join(cases, name + ext)

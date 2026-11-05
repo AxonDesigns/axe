@@ -330,6 +330,17 @@ if(AXE_DEV)
     set_tests_properties(hot_scene PROPERTIES ENVIRONMENT "UI_GPU=software" TIMEOUT 300)
 endif()
 
+# Bundles hold none of hot reload, in any build; without AXE_DEV, --dev is refused.
+if(UI_BUILD_EXAMPLES)
+    add_test(NAME bundle_no_dev_code
+             COMMAND ${CMAKE_COMMAND} -DBUNDLE=${CMAKE_BINARY_DIR}/examples/layout_cards_tsx.js
+                     -P ${CMAKE_CURRENT_SOURCE_DIR}/hot/no_dev_code.cmake)
+endif()
+if(NOT AXE_DEV)
+    add_test(NAME axe_run_refuses_dev COMMAND axe-run --dev)
+    set_tests_properties(axe_run_refuses_dev PROPERTIES PASS_REGULAR_EXPRESSION "--dev is only in development builds")
+endif()
+
 add_test(NAME ts_typecheck COMMAND "${AXE_TSC}" -p "${PROJECT_SOURCE_DIR}/ts/tsconfig.json")
 
 # axe-tsx's snapshots (tests/tsx/cases): TSX in, generated code and diagnostics out.

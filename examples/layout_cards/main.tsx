@@ -14,7 +14,7 @@
 import { app, getOwner, loadFont, mount, runWithOwner } from "@axe/ui";
 import { App } from "./cards";
 import { populate, startCycles } from "./state";
-import { setTheme } from "./styles";
+import { setTheme } from "./theme";
 
 loadFont(`${AXE_SOURCE_DIR}/tests/fonts/NotoSans-VF.ttf`).catch((e) => console.error(e));
 

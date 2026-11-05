@@ -524,8 +524,9 @@ function rerun(s: Scope, stash = collect(s)): unknown {
 
 // Runs every instance of `changed` in place, outermost first. An error rolls the family that
 // threw back to its previous version; instances run again under it, with the state they had.
-function rerunChanged(changed: Set<Family>): void {
+function rerunChanged(changed: Set<Family>): number {
   const errors: { error: unknown; owner: Owner | null }[] = [];
+  let ran = 0;
   setErrorSink((error, owner) => errors.push({ error, owner }));
   try {
     const targets = [...changed].flatMap((f) => [...f.instances]).sort((a, b) => a.depth - b.depth);
@@ -533,6 +534,7 @@ function rerunChanged(changed: Set<Family>): void {
     for (const s of targets) {
       if (s.dead || s.epoch === epoch) continue;
       s.epoch = epoch;
+      ran++;
       const stash = collect(s);
       for (let attempt = 0; attempt < 16; attempt++) {
         errors.length = 0;
@@ -559,6 +561,7 @@ function rerunChanged(changed: Set<Family>): void {
   } finally {
     setErrorSink(null);
   }
+  return ran;
 }
 
 async function apply(changes: { file: string; deleted: boolean; error?: string }[]): Promise<void> {
@@ -683,7 +686,8 @@ function commit(t: Txn, namespaces: { file: string; ns: Record<string, unknown> 
         if (f) rerunning.add(f);
       }
     }
-    rerunChanged(rerunning);
+    const ran = rerunChanged(rerunning);
+    console.log(`hot reload: ${[...changed].join(", ")}: ${ran} instance${ran === 1 ? "" : "s"} ran again`);
   }
   for (const file of changed) pending.delete(file);
   for (const m of t.created) cleanUp(m, old.find((o) => o.file === m.file) ?? null);

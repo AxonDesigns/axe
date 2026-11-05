@@ -1,0 +1,42 @@
+// --dev output: components registered, signals, styles, tokens, themes and contexts keyed, and
+// templates with keys of their own. Snapshots with names starting dev_ run with --dev.
+import { Text, Token, View, context, signal, style, theme, token } from "@axe/ui";
+import { bindPlainText as _$bindPlainText, createComponent as _$createComponent, insert as _$insert, instance as _$instance, region as _$region } from "@axe/ui/jsx-runtime";
+import { hot as _$hot } from "@axe/ui/hot";
+const _$m = _$hot.enter("tests/tsx/cases/dev_keys.tsx");
+const _tmpl$1 = _$hot.template(_$m, "Card#0", [{ p: -1, props: () => ({ style: S.card }) }, { p: 0, t: 1 }]);
+const _tmpl$2 = _$hot.template(_$m, "Arrow#0", [{ p: -1, props: () => ({ style: S.row }) }]);
+const _tmpl$3 = _$hot.template(_$m, "App#0", [{ p: -1 }]);
+Card = _$hot.component(_$m, "Card", "0a856cb4", Card);
+App = _$hot.component(_$m, "App", "b4664dc9", App);
+
+const S = { card: _$hot.keyed(_$m, "style", "S.card#0", "b6ced354", style, { padding: 4 }), row: _$hot.keyed(_$m, "style", "S.row#0", "76e14cdd", style, { gap: 2 }) };
+const accent = _$hot.keyed(_$m, "token", "accent#0", "baf829fa", token, "#f00");
+const local = _$hot.keyed(_$m, "token", "local#0", "811c9dc5", (..._a) => Token.local(..._a), );
+const made = _$hot.keyed(_$m, "token", "made#0", "310ca263", (..._a) => Token.create(..._a), 4);
+const dark = _$hot.keyed(_$m, "theme", "dark#0", "ede42b21", theme, { tokens: [] });
+const Locale = _$hot.keyed(_$m, "context", "Locale#0", "c59e6d58", context, "en");
+export const count = _$hot.keyed(_$m, "signal", "count#0", "350ca8af", signal, 0);
+
+function helper() {
+  return _$hot.keyed(_$m, "signal", "signal#0", "340ca71c", signal, 1); // a helper's call: keyed too; the runtime tells repeated ones apart
+}
+
+export function Card(props: { title: string }) {
+  const n = _$hot.keyed(_$m, "signal", "n#0", "340ca71c", signal, 1);
+  const m = _$hot.keyed(_$m, "signal", "m#0", "340ca71c", signal, 1);
+  return (
+    _$instance(_tmpl$1, (_n) => { _$bindPlainText(_n[1], () => [props.title, "  ", n(), "  ", m()]); })
+  );
+}
+
+const Arrow = _$hot.component(_$m, "Arrow", "af9076c8", () => _$instance(_tmpl$2));
+const Plain = () => 1;
+
+export default function App() {
+  return _$instance(_tmpl$3, (_n) => { const _r1 = _$region(_n[0], null); const _r2 = _$region(_n[0], _r1); _$insert(_r2, _$createComponent(Card, { title: "x" })); _$insert(_r1, _$createComponent(Arrow, {})); });
+}
+
+export { helper, accent, local, made, dark, Locale, Plain };
+
+_$hot.leave(_$m);
