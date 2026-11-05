@@ -3,6 +3,79 @@
 Choices the architecture document leaves open, recorded as they are made. Newest
 milestone first.
 
+## Milestone 3b.3: hot reload
+
+### The user's choices in review
+- **Module-level signals are keyed too,** by the component rule, and stay the same object.
+  `layout_cards`' TSX is split so `main.tsx` only mounts.
+- **Each module evaluates under an owner.** Evaluating it again first disposes the previous
+  version's effects, computeds, cleanups and timers. The entry stays a full reload; docs/ui.md
+  recommends a small entry.
+- **A component that throws while running again** rolls back: its previous version runs with the
+  state its instances had, and the overlay shows the error.
+
+### Differences from the plan
+The approved design (3b plan, section 6), and what 3b.1 and 3b.2 changed:
+- **The host had no module loading.** The engine's hooks existed, tested, but the host set neither.
+  It gains a module table behind them, in `src/script/host/dev.c`, compiled only with `AXE_DEV`.
+- **`import()` needs no engine change.** It runs through the same hooks. test_js_engine now checks
+  it: two versions of a file, a shared import evaluated once, three kinds of failure, cycles.
+- **"One prebuilt module" is one per specifier over shared chunks** (esbuild `--splitting`), not
+  host-generated facades as the plan's first revision said: facades would need each package's
+  export list, and splitting gives the same single state for free.
+- **Template ids are per theme variant,** allocated lazily (3b.2), so "the same ids" means: a
+  registry keeps the `Template` object across versions and redefines each live variant under its
+  id. Themeless variants are counted in development only, so unused ones can be destroyed.
+- **Tokens, themes and contexts need keys too.** Evaluating `context()` again makes a new symbol,
+  which consumers can't find, and `token()` a new id.
+- **A token's value is left alone unless its initializer changed,** as a signal's is: a running
+  app changes tokens (`layout_cards` switches its theme), and an edit elsewhere must not undo that.
+- **Inline style edits are template edits,** since 3b.2 compiles them into the template. Only
+  `style()` edits are style-only.
+- **`For`'s one-component rows** bypass `ComponentElement`, so a row registers as an instance.
+- **The core gains a turn request.** Only the core sends event buffers. It's an atomic flag, not a
+  queued message: a request can't be lost to a full queue, and several become one turn.
+
+### What the tests and the example changed
+- **A family runs again when its module was evaluated because of an import,** not only when its
+  hash changed: its closures hold the old import. The brief's rule alone would leave it stale.
+- **An update is a transaction.** A module evaluating can't know whether a later one will fail, so
+  what it defines is staged and committed together. On a full reload the new app mounts before the
+  old one goes, so a failure leaves the old one running.
+- **The bootstrap.** If the entry doesn't build at startup, nothing has loaded `@axe/ui` to show
+  the error. So the host always loads the hot runtime first, and the first batch is an ordinary
+  update.
+- **The import graph comes from the resolve hook,** not the transform: the engine resolves every
+  static import of every version, so the edges are there for free.
+- **A boundary may export plain objects of hot values.** `layout_cards`' `export const S = {...}`
+  showed that a style-only edit otherwise evaluates every importer and runs its components.
+- **A deleted file blocks an update only while something unchanged imports it,** or the edit that
+  removes the import could never apply; and it clears when the file returns.
+- **`--minify-syntax` in every bundle.** Without it esbuild tree-shakes dev functions but leaves
+  `if (false) instanceBegin(...)` in the text. Bundles are about 5% smaller. This moves the
+  Callgrind baselines (below).
+
+### Tried, no gain
+Stripping the inline source map from module source before the engine compiles it: the heap per
+edit didn't change at all, because QuickJS doesn't keep the text. A plain module of 10 functions
+measures 22 KB per version with no hot reload, so what grows is the engine's own module cost.
+
+### Limits
+- **Keys come from names:** renaming a signal resets it, as does moving it past another of the
+  same name.
+- **A signal made by a helper called twice at a module's top level isn't kept,** and neither are
+  tokens made in a loop (`layout_cards/theme.ts`).
+- **`surface.onFrame` runs outside the module's owner,** so timers it starts need
+  `runWithOwner`. `layout_cards/main.tsx` does this.
+- **Top-level await in an app module** can run past the update's checkpoint: it isn't tested.
+- **A removed export** that an unchanged importer still uses keeps working until the importer is
+  edited, since a boundary's importers aren't evaluated again.
+- **inotify only.** Other platforms implement `watch.h` when they arrive.
+
+### Measurements
+Latency and heap: docs/ui.md, "Hot reload". A component edit is 32 ms at p50 and 36 ms at p95 in a
+Debug build, against the 200 ms target.
+
 ## Milestone 3b.2: the TSX transform, templates and the language benchmarks
 
 ### Toolchain and dependencies

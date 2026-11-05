@@ -377,7 +377,7 @@ One protocol serves three consumers: devtools, the test runner and AI agents. It
 
 **Devtools** built on the hooks and the automation protocol: tree inspector, flex and grid overlay, animation timeline with slow motion, frame-time graph.
 
-**HMR.** In development the app watches its files in process and reloads the changed modules (tsc type-checks separately); a socket transport comes with the automation protocol. A custom module loader in QuickJS-ng swaps module records; signal state is preserved by component identity, and only changed components re-run setup. Shaders, fonts, images and styles hot-reload too. A broken module shows an error overlay while the last valid scene keeps rendering.
+**HMR.** In development the app watches its files in process and reloads the changed modules (tsc type-checks separately); a socket transport comes with the automation protocol. QuickJS can't replace a module, so new versions load under versioned names; components are stable proxies, signal state is preserved by key, and only changed components run again ([ui.md](ui.md), "Hot reload"). Styles and templates hot-reload too; shaders, fonts and images will. A broken module shows an error overlay while the last valid scene keeps rendering.
 
 ## Packages and plugins
 
@@ -489,8 +489,8 @@ Budgets are enforced in CI with benchmarks from the first milestone. Targets mar
 | M3a | Language binding plumbing: the IDL and generator, the engine interface on QuickJS-ng, the script host, `@axe/core`, `axe-run` | Done, `v0.3.0-m3a` |
 | M3a.1, M3a.2 | Token scopes; merge cleanup (bench apps, C API evolution rules) | Done, `v0.3.1-m3a.1` |
 | M3b.1, M3b.2 | Signals and components (`@axe/ui`); the TSX transform, templates and the language benchmarks | Done, `v0.3.2-m3b.2` |
-| M3b.3 | Hot reload | Next |
-| M3c | The core's frame cost (below) | Planned |
+| M3b.3 | Hot reload | Done |
+| M3c | The core's frame cost (below) | Next |
 | M4 | Input, scrolling and virtualized lists | Planned |
 
 **M3c, the core's frame cost.** The language benchmarks showed that the core, not JS, misses refreshes on large scenes: it rebuilds and re-encodes the whole display list every frame. M3c makes the core's frame cost follow what changed:

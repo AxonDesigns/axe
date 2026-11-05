@@ -382,6 +382,136 @@ file. `axe-tsx --timings` reports each file.
   - a region holding one node keeps it in a field;
   - a signal is its own getter.
 
+## Hot reload
+
+In development, saving a file updates the running app in about 35 ms, keeping component state
+wherever the edit allows, and a mistake never breaks what is running.
+
+```sh
+cmake --preset debug && cmake --build build/debug
+build/debug/examples/layout_cards_tsx --dev
+```
+
+`--dev` exists only in Debug builds, or with the `AXE_DEV` CMake option. Without it, `axe-run`
+refuses the flag. Bundles hold none of this: the transform writes its registrations only with
+`--dev`, and `@axe/ui`'s hooks are dead code that esbuild removes.
+
+**A walkthrough.** With `layout_cards_tsx --dev` running, in `examples/layout_cards`:
+1. **In `styles.ts`,** change the page's `padding`. The cards move, and the log says `0 instances
+   ran again`: a style edit runs nothing.
+2. **In `cards.tsx`,** change `Card {id}` to `Item {id}`. Every card updates, and the log says how
+   many instances ran. The shuffle, the theme and what is hovered carry on.
+3. **Break it:** delete a `}` in `cards.tsx`. The app keeps running under an overlay with the
+   file, the line and the message. Put the `}` back, and the overlay goes.
+4. **In `state.ts`,** change `SHUFFLE_MS`. Its importers include `main.tsx`, so this is a full
+   reload, and the log says why. The module's signals still keep their values.
+
+### What keeps state
+
+| Edit | What happens | State |
+| --- | --- | --- |
+| A `style()` | The same style id is redefined. Nothing runs. | All kept |
+| A component's body or JSX | Its instances run again in place, with the same props at the same position | Kept (below) |
+| An inline style | Part of the template, since 3b.2: the same as editing JSX | Kept |
+| A module that isn't a boundary | Its importers are evaluated again, up to boundaries, and the components of those importers run again | Kept |
+| Reaching the entry | A full reload: the new app mounts, then the old one unmounts, and the log says why | Component state lost; module-level signals kept |
+
+**A signal keeps its value** when its key (its binding's name and ordinal in the component or
+module) and its initializer's text are unchanged. Otherwise it starts fresh. Change `signal(0)`
+to `signal(5)` and that signal resets, and no other. This is React Fast Refresh's rule: a new
+initializer says you want the new value.
+
+**Descendants of an instance that runs again are recreated**, since a component that ran once has
+no way of being told what changed. Their state is put aside by path (a component and its ordinal
+under its parent, a `<For>` row by its key) and restored when the same path appears. A row keeps
+its state when its list was reordered.
+
+**Boundaries.** A module exporting only components, styles, templates, tokens, themes and contexts
+(or plain objects and arrays of them, like `export const S = { card: style(...) }`) is a boundary:
+its exports keep their identity, so its importers keep working with no change. Components are
+stable proxies over their latest version. Any other export makes a module's importers evaluate
+again, because they hold what it exported.
+
+**Module-level state.** `signal()` at a module's top level gets the same rule, and stays the same
+object. Each module evaluates under an owner of its own: evaluating it again first disposes the
+previous version's effects, computeds, cleanups, timers and `app.onTurnEnd`, `onTurnStart` and
+`onSurface` handlers, so nothing runs twice. A callback that outlives the top level (`surface.onFrame`)
+needs `runWithOwner(getOwner(), ...)` to keep timers under it: see `layout_cards/main.tsx`.
+
+**Keep the entry small.** Reaching the entry is always a full reload, so an entry that is one mount
+call, with the app's state in a module of its own, makes every other edit hot:
+
+```tsx
+// main.tsx
+import { app, mount } from "@axe/ui";
+import { App } from "./app";
+app.onSurface((s) => mount(App, s));
+```
+
+**What doesn't keep state.**
+- A component's local variables that aren't signals.
+- A signal inside a callback or helper called more than once in a module's top level: only direct
+  calls in a module's top level, or in a component, are told apart.
+- Values a helper makes: tokens from a loop get new ids when their module evaluates again
+  (`layout_cards/theme.ts`).
+- Anything in a `For` row whose key changed.
+
+### Errors
+
+Transform errors, errors while evaluating a module, and errors thrown by a component running
+again keep the last working version running, under an overlay with the message and the original
+file and line (through source maps). The last valid scene keeps rendering behind it, and the next
+successful update removes it.
+
+- **An update is all or nothing up to its re-runs.** Importing new versions only stages what they
+  define, so a module that fails to evaluate changes nothing.
+- **A component that throws while running again** goes back to its previous version, with the
+  state its instances had. Other components update, and the overlay stays until you fix it.
+- **A deleted file that is still imported** is an error in the overlay, until the import goes or
+  the file comes back.
+- **Only `*.ts` and `*.tsx` under the app's directory are hot.** Assets, the `@axe/*` packages and
+  C code aren't.
+
+### Long sessions
+
+An engine can't unload a module, so every version stays in the JS heap. After 200 scripted edits
+of one component (`ts_hot_heap`), the heap grows by about 10 KB per edit, in a straight line, and
+it is the module itself: a plain module of 10 functions costs 22 KB per version with no hot reload
+running at all. Old implementations, replaced templates and styles, disposed owners and their
+timers are all released.
+
+At that rate, 1,000 edits cost 10 MB, which is nothing against a normal session. Restart when
+you've made thousands of edits of a large module, or if the heap limit (`--memory-limit`) gets close.
+
+### Latency
+
+From the file event to the first frame after the update's flush, in a Debug build, in a window at
+60 Hz, 50 scripted edits of each kind (`bench_hot`, an app of about 100 nodes). The target for a
+component edit was under 200 ms at p95.
+
+| Edit | p50 | p95 |
+| --- | --- | --- |
+| Component | 32.1 ms | 36.3 ms |
+| Style only | 26.1 ms | 28.1 ms |
+| Template | 30.8 ms | 34.2 ms |
+| Non-component module | 30.2 ms | 34.2 ms |
+
+About 15 ms of each is the debounce, which lets a burst of saves become one update.
+
+### How it works
+
+- **Watching.** A thread in `axe-run` watches the app's directory with inotify, behind a small
+  interface (`tools/axe-run/dev/watch.h`), with a 15 ms debounce. Editors save in several shapes
+  (in place, a temporary file renamed over the original, delete then create), so an event only
+  says a path changed: the build looks at what is there.
+- **Rebuilding.** `axe-tsx --dev`, then esbuild per file, as subprocesses. Each file stays its own
+  ES module. The `@axe/*` packages are prebuilt with code splitting, one entry per specifier over
+  shared chunks, so their state is single.
+- **Applying.** The result is posted to the host, which applies updates at the start of a turn,
+  before its events ([`script.md`](script.md), "Hot reload").
+- **Versions.** A new version loads under a versioned name (`app:/card.tsx?v=3`), since an engine
+  can't replace a module. The name is never reused, even after a failed update.
+
 ## Benchmarks
 
 The language benchmarks of milestone 3b, with thresholds agreed before they ran.

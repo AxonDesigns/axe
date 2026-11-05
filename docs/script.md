@@ -212,3 +212,30 @@ file can corrupt memory and take over the process. Only load bytecode that this 
 a user's documents, or anything else an attacker could write. The header's checks catch a
 stale bundle, not a malicious one. Source bundles carry no such risk beyond running the
 app's own code.
+
+## Hot reload
+
+In `AXE_DEV` builds (Debug, by default) an app can run from modules instead of a bundle
+([`ui.md`](ui.md), "Hot reload"). `src/script/host/dev.h` is the host's side:
+
+- **The channel.** The dev tools (`axe-run --dev`, the test runner) post batches of rebuilt files
+  from any thread, then ask the core for a turn (`ui_core_request_turn`, which isn't a wire op).
+  A turn request is an atomic flag, so it can't be lost to a full queue, and it means a clock event
+  at least, so the update applies in a real turn with a time.
+- **The turn.** After the turn's time is set, and before its first event, the host moves what was
+  posted into its module table and calls the hot runtime as a task of its own, with a microtask
+  checkpoint. Importing a module settles within that checkpoint, unless it uses top-level await.
+- **The first turn.** The host evaluates a bootstrap that imports `@axe/ui/hot`, and the first batch
+  goes through the normal path, the entry included. So an entry that doesn't build has something to
+  show the error.
+- **The module table.** It keeps each file's newest code, its live version, and a staged one during
+  an update. The engine's resolve hook maps relative imports to `app:/path?v=N` and records who
+  imports what, which is the import graph. Commit makes staged versions live; revert forgets them,
+  and their numbers aren't reused, because the engine has them cached, failed ones included.
+- **Packages** resolve to `pkg:/` names, files in the prebuilt directory.
+
+`@axe/ui/hot` reaches the table through `axe:host` functions that exist only in this mode
+(`hotBegin`, `hotCommit`, `hotRevert`, `hotImporters`, `hotSourceMap`, `hotFiles`).
+
+The hooks API reports each update (`UI_TRACE_SCRIPT_HOT_UPDATE`, version 3) with the time since its
+file event.

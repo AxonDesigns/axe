@@ -75,3 +75,6 @@ ui_cmd_instantiate_template(w, 1, parent, (ui_handle){0, 0}, (ui_handle[]){a, b}
   `ThemeProvider` of that theme uses it; the variant without a theme stays.
 - **Too large for one op:** a template whose ops don't fit one op (about 64 KiB) is written as
   plain ops with the instance's handles.
+- **Hot reload:** a new version redefines the same ids, for every live variant. Instances that
+  exist don't change; their component runs again. Variants no instance uses after an update are
+  destroyed, and come back when one is instantiated ([`ui.md`](ui.md), "Hot reload").

@@ -200,6 +200,35 @@ export function App() {
   expect(sig<number>("bad")()).toBe(1);
 });
 
+test("a nested component that throws is the one rolled back, not the parent running it", async () => {
+  const v = (title: string, body: string): string => `${P}import { Text, View, signal } from "@axe/ui";
+function Child() {
+  const n = signal(0);
+  probe.child = n;
+  ${body}
+  return <Text>child</Text>;
+}
+export function App() {
+  const n = signal(0);
+  probe.parent = n;
+  probe.title = "${title}";
+  return <View><Text>${title}</Text><Child /></View>;
+}
+`;
+  await edit({ "c16/app.tsx": v("one", ""), "main.tsx": entry("c16") });
+  sig<number>("child").set(1);
+  sig<number>("parent").set(2);
+  await nextTurn();
+  await edit({ "c16/app.tsx": v("two", `throw new Error("in the child");`) });
+  expect(hotState().overlay ?? "").toContain("in the child");
+  expect(probe["title"]).toBe("two"); // the parent's new version stands
+  expect(sig<number>("child")()).toBe(1);
+  expect(sig<number>("parent")()).toBe(2);
+  await edit({ "c16/app.tsx": v("three", "") });
+  expect(hotState().overlay).toBe(null);
+  expect(sig<number>("child")()).toBe(1);
+});
+
 test("a non-component module re-evaluates its importers up to a boundary", async () => {
   const lib = (n: number): string => `export const value = ${n};\n`;
   const view = `${P}import { Text } from "@axe/ui";
