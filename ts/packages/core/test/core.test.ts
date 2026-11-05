@@ -92,6 +92,7 @@ test("setText checks its options and writes nothing when they're wrong", () => {
   expect(() => n.setText("abc", { size: 0 })).toThrow(RangeError, "size");
   expect(() => n.setText("abc", { language: "no spaces" })).toThrow(RangeError, "language");
   expect(() => n.setText("abc", { families: [] })).toThrow(RangeError, "families");
+  expect(() => n.setText("abc", { ellipsis: "a\0b" })).toThrow(RangeError, "ellipsis"); // TextEncoder keeps NUL
   expect(commands.opCount).toBe(before);
   n.destroy();
 });

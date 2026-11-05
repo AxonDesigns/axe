@@ -196,7 +196,10 @@ function Writer.set_text(self, fields, spans, strings, ellipsis, text)
   if not (#spans <= 0xffff) then RT.bad("set_text", "span_count") end
   if not (#strings <= 0xffff) then RT.bad("set_text", "strings_bytes") end
   if not (#ellipsis <= 0xffff) then RT.bad("set_text", "ellipsis_bytes") end
+  if not RT.is_utf8(strings) then RT.bad("set_text", "strings") end
   if #strings % 4 ~= 0 then RT.bad("set_text", "strings") end
+  if not RT.is_utf8(ellipsis) then RT.bad("set_text", "ellipsis") end
+  if string.find(ellipsis, "\0", 1, true) then RT.bad("set_text", "ellipsis") end
   local _payload = 72 + #spans * 36 + #strings + RT.pad4(#ellipsis) + RT.pad4(#text)
   local _at = self:op(8, _payload)
   local _buf = self.buf

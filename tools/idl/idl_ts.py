@@ -298,14 +298,14 @@ def commands_ts(s: Schema) -> str:
            "// The command buffer's encoder (docs/command-buffer.md). Each method validates its",
            "// arguments as the core would, then appends one op; a method that throws writes nothing.",
            "",
-           'import { type Handle, WireWriter, bad, isUint, isUtf8, splitTime, splitU64, utf8Length, encodeUtf8Into } from "../runtime.js";',
+           'import { type Handle, WireWriter, bad, isUint, splitTime, splitU64, utf8Length, encodeUtf8Into } from "../runtime.js";',
            "import * as ids from \"./ids.js\";",
            "import { type StyleValue, styleValueValid, styleTokenValueValid, styleValueWords, writeStyleValue } from \"./styles.js\";",
            "",
            "const { " + ", ".join(sorted({f"is{pascal(e.name)}" for e in s.enums.values()} |
                                          {f"{camel(e.name)}Components" for e in s.enums.values() if any(v.components for v in e.values)} |
                                          {f"{camel(e.name)}Min" for e in s.enums.values() if any(v.min is not None for v in e.values)})) + " } = ids;",
-           "void utf8Length; void encodeUtf8Into; void isUtf8; void styleValueValid; void styleTokenValueValid;",
+           "void utf8Length; void encodeUtf8Into; void styleValueValid; void styleTokenValueValid;",
            ""]
     # Records used by ops.
     for r in s.records.values():
@@ -508,9 +508,7 @@ def check_lines(s: Schema, r: Record, src: str, name: str) -> list[str]:
                 out.append(f"    for (let i = 0; i < {v}.length; i++) if (!({v}[i]! >= {camel(e.name)}Min({src}{camel(c.ref)}))) throw bad(\"{name}\", \"{t.name}\");")
             elif c.kind == "nonzero":
                 out.append(f"    for (let i = 0; i < {v}.length; i++) if (!isUint({v}[i]!, 0xffffffff) || {v}[i] === 0) throw bad(\"{name}\", \"{t.name}\");")
-            elif c.kind == "utf8":
-                out.append(f"    if (!isUtf8({v})) throw bad(\"{name}\", \"{t.name}\");")
-            elif c.kind == "no_nul":
+            elif c.kind == "no_nul":  # `utf8` isn't checked here: docs/idl.md, "Checks"
                 out.append(f"    if ({v}.indexOf(0) >= 0) throw bad(\"{name}\", \"{t.name}\");")
         if t.kind == "bytes" and t.multiple > 1:
             out.append(f"    if ({v}.length % {t.multiple}) throw bad(\"{name}\", \"{t.name}\");")
@@ -704,9 +702,10 @@ def styles_ts(s: Schema) -> str:
     out.append("")
 
     # Validation, as the core checks it.
+    no_nul = any(c.kind == "no_nul" for c in u.variant("string").fields[0].checks)
     out.append("function stringOk(s: string, max: number): boolean {")
     out.append("  const n = utf8Length(s);")
-    out.append("  return n >= 1 && n <= max && s.indexOf(\"\\0\") < 0;")
+    out.append("  return n >= 1 && n <= max" + (" && s.indexOf(\"\\0\") < 0;" if no_nul else ";"))
     out.append("}")
     out.append("")
     out.append("function finite4(c: readonly number[]): boolean {")

@@ -533,9 +533,15 @@ def styles_luau(s: Schema) -> str:
             out.append(f"    return at + {k * 4}")
     out += ["  end", "  return at", "end", ""]
 
-    out += ["-- UTF-8, as the core requires: a Luau string holds any bytes.",
+    string_checks = {c.kind for c in u.variant("string").fields[0].checks}
+    string_conds = ["#x >= 1", "#x <= max"]
+    if "no_nul" in string_checks:
+        string_conds.append('not string.find(x, "\\0", 1, true)')
+    if "utf8" in string_checks:
+        string_conds.append("RT.is_utf8(x)")
+    out += ["-- A Luau string holds any bytes, so `utf8` is checked here (docs/idl.md, \"Checks\").",
             "local function string_ok(x, max)",
-            '  return #x >= 1 and #x <= max and not string.find(x, "\\0", 1, true) and RT.is_utf8(x)',
+            f"  return {' and '.join(string_conds)}",
             "end", "",
             "local function finite4(c)",
             "  return " + " and ".join(finite(f"c[{i}]") for i in range(1, 5)),

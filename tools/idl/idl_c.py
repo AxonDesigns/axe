@@ -889,10 +889,16 @@ def style_functions(s: Schema) -> list[str]:
 
     # Strings.
     sv = u.variant("string").fields[0]
+    string_checks = {c.kind for c in sv.checks}
     out.append("bool ui_wire_style_string_valid(const ui_value *v, uint32_t max) {")
-    out.append(f"    return v->kind == {kind_const(s, 'string')} && v->{sv.name}.length && v->{sv.name}.length <= max &&")
-    out.append(f"           v->{sv.name}.bytes && !memchr(v->{sv.name}.bytes, 0, v->{sv.name}.length) &&")
-    out.append(f"           ui_utf8_valid((const uint8_t *)v->{sv.name}.bytes, v->{sv.name}.length);")
+    conds = [f"v->kind == {kind_const(s, 'string')} && v->{sv.name}.length && v->{sv.name}.length <= max &&",
+             f"v->{sv.name}.bytes"]
+    if "no_nul" in string_checks:
+        conds[-1] += f" && !memchr(v->{sv.name}.bytes, 0, v->{sv.name}.length)"
+    if "utf8" in string_checks:
+        conds[-1] += " &&"
+        conds.append(f"ui_utf8_valid((const uint8_t *)v->{sv.name}.bytes, v->{sv.name}.length)")
+    out.append("    return " + "\n           ".join(conds) + ";")
     out.append("}")
     out.append("")
     out.append("static bool finite4(const float *c) {")

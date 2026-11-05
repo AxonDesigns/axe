@@ -559,6 +559,10 @@ static inline void ui_wire_set_text_tail_of(const uint8_t *p, const ui_wire_set_
     t->text = p + off;
     (void)h;
 }
+// NULL when the op's values are in range, else the name of the first field that isn't (drops in the
+// core, refusals in writers). `strings`: the decoded strings (strings_bytes of them); `ellipsis`:
+// the decoded ellipsis (ellipsis_bytes of them).
+const char *ui_wire_set_text_check(const ui_wire_set_text *v, const void *strings, const void *ellipsis);
 // Appends a set_text op. Counts and lengths in *v must describe the data passed; padding is zeroed.
 // UI_ERR_INVALID_ARGUMENT if the op would be too large, UI_ERR_OUT_OF_MEMORY.
 ui_result ui_wire_set_text_put(ui_wire_buf *b, const ui_wire_set_text *v, const ui_wire_text_span *spans, const void *strings, const void *ellipsis, const void *text);

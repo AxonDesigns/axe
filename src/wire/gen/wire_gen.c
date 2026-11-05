@@ -133,6 +133,13 @@ ui_result ui_wire_set_timer_put(ui_wire_buf *b, const ui_wire_set_timer *v) {
     return UI_OK;
 }
 
+const char *ui_wire_set_text_check(const ui_wire_set_text *v, const void *strings, const void *ellipsis) {
+    if (!ui_utf8_valid(strings, v->strings_bytes)) return "strings";
+    if (!ui_utf8_valid(ellipsis, v->ellipsis_bytes)) return "ellipsis";
+    if (v->ellipsis_bytes && memchr(ellipsis, 0, v->ellipsis_bytes)) return "ellipsis";
+    return NULL;
+}
+
 ui_result ui_wire_set_text_put(ui_wire_buf *b, const ui_wire_set_text *v, const ui_wire_text_span *spans, const void *strings, const void *ellipsis, const void *text) {
     if (v->strings_bytes % 4) return UI_ERR_INVALID_ARGUMENT;
     uint64_t size = UI_WIRE_SET_TEXT_SIZE + (uint64_t)(UI_WIRE_TEXT_SPAN_SIZE * (uint32_t)v->span_count) + (uint64_t)(v->strings_bytes) + (uint64_t)(ui_wire_pad4(v->ellipsis_bytes)) + (uint64_t)(ui_wire_pad4(v->chunk_bytes));

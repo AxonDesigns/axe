@@ -217,7 +217,43 @@ static void test_validation(void) {
     d.style.language = 1; // past the (empty) language list
     CHECK(ui_cmd_set_text(w, node, &d) == UI_ERR_INVALID_ARGUMENT);
     d.style.language = 0;
+    static const char *const bad_family[] = {"Noto \xFF"}, *const surrogate[] = {"\xED\xA0\x80"};
+    const char *const *good_families = d.families;
+    uint32_t good_family_count = d.family_count;
+    d.families = bad_family;
+    d.family_count = 1;
+    CHECK(ui_cmd_set_text(w, node, &d) == UI_ERR_INVALID_ARGUMENT);
+    d.families = surrogate;
+    CHECK(ui_cmd_set_text(w, node, &d) == UI_ERR_INVALID_ARGUMENT);
+    d.families = good_families;
+    d.family_count = good_family_count;
+    d.ellipsis = "\xE2\x80"; // cut short
+    CHECK(ui_cmd_set_text(w, node, &d) == UI_ERR_INVALID_ARGUMENT);
+    d.ellipsis = NULL;
     CHECK_EQ_INT(ui_cmd_writer_op_count(w), 0);
+
+    // The core refuses what the writer does, from a writer that didn't check. No C string holds a
+    // NUL, so this ellipsis needs patching in: "ab" with the core's own custom flag.
+    d.ellipsis = "ab";
+    CHECK(ui_cmd_set_text(w, node, &d) == UI_OK);
+    d.ellipsis = NULL;
+    uint8_t *e;
+    size_t en;
+    ui_cmd_writer_take(w, &e, &en);
+    size_t ellipsis_at = UI_WIRE_HEADER_SIZE + UI_WIRE_OP_HEADER_SIZE + UI_WIRE_SET_TEXT_SIZE +
+                         ui_wire_get_u16(e + UI_WIRE_HEADER_SIZE + UI_WIRE_OP_HEADER_SIZE + 20);
+    CHECK(!memcmp(e + ellipsis_at, "ab", 2));
+    e[ellipsis_at + 1] = 0;
+    uint64_t dropped_ellipsis = s.stats.dropped;
+    CHECK(ui_scene_apply(&s, e, en, 0) == UI_OK);
+    CHECK_EQ_INT(s.stats.dropped, dropped_ellipsis + 1);
+    CHECK(text_of(&s) == NULL);
+    e[ellipsis_at + 1] = 0xFF;
+    dropped_ellipsis = s.stats.dropped;
+    CHECK(ui_scene_apply(&s, e, en, 0) == UI_OK);
+    CHECK_EQ_INT(s.stats.dropped, dropped_ellipsis + 1);
+    CHECK(text_of(&s) == NULL);
+    free(e);
 
     // The core re-checks what a writer could get wrong: patch a valid op into an overlap.
     d.style.family = 0;

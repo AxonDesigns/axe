@@ -177,7 +177,8 @@ void ui_text_op_decode(const ui_wire_op *op, ui_wire_reader *r, ui_text_op *out)
     }
     if (!why) t.name_offsets[family_count] = names_len;
     bool custom = flags & UI_WIRE_TEXT_FLAGS_CUSTOM_ELLIPSIS;
-    if (!why && custom && !ui_utf8_valid(ell_p, ell_len)) why = "set_text (ellipsis)";
+    if (!why && custom && (!ui_utf8_valid(ell_p, ell_len) || (ell_len && memchr(ell_p, 0, ell_len))))
+        why = "set_text (ellipsis)";
 
     // Replace ill-formed UTF-8, keeping span offsets on the same characters.
     size_t clean_len = 0;

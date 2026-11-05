@@ -195,7 +195,7 @@ union style_value  by value_kind  c ui_value
   keyword  keyword u32
   token    token u32
   spring   spring.stiffness f32 finite 0<.., spring.damping f32 finite >= 0
-  string   string str16 1..1014
+  string   string str16 1..1014 utf8 no_nul
 
 # A style declaration: a property (or 0x8000 | property for its transition) and a value.
 record template_node  "A node's handle among an instance's nodes."
@@ -374,8 +374,8 @@ command set_text = 8  original 64  "see [Text](#text)"
   from_node       text_field                    since ae568d4 "the fields that come from the node rather than this op; 0 = all set here"
   tail
   spans           text_span[span_count]
-  strings         bytes[strings_bytes] multiple 4  "string_count NUL-terminated UTF-8 strings, zero-padded"
-  ellipsis        bytes[ellipsis_bytes] pad 4
+  strings         bytes[strings_bytes] multiple 4  utf8  "string_count NUL-terminated UTF-8 strings, zero-padded"
+  ellipsis        bytes[ellipsis_bytes] pad 4  utf8 no_nul
   text            bytes[chunk_bytes] pad 4      "the first chunk_bytes of text"
 
 command append_text = 9  original 12  "node, `u16 chunk_bytes`, `u16 header_bytes` (12), chunk (padded to 4)"

@@ -225,7 +225,7 @@ A style or span is 36 bytes:
   `strings_bytes` not a multiple of 4, or regions that add up to more than the op holds.
 - **Drops** (counted, and the node is unchanged): a stale node, out-of-range values,
   unsorted or overlapping spans, spans past the end, a family or language index past the
-  string region, strings or a custom ellipsis that are not valid UTF-8, or a missing
+  string region, strings that are not valid UTF-8, a custom ellipsis that is not or holds a NUL, or a missing
   continuation.
 
 Example: `set_text(node {1,1}, "Hi")` with the default style (16 px, weight 400, white),

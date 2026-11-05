@@ -41,7 +41,8 @@ arguments and build what an op needs (the string table of `set_text`, the split 
   belongs to it.
 - Names are `lower_snake_case`. The generator derives `camelCase` (TypeScript) and
   `UPPER_CASE` (C constants) from them; Luau takes them as they are, quoting the ones that are
-  keywords there (`["end"]`).
+  keywords there (`["end"]`). `idl_generator` checks every name against each target's reserved
+  words: a new collision fails until `tools/idl/idl_reserved.py` lists why it's safe.
 - Every error names the file and line.
 
 ## Top-level statements
@@ -136,7 +137,18 @@ words).
 | `a..b`, `a<..b`, `a..<b`, `a<..`, `..b` | numbers | a range; `<` excludes that end |
 | `components(<field>)` | a count | equals the component count of that enum field's value |
 | `>= min(<field>)` | f32 tail arrays | every element at least that value's `min` |
-| `utf8`, `no_nul` | bytes | well-formed UTF-8; no zero byte |
+| `utf8`, `no_nul` | bytes, `str16` | well-formed UTF-8; no zero byte |
+
+**`utf8` is checked where a string can be invalid.** The C writer and Luau take bytes from whoever
+calls them, so their encoders check it. The TypeScript writer doesn't: its strings go through
+`TextEncoder`, whose output is always valid UTF-8, and a scan of every style string would buy nothing.
+`no_nul` is checked everywhere, since valid UTF-8 can hold a NUL and `TextEncoder` keeps one. The core
+checks both whatever a writer did. So bytes passed straight to `CommandWriter` that didn't come from
+`TextEncoder` are refused by the core, not by the encoder.
+
+`strings` holds NUL-terminated strings, so it has `utf8` but no `no_nul`: each string's NUL is what
+ends it. `set_text`'s text has neither, because the core replaces what's ill-formed instead of
+dropping the op.
 
 Constraints that depend on other state (handles, span order, `set_text` fields that come
 from the node) are not checks: the scene applies them.
@@ -172,6 +184,7 @@ px [range]  percent [range]  number [range] [whole]  color  auto  none  string [
 keyword <enum>  keyword <enum>[<value> ...]  token  spring  transition-only
 ```
 
+A `string` value is `str16` in the `style_value` union, with `utf8 no_nul` (see [Fields](#fields)).
 Every value property also takes `token` (any non-zero id), `inherit` and `initial`;
 overrides also take `unset`. Floats must be finite. `keyword <enum>[...]` allows only the
 listed values (below 32). `transition-only` marks a property that can't be declared, only

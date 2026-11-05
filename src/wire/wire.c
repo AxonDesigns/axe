@@ -279,7 +279,8 @@ ui_result ui_cmd_set_text(ui_cmd_writer *w, ui_handle node, const ui_text_desc *
             .align = d->set & UI_TEXT_SET_ALIGN ? (uint8_t)d->align : 0,
             .from_node = (uint16_t)(~d->set & UI_TEXT_SET_ALL),
         };
-        r = ui_wire_set_text_put(&w->buf, &v, spans, names, d->ellipsis, d->text);
+        if (ui_wire_set_text_check(&v, names, d->ellipsis)) r = UI_ERR_INVALID_ARGUMENT;
+        else r = ui_wire_set_text_put(&w->buf, &v, spans, names, d->ellipsis, d->text);
     }
     if (names != local) free(names);
     if (spans != local_spans) free(spans);

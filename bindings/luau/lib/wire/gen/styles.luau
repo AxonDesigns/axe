@@ -64,7 +64,7 @@ function styles.write_value(b, at, v)
   return at
 end
 
--- UTF-8, as the core requires: a Luau string holds any bytes.
+-- A Luau string holds any bytes, so `utf8` is checked here (docs/idl.md, "Checks").
 local function string_ok(x, max)
   return #x >= 1 and #x <= max and not string.find(x, "\0", 1, true) and RT.is_utf8(x)
 end

@@ -113,37 +113,6 @@ export function encodeUtf8(s: string): Uint8Array {
   return encoder.encode(s);
 }
 
-/** True if the bytes are well-formed UTF-8 (Unicode §3.9). */
-export function isUtf8(b: Uint8Array): boolean {
-  for (let i = 0; i < b.length; ) {
-    const c = b[i]!;
-    if (c < 0x80) {
-      i++;
-      continue;
-    }
-    let n: number, lo = 0x80, hi = 0xbf;
-    if (c >= 0xc2 && c <= 0xdf) n = 1;
-    else if (c >= 0xe0 && c <= 0xef) {
-      n = 2;
-      if (c === 0xe0) lo = 0xa0;
-      if (c === 0xed) hi = 0x9f;
-    } else if (c >= 0xf0 && c <= 0xf4) {
-      n = 3;
-      if (c === 0xf0) lo = 0x90;
-      if (c === 0xf4) hi = 0x8f;
-    } else return false;
-    if (i + n >= b.length + 0 && i + n > b.length - 1 + 1) return false;
-    const second = b[i + 1];
-    if (second === undefined || second < lo || second > hi) return false;
-    for (let k = 2; k <= n; k++) {
-      const x = b[i + k];
-      if (x === undefined || (x & 0xc0) !== 0x80) return false;
-    }
-    i += n + 1;
-  }
-  return true;
-}
-
 /** The UTF-8 byte offset of UTF-16 index `i` in `s` (an index inside a surrogate pair maps to
  * the pair's start). */
 export function utf8OffsetFromUtf16(s: string, i: number): number {

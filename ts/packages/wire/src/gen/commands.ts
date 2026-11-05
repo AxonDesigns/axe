@@ -3,12 +3,12 @@
 // The command buffer's encoder (docs/command-buffer.md). Each method validates its
 // arguments as the core would, then appends one op; a method that throws writes nothing.
 
-import { type Handle, WireWriter, bad, isUint, isUtf8, splitTime, splitU64, utf8Length, encodeUtf8Into } from "../runtime.js";
+import { type Handle, WireWriter, bad, isUint, splitTime, splitU64, utf8Length, encodeUtf8Into } from "../runtime.js";
 import * as ids from "./ids.js";
 import { type StyleValue, styleValueValid, styleTokenValueValid, styleValueWords, writeStyleValue } from "./styles.js";
 
 const { isClip, isClipFlags, isContentAnimation, isDirection, isDisplay, isEventType, isFlexAlign, isFlexDirection, isFlexWrap, isOp, isPosition, isProperty, isState, isTextAlign, isTextDirection, isTextField, isTextFlags, isTextSlant, isValueKind, propertyComponents, propertyMin } = ids;
-void utf8Length; void encodeUtf8Into; void isUtf8; void styleValueValid; void styleTokenValueValid;
+void utf8Length; void encodeUtf8Into; void styleValueValid; void styleTokenValueValid;
 
 export interface TextStyle {
   /** index of a family list in the string region, or 0xFFFF for the default */
@@ -291,6 +291,7 @@ export class CommandWriter extends WireWriter {
     if (!(strings.length <= 0xffff)) throw bad("set_text", "strings_bytes");
     if (!(ellipsis.length <= 0xffff)) throw bad("set_text", "ellipsis_bytes");
     if (strings.length % 4) throw bad("set_text", "strings");
+    if (ellipsis.indexOf(0) >= 0) throw bad("set_text", "ellipsis");
     const textCount = text.length;
     const spansCount = spans.length;
     const stringsCount = strings.length;
@@ -372,7 +373,6 @@ export class CommandWriter extends WireWriter {
   loadFont(id: number, path: Uint8Array): void {
     if (!((id >>> 0) === id)) throw bad("load_font", "id");
     if (!(path.length <= 0xffff && path.length >= 1 && path.length <= 4096)) throw bad("load_font", "path_bytes");
-    if (!isUtf8(path)) throw bad("load_font", "path");
     if (path.indexOf(0) >= 0) throw bad("load_font", "path");
     const pathCount = path.length;
     const payload = 8 + ((path.length + 3) & ~3);

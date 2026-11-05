@@ -1010,6 +1010,8 @@ def check_union(s: Schema, u: Union):
             for c in f.checks:
                 if c.kind == "range" and f.type.base != "str16":
                     pass
+                elif c.kind in ("utf8", "no_nul") and f.type.base == "str16":
+                    pass
                 elif c.kind not in ("finite", "range"):
                     raise IdlError(s.path, f.line, f"`{c.kind}` doesn't apply in a union")
 

@@ -316,7 +316,7 @@ local function string_region(families, languages)
   local parts = {}
   for _, list in ipairs({ families, languages }) do
     for _, s in ipairs(list) do
-      check(not string.find(s, "\0", 1, true) and rt.is_utf8(s), "families or languages (not UTF-8)")
+      check(not string.find(s, "\0", 1, true), "families or languages (NUL)")
       table.insert(parts, s .. "\0")
     end
   end
@@ -366,7 +366,7 @@ local function set_text(node, text, o)
   for _, sp in ipairs(spans) do relabel(sp.style) end
   local region, string_count = string_region(families, languages)
   local ellipsis = o.ellipsis or ""
-  check(#ellipsis <= MAX_ELLIPSIS and rt.is_utf8(ellipsis), "ellipsis (at most 64 bytes of UTF-8)")
+  check(#ellipsis <= MAX_ELLIPSIS, "ellipsis (at most 64 bytes)")
   local header = 72 + #spans * 36 + #region + rt.pad4(#ellipsis)
   check(header <= rt.MAX_PAYLOAD and #region <= 0xffff, "text options (too large for one op)")
   local room = (rt.MAX_PAYLOAD - header) // 4 * 4
