@@ -411,14 +411,13 @@ The language benchmarks of milestone 3b, with thresholds agreed before they ran.
 - **Missed refreshes.** These are the core's, not JS's: frames never wait for JS. With 30,000
   nodes, the core rebuilds the display list (about 18 ms) and the renderer encodes it (about
   20 ms) every frame. With 1,000 rows, those take about 4.7 ms a frame, near 144 Hz's 6.9 ms
-  budget. Culling and incremental display lists come with scrolling and virtualization in
-  milestone 4.
+  budget. Culling, an incremental display list and layer caching come in M3c, the core's
+  frame cost ([`architecture.md`](architecture.md), "Roadmap").
 - **The update path itself passes**: the turn with 100 writes, 1,000 text updates in a turn,
   and the update delay.
 
-So, by the architecture's rule ("Language bindings"), TypeScript on QuickJS-ng stays.
-Virtualization (milestone 4) and lighter row objects (a compute-side change) answer the
-creation of very long lists.
+So, by the architecture's rule ("Language bindings"), TypeScript on QuickJS-ng stays. The
+failures become [tracked targets](#tracked-targets) for later milestones.
 
 Run them:
 
@@ -430,3 +429,15 @@ WAYLAND_DISPLAY=<headless sway> build/release/bench/bench_ui_live [--rows=N] [--
 
 `bench-callgrind` counts the CPU cases on every CI run: `ui_startup_1k`, `ui_for_mount_10k`,
 `ui_for_update`, `ui_for_reorder` and `ui_text_1k`.
+
+### Tracked targets
+
+The failed thresholds aren't relaxed. Each is a target a later milestone must meet, with the
+same benchmark:
+
+| Measure | Current result | Threshold | Expected in |
+| --- | --- | --- | --- |
+| B2 mount, 10,000 rows (`list10k`, JS) | about 450 ms | ≤ 300 ms | M4: virtualized lists and lighter row objects |
+| B2 JS heap per row after mounting | 3.3 KB | ≤ 2 KB | M4: lighter row objects, and a store that creates per-item signals lazily, only for values that are read |
+| B2 missed refreshes, 10,000 rows streaming | about 24 fps whatever the refresh rate | 0 missed at 60 Hz, ≤ 0.5% at 144 Hz | M3c: the core's frame cost |
+| B2 missed refreshes, 1,000 rows at 144 Hz | about 26% missed | ≤ 0.5% | M3c: the core's frame cost |

@@ -20,20 +20,22 @@ The guiding rule is no shortcuts: decisions that are expensive to retrofit (thre
 
 | Area | Decision |
 | --- | --- |
-| Core language | C23 built with Clang everywhere, linking a C++ runtime (HarfBuzz, ThorVG) and Rust crates (wgpu-native, AccessKit) |
+| Core language | C23 built with Clang everywhere (clang-cl on Windows), linking a C++ runtime (HarfBuzz, ThorVG) and Rust crates (wgpu-native, AccessKit) |
 | Threads | Core (OS main thread), logic (JS), render (sole GPU owner); collapsible to one thread |
-| JS engine | QuickJS-ng behind a strict engine interface |
-| Authoring | Language-agnostic C API and wire protocol; TypeScript first (fine-grained signals, TSX), Dart possible later; retained-mode scene, styles as objects |
+| JS engine | QuickJS-ng behind a strict engine interface; kept after the language benchmarks (M3b) |
+| Authoring | Language-agnostic C API and wire protocol; TypeScript first (fine-grained signals, TSX compiled to templates), Dart possible later; retained-mode scene, styles as objects |
+| Wire IDL | A custom line-based IDL ([idl.md](idl.md)) generating the C codec, the public enums, the TypeScript encoders and decoders, and the docs' tables |
 | GPU | WebGPU through the standard webgpu.h, implemented by wgpu-native |
-| Text | HarfBuzz shaping, own rasterizer, own Unicode algorithms, own layout, editing and IME |
+| Text | HarfBuzz shaping, own rasterizer, own Unicode algorithms, own layout, editing and IME; Fontconfig for system fonts on Linux |
 | Layout | Own flex + grid engine, incremental |
 | Vector assets | ThorVG for SVG and Lottie, rendered to textures, driven by the core clock |
 | Accessibility | Own semantics tree; AccessKit for desktop bridges |
 | Surfaces | One core, many surfaces |
 | Linux | Wayland and X11 in the first release; layer-shell is Wayland-only |
 | First vertical slice | Linux (Wayland) |
-| Build | CMake, with Corrosion for Rust crates |
+| Build | CMake, with Corrosion for Rust crates (one Rust toolchain, 1.97); esbuild bundles TypeScript, tsc type-checks only, axe-tsx (on oxc) compiles TSX; nothing at build or run time needs Node.js beyond installing the pinned tools |
 | Automation | One JSON-RPC protocol for devtools, tests and MCP; headless surfaces |
+| Routing | Pushes may interrupt interactive pops, retargeted from the current progress and velocity |
 | Plugins | Single package: TS API, per-platform native code, IDL-generated bindings |
 | License | Dual license (open source + commercial); open-source license still open; CLA required |
 | Targets | Desktop only for now: Linux (Wayland and X11), Windows, macOS; web and mobile deferred |
@@ -59,7 +61,7 @@ Guarantees the framework documents and tests:
 
 APIs redesigned because of this contract:
 
-- **Layout reads.** Measurement is asynchronous: results arrive as a signal on the next frame. Most needs are covered declaratively instead: anchoring, popovers, tooltips and fit-to-space positioning run inside the core's layout.
+- **Layout reads.** Measurement is asynchronous: a request is answered by the frame that lays the node out (a Promise in TypeScript, rejected if the node is gone by then). Most needs are covered declaratively instead: anchoring, popovers, tooltips and fit-to-space positioning run inside the core's layout.
 - **Gesture consumption.** There is no synchronous preventDefault. Nodes declare recognizers, blocking relationships and arena priorities up front; JS handlers are notified after decisions.
 - **Text input.** The core owns editing state (text, selection, IME composition). JS observes changes and may apply transformations; an edit counter detects stale JS updates, which are rebased instead of overwriting newer typing.
 - **Errors.** A JS exception never stops the core. Component error boundaries contain failures; the core keeps rendering the last valid scene, and HMR failures show an overlay.
@@ -91,7 +93,7 @@ QuickJS-ng is the default engine, chosen for spec compliance, small size, a plai
 
 **Bindings.** All TS to C bindings are generated from an IDL, for the framework itself and for packages.
 
-**TypeScript.** esbuild or SWC transpiles in development; release builds compile ahead of time and ship QuickJS bytecode for faster startup.
+**TypeScript.** axe-tsx compiles TSX into templates, esbuild bundles the app into one ES module, and tsc only type-checks. Debug builds run the bundle's source; other builds embed QuickJS bytecode compiled by axe-jsc, for faster startup ([typescript.md](typescript.md), [ui.md](ui.md)).
 
 ## Language bindings
 
@@ -126,6 +128,8 @@ Design rules:
 | Text field with a JS input-transforming handler | Typing latency |
 
 Outcomes: thresholds met, TypeScript on QuickJS-ng stays; compute-only failures are fixed with native compute modules; failures on the update path itself make Luau or Dart the candidate behind the same layer.
+
+**Result (milestone 3b.2): TypeScript on QuickJS-ng stays.** The update path passed: B2's update turn and update delay, and B3. The failures are on the creation side (B2's mount of 10,000 rows and its JS heap per row) or in the core (missed refreshes, which happen whatever JS does). They are not relaxed but kept as [tracked targets](ui.md#tracked-targets) for M3c and M4. The numbers are in [ui.md](ui.md), "Benchmarks"; B3 ran as 1,000 bound texts updated in one turn, since text input comes later.
 
 **Keeping work out of JS by design:** compile-time TSX transforms that turn static subtrees into single commands with interned styles; virtualized lists, tables and text editing in C; native compute modules exposed through the IDL; precompiled bytecode in release.
 
@@ -373,7 +377,7 @@ One protocol serves three consumers: devtools, the test runner and AI agents. It
 
 **Devtools** built on the hooks and the automation protocol: tree inspector, flex and grid overlay, animation timeline with slow motion, frame-time graph.
 
-**HMR.** A dev server watches files, transpiles with esbuild or SWC (tsc type-checks separately) and pushes changed modules over WebSocket. A custom module loader in QuickJS-ng swaps module records; signal state is preserved by component identity, and only changed components re-run setup. Shaders, fonts, images and styles hot-reload too. A broken module shows an error overlay while the last valid scene keeps rendering.
+**HMR.** In development the app watches its files in process and reloads the changed modules (tsc type-checks separately); a socket transport comes with the automation protocol. A custom module loader in QuickJS-ng swaps module records; signal state is preserved by component identity, and only changed components re-run setup. Shaders, fonts, images and styles hot-reload too. A broken module shows an error overlay while the last valid scene keeps rendering.
 
 ## Packages and plugins
 
@@ -423,7 +427,11 @@ The framework owns everything that defines its behavior and depends on external 
 | AccessKit | Desktop accessibility bridges | MIT / Apache-2.0 |
 | ThorVG | SVG and Lottie | MIT |
 | libwayland, xkbcommon | Wayland platform layer | MIT |
+| Fontconfig | System fonts and fallback on Linux | MIT-style |
+| esbuild, TypeScript, oxc | Build time only: bundling, type-checking, the TSX transform | MIT, Apache-2.0, MIT |
 | libspng or libpng, libjpeg-turbo, libwebp, libavif, dav1d | Image codecs | Permissive (verify each) |
+
+Pinned versions are in [`third_party/VERSIONS.md`](../third_party/VERSIONS.md).
 
 Rules:
 
@@ -469,14 +477,46 @@ Budgets are enforced in CI with benchmarks from the first milestone. Targets mar
 
 &#91;embedded content: roadmap · slice, gate, 9 phases\]
 
+### Milestones
+
+| Milestone | Contents | Status |
+| --- | --- | --- |
+| M0.1, M0.2 | Runtime skeleton (threads and both schedulers, handles, the wire, Wayland, wgpu); hardening (idle frames, timers, backpressure) | Done, before the first tag |
+| M1, M1.1 | Text pipeline (Unicode, HarfBuzz, rasterizer and atlas, paragraph layout, hit testing); wire compatibility rules and continuous fuzzing | Done, `v0.1.0-m1` |
+| M2 | Layout (flex), measurement, layout animations, styles | Done, `v0.2.0-m2` |
+| M2.1 | Inheritance, direction and logical properties, per-side borders and corners | Done, `v0.2.1-m2.1` |
+| M2.2 | The benchmark guard (Callgrind baselines in CI) | Done, `v0.2.2-m2.2` |
+| M3a | Language binding plumbing: the IDL and generator, the engine interface on QuickJS-ng, the script host, `@axe/core`, `axe-run` | Done, `v0.3.0-m3a` |
+| M3a.1, M3a.2 | Token scopes; merge cleanup (bench apps, C API evolution rules) | Done, `v0.3.1-m3a.1` |
+| M3b.1, M3b.2 | Signals and components (`@axe/ui`); the TSX transform, templates and the language benchmarks | Done, `v0.3.2-m3b.2` |
+| M3b.3 | Hot reload | Next |
+| M3c | The core's frame cost (below) | Planned |
+| M4 | Input, scrolling and virtualized lists | Planned |
+
+**M3c, the core's frame cost.** The language benchmarks showed that the core, not JS, misses refreshes on large scenes: it rebuilds and re-encodes the whole display list every frame. M3c makes the core's frame cost follow what changed:
+
+- **Culling** of nodes outside their surface or outside a clipping ancestor.
+- **An incremental display list** that re-encodes only changed subtrees.
+- **Layer caching with damage tracking** ("Rendering").
+
+It passes when the missed-refresh [tracked targets](ui.md#tracked-targets) are met, and when a new benchmark shows that the core's frame time scales with the number of changed nodes, not the total.
+
+### The vertical slice
+
 The vertical slice is a thin cut through phases 1 to 4 on Wayland: one window, all three threads plus the single-threaded scheduler, the command buffer, signals, a styled rect, one paragraph, an iOS-physics scroll view, a spring, and one automation command driving it headlessly. The slice also runs the language benchmarks and a minimal second binding. Breadth starts only after it passes the gate. The semantics tree starts in phase 3 and IME in phase 5, never later.
 
 ## Open questions
 
 - [ ] Open-source license: GPLv3, AGPLv3 or source-available with a revenue threshold?
-- [x] Decided: C23, built with Clang on every platform (clang-cl on Windows).
-- [x] Decided: mobile accessibility is a requirement. AccessKit has an Android adapter and a basic iOS adapter; gaps get own bridge code.
 - [ ] Numeric targets for input latency, startup, memory and size, set after the slice. Frame and latency requirements are decided (see Performance).
-- [x] Decided: pushes may interrupt interactive pops (see Routing).
-- [x] Decided: X11 is supported from the first release, without layer-shell.
-- [x] Decided: the language benchmarks' thresholds were set in milestone 3b before they ran; results and their reading are in [ui.md](ui.md), "Benchmarks" (TypeScript on QuickJS-ng stays).
+
+Decided:
+
+- [x] C23, built with Clang on every platform (clang-cl on Windows).
+- [x] Mobile accessibility is a requirement. AccessKit has an Android adapter and a basic iOS adapter; gaps get own bridge code.
+- [x] Pushes may interrupt interactive pops (see Routing).
+- [x] X11 is supported from the first release, without layer-shell.
+- [x] The language benchmarks' thresholds were set in milestone 3b before they ran. Outcome: TypeScript on QuickJS-ng stays, by the rule in "Language bindings": the update path passed (B2's update turn and update delay, and B3); the failures are on the creation side (B2's mount, the heap per row) or in the core (missed refreshes). Numbers in [ui.md](ui.md), "Benchmarks"; the failures are [tracked targets](ui.md#tracked-targets) for M3c and M4.
+- [x] The wire IDL is a custom line-based format ([idl.md](idl.md); [decisions.md](decisions.md), milestone 3a).
+- [x] Hot reload is in-process first; its socket comes with the automation protocol ([decisions.md](decisions.md), milestone 3b.1).
+- [x] JS-created surfaces (a `create_surface` op) come with multi-window apps, and an app manifest with packaging; until then `axe-run`'s options configure the window ([decisions.md](decisions.md), milestone 3a).
