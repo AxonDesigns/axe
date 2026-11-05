@@ -25,6 +25,7 @@ committed file differs, and `idl_generator` runs the generator's own tests
 | `src/wire/gen/wire_gen.h` | Per op, event and record: a struct of its fixed part; `_read` (zero-fills the fields an older writer didn't send) and `_write`; size accessors (`_header_size`, `_size`, `_<tail>_stride`); a `_tail` struct with `_tail_of`, which locates the variable data; `_check` for ops whose fields have constraints; `_put` to append an op or event. |
 | `src/wire/gen/wire_gen.c` | The `_check` and `_put` functions; `ui_wire_validate_commands` and the framing of every op and event; the style values' sizes, reader, writer and validators (`ui_wire_style_value_valid`, `ui_wire_style_token_value_valid`). |
 | `ts/packages/wire/src/gen/*.ts` | The same for TypeScript: enums (`ids.ts`), `CommandWriter` (`commands.ts`), `decodeEvent` (`events.ts`), style values with per-property value types and validators (`styles.ts`). |
+| `bindings/luau/lib/wire/gen/*.luau` | The same for Luau: enums (`ids.luau`), the writer's methods (`commands.luau`), `decode` (`events.luau`), style values and validators (`styles.luau`). |
 | `docs/command-buffer.md` | The command, `start_spring` property, event and op history tables, between `<!-- idl:NAME -->` markers. |
 
 The C API's `ui_cmd_*` functions (`src/wire/wire.c`) stay hand-written: they check their
@@ -39,7 +40,8 @@ arguments and build what an op needs (the string table of `set_text`, the split 
 - Indentation is spaces only; tabs are an error. A line indented under a top-level line
   belongs to it.
 - Names are `lower_snake_case`. The generator derives `camelCase` (TypeScript) and
-  `UPPER_CASE` (C constants) from them.
+  `UPPER_CASE` (C constants) from them; Luau takes them as they are, quoting the ones that are
+  keywords there (`["end"]`).
 - Every error names the file and line.
 
 ## Top-level statements
@@ -110,7 +112,7 @@ part is a multiple of 4.
 
 **`time`.** Times are nanoseconds of the animation clock since the app started. They fit a
 u64 but pass 2^53 after about 104 days, so languages without 64-bit integers read them
-rounded: TypeScript decodes a `time` to a `number` with rounding allowed, while a plain
+rounded: TypeScript and Luau decode a `time` to a number with rounding allowed, while a plain
 `u64` (a counter or id that must be exact) throws past 2^53.
 
 **What a field holds** (`=`): `count(<tail item>)` (the item's length in elements or bytes);
@@ -122,7 +124,7 @@ appended field is 0, as an older writer did, and the whole fixed part otherwise:
 words).
 
 **Checks** are the values the core accepts; anything else drops the op, the generated C
-`_check` reports it, and the TypeScript encoder throws a RangeError before writing:
+`_check` reports it, and the TypeScript and Luau encoders raise an error, writing nothing:
 
 | Check | Applies to | Meaning |
 | --- | --- | --- |

@@ -16,6 +16,7 @@ sys.path.insert(0, HERE)
 
 import axe_idl  # noqa: E402
 import idl_c  # noqa: E402
+import idl_luau  # noqa: E402
 import idl_model  # noqa: E402
 import idl_ts  # noqa: E402
 from idl_model import IdlError, compat, parse  # noqa: E402
@@ -469,6 +470,37 @@ class Generator(unittest.TestCase):
         ts = idl_ts.commands_ts(s)
         for r in s.commands:
             self.assertIn(f"  {idl_ts.camel(r.name)}(", ts)
+
+    def wire_schema(self):
+        with open(os.path.join(ROOT, "idl/wire.idl"), encoding="utf-8") as f:
+            return parse(f.read(), "idl/wire.idl")
+
+    def test_generated_luau_mentions_every_op_and_event(self):
+        s = self.wire_schema()
+        commands, events = idl_luau.commands_luau(s), idl_luau.events_luau(s)
+        for r in s.commands:
+            self.assertIn(f"function Writer.{r.name}(self", commands)
+        for r in s.events:
+            self.assertIn(f"  [{r.opcode}] = function(b, at)", events)
+
+    def test_luau_keywords_are_quoted(self):
+        # The IDL has names C and TypeScript take as they are, and Luau doesn't: `end`.
+        s = self.wire_schema()
+        self.assertIn('["end"] = 2', idl_luau.ids_luau(s))
+        self.assertIn('v["end"]', idl_luau.commands_luau(s))
+        self.assertEqual(idl_luau.key("start"), "start")
+        self.assertEqual(idl_luau.dot("v", "end"), 'v["end"]')
+        self.assertEqual(idl_luau.ident("end"), "end_")
+
+    def test_luau_names_cant_collide_with_the_idl(self):
+        # Generated code's own names are upper case or start with `_`; the IDL's can't.
+        s = self.wire_schema()
+        names = {f.name for r in s.commands for f in r.fields} | {t.name for r in s.commands for t in r.tail}
+        self.assertTrue({"b", "x", "ids", "at"} & names, "this test is about names that do collide")
+        commands = idl_luau.commands_luau(s)
+        self.assertNotIn("local ids", commands)
+        self.assertNotIn("local styles", commands)
+        self.assertNotIn(" in ipairs(ids) do x", commands)
 
     def test_compat_base_against_git(self):
         r = subprocess.run([sys.executable, "-I", os.path.join(HERE, "axe_idl.py"), "--check", "--compat-base", "HEAD"],

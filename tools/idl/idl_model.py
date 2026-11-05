@@ -1,7 +1,7 @@
 """Parser, layout and rule checks for the wire IDL (grammar: docs/idl.md).
 
 Everything here is pure: parse() turns text into a Schema, or raises IdlError naming the
-file and line. The emitters (idl_c, idl_ts, idl_docs) only read a checked Schema.
+file and line. The emitters (idl_c, idl_ts, idl_luau, idl_docs) only read a checked Schema.
 """
 
 from __future__ import annotations
@@ -742,6 +742,40 @@ class Parser:
                 if other.id == pid or other.name == name:
                     self.error(item, f"property {pid} `{name}` clashes with {other.id} `{other.name}`")
             self.schema.style_props.append(p)
+
+
+# ---- What every language's encoder needs -----------------------------------------------------
+
+
+def union_kind_of(r: Record, f: Field) -> TailItem | None:
+    """The union tail item `f` selects, if f is a union's kind field: its value comes from the
+    union value itself."""
+    return next((t for t in r.tail if t.kind == "union" and t.count_field == f.name), None)
+
+
+def user_fields(r: Record) -> list[Field]:
+    """The fields a caller gives: not padding, nor what the encoder derives."""
+    return [f for f in r.fields if not f.reserved and not f.assign and not union_kind_of(r, f)]
+
+
+def as_object(r: Record) -> bool:
+    """Ops with nested records or many fields take their fixed part as one object."""
+    return any(f.record for f in r.fields) or len(user_fields(r)) > 6
+
+
+def optional_tails(r: Record) -> set[str]:
+    """Tail items counted by an appended field: optional in a record, none when absent, so
+    code written before them still works."""
+    by_name = {f.name: f for f in r.fields}
+    return {t.name for t in r.tail if t.count_field in by_name and by_name[t.count_field].since}
+
+
+def short_header_fields(r: Record) -> list[Field]:
+    """As in the C generator: a record with a header(0) field writes only its original fields,
+    with header 0, while every appended field is 0."""
+    if not any(f.assign == "header0" for f in r.fields):
+        return []
+    return [f for f in r.fields if f.since]
 
 
 # ---- Layout and rules ---------------------------------------------------------------------

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generates the wire codec, the TypeScript wire package and the documentation tables from
+"""Generates the wire codec, the TypeScript and Luau wire packages and the documentation tables from
 idl/wire.idl (grammar and outputs: docs/idl.md).
 
     python3 -I tools/idl/axe_idl.py                     write every output
@@ -19,6 +19,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import idl_c  # noqa: E402
 import idl_docs  # noqa: E402
+import idl_luau  # noqa: E402
 import idl_model  # noqa: E402
 import idl_ts  # noqa: E402
 
@@ -34,6 +35,7 @@ def outputs(schema: idl_model.Schema, root: str) -> dict[str, str]:
         "src/wire/gen/wire_gen.c": idl_c.gen_c(schema),
     }
     out.update(idl_ts.files(schema))
+    out.update(idl_luau.files(schema))
     for path, render in idl_docs.documents(schema).items():
         with open(os.path.join(root, path), encoding="utf-8") as f:
             out[path] = render(f.read())
