@@ -3,6 +3,206 @@
 Choices the architecture document leaves open, recorded as they are made. Newest
 milestone first.
 
+## GPU spike: device loss and off-thread object creation
+
+Before M3c. Nothing here changes production behavior except the device-loss fix: the tracing is one
+relaxed load per tracepoint, and the device probes add about 1.2 µs a frame. Callgrind holds every
+case within 2% of its baseline.
+
+### The results
+- **The admin thread stays, and the fallback is rejected.** wgpu holds no lock across a compile. A
+  pipeline took 530 ms and the worst submit 7.6 ms; with 5.5 s pipelines, the worst submit took
+  1.9 ms. The fallback, on the render thread, missed 61% to 81% of refreshes.
+- **The pass criterion is met at 60 Hz on the GPU, not shown at 144 Hz, and not met on lavapipe.**
+  See below; none of the three is a lock.
+- **Device loss:** the app now survives a loss the driver reports from present. A loss it reports
+  from submit or acquire still aborts, inside wgpu-native. **That needs a decision:** a two-site
+  patch closes it, and it's kept unapplied, below.
+
+### Off-thread creation: what was measured
+`bench_gpu_admin` runs the real app and renderer in a headless sway: `list10k` with 100 rows, writing
+100 items a frame. A second thread creates objects on the renderer's device for all 60 s of a run,
+one at a time, as one admin thread would: 20 shaders in a loop, 15 small and 5 large, each a shader
+module, a render pipeline and a compute pipeline, with error scopes around each. Every constant
+changes on every compile, and each process seeds them afresh.
+
+Frame time is `FRAME_BEGIN` to `FRAME_END`. Present intervals come in whole refreshes, so they'd hide
+any rise below one. The rise compares medians across runs. Runs alternate with baselines.
+
+| Config | Runs each | Frame p99, baseline → admin | Rise | Missed, baseline → admin | Criterion |
+| --- | --- | --- | --- | --- | --- |
+| GTX 1650, 60 Hz | 9 | 3.27 → 3.43 ms | +0.16 ms | 7 of 33,120 → 6 of 33,130 | Met |
+| GTX 1650, "144 Hz" | 11 and 7 | 2.88 → 3.44 ms | +0.56 ms | 3.06% → 5.19% (medians) | Frame time met; missed refreshes not shown |
+| lavapipe, 60 Hz, 1024x768 | 3 | 11.77 → 14.09 ms | +2.32 ms | 0 of 11,225 → 13 of 11,211 | Not met |
+
+| Single call, GTX (ms) | Acquire p99, baseline → admin | Submit p99 | Swap p99 | Worst of any under admin |
+| --- | --- | --- | --- | --- |
+| 60 Hz | 0.129 → 0.180 | 0.275 → 0.329 | 0.265 → 0.280 | submit 7.6, swap 7.8 |
+| "144 Hz" | 0.125 → 0.161 | 0.252 → 0.291 | 0.235 → 0.261 | submit 3.2, swap 3.7 |
+
+**No lock.** A lock held across a compile would block submit, acquire or present for as long as the
+compile: hundreds of milliseconds here. The calls rose by at most 0.05 ms at p99. The worst single
+call in the stress runs, with 5.5 s pipelines, was 1.9 ms. `--same` makes about 90 times more objects,
+so 90 times more trips through wgpu's locks, with no rise (+0.08 ms at 60 Hz, one run).
+
+**The bench can see a stall.** With pipelines on the render thread, unbudgeted, it reports 84% to 92%
+missed and a p99 of 400 to 1,000 ms.
+
+**144 Hz can't be settled here.** The miss rate is mostly this setup's own:
+- wlroots' headless output paces itself with a timer in whole milliseconds, so "144 Hz" is a 6 ms
+  timer that measures about 160 Hz.
+- Baselines with no second thread missed 1.4% to 9.8%, with frames at 1.6 ms against a 6.2 ms period.
+  The same scene misses nothing at 60 Hz.
+- Over 18 runs, the medians are 3.06% with no second thread and 5.19% with one (rank test p = 0.14).
+  A rise of a point or two may be there. It can't be told from the spread, so "0 added" isn't shown.
+- p99 frame time stays under 4.2 ms in every one of these runs, so frames aren't late when they finish.
+  Whatever delays them isn't in the time we measure.
+- A guess that it's scheduling didn't hold up: the second thread at `nice 19` changed nothing
+  (median 5.37%, p = 0.85), so that isn't a fix to reach for.
+
+**lavapipe's rise is CPU, not locks.** A thread that spins and calls no GPU function costs as much:
++6.11 ms and 6 missed in one run. Eight rasterizer threads compete with it for the machine. lavapipe
+is for tests, not for frame rates.
+
+### The fallback
+Shader modules off-thread, pipelines on the render thread after present, starting only if their
+predicted cost fits half a refresh (8 ms, or 3 ms at 144 Hz). What can't fit runs after 8 windows.
+
+| Config | Missed | Frame p99 | Shaders forced past the budget |
+| --- | --- | --- | --- |
+| GTX 1650, 60 Hz | 61.2% | 859 ms | 554 of 560 |
+| GTX 1650, "144 Hz" | 80.8% | 818 ms | 722 of 728 |
+| lavapipe, 60 Hz | 64.3% | 355 ms | 381 of 1,539 |
+
+It can't work on this GPU: a small shader's two pipelines take 17 ms, already past any budget at
+144 Hz. It relied on driver caches, and a first compile has none.
+
+### What compiles cost
+| Shader, on the GTX 1650 | Module | Render pipeline | Compute pipeline |
+| --- | --- | --- | --- |
+| Small, about 25 lines | 0.3 ms | 11 ms | 7 ms |
+| Large, about 600 lines | 5 ms | 530 ms | 520 ms |
+| Stress, about 2,000 lines | 17 ms | 5.5 to 7 s | 5.5 to 7 s |
+| Small, cached | 0.3 ms | 0.2 ms | 0.1 ms |
+| Large, cached | 5 ms | 2.5 ms | 2.2 ms |
+
+lavapipe takes 195 ms and 3.5 s for the large and stress pipelines, and caches nothing here.
+The bench's seed per process exists because a first version reused constants between runs, and
+NVIDIA's disk cache cut a small pipeline from 10 ms to 0.6 ms.
+
+### What this changes
+- **M5a's pass criterion needs a better place to run.** The 144 Hz half can't be judged in a headless
+  sway. See "Open".
+- **M3c's has the same problem,** and sooner. Its tracked target is at most 0.5% missed at 144 Hz, and
+  this setup misses up to 9.8% with 100 rows, with frames well inside the budget. It also runs at
+  160 Hz, so `docs/ui.md`'s "144 Hz" figures are about 160 Hz. Settle how to measure before M3c.
+- **M5a's save to pixels, 100 ms at p95, holds only for small shaders.** The large one takes about
+  a second for its two pipelines. The criterion should name a reference shader.
+- **Cost grows faster than size:** twice the lines took 3 times as long, and 4 times the lines
+  10 times as long. One shader can hold the admin thread for seconds, so its queue needs
+  priorities and cancellation, or a hot reload waits behind a build.
+- **Modules are cheap and pipelines aren't,** by 30 to 100 times. So a shader's errors can be
+  reported in milliseconds, long before its pipelines are done, and validation can come first.
+- **The disk cache pays off more than planned:** 45 to 200 times on the GTX, where M5h asks for an
+  80% cut. It's worth more than the plan assumed, though its place in the order needn't change.
+- **Not measured: the first use of a new pipeline.** This bench never draws with what it creates. A
+  driver may do lazy work at the first bind, on the render thread. M5a should measure that first.
+- **Any lavapipe window test needs sway's pixman renderer** (below), M3c's entry tests included.
+
+### Device loss
+**The bug was not what the design said.** It said a real loss looks silently ignored. Testing
+showed that on a loss, wgpu-native:
+- never calls `on_device_lost` by itself: it hasn't registered wgpu-core's lost closure;
+- reports a loss through it only from a few calls, such as creating a command encoder. Queue writes
+  and `Finish` report a validation error, "Parent device is lost", because `handle_error` can't see
+  through wgpu-core's transparent error wrappers;
+- panics, which aborts the process, in `wgpuQueueSubmit`, `wgpuSurfaceGetCurrentTexture`,
+  `wgpuSurfaceConfigure` and `wgpuTextureRelease` on an unpresented image, and on dropping a device
+  or a surface holding an image, since those wait or assert.
+
+So a flag alone would never have run, as a panic got there first.
+
+**What the fix does:**
+- **Tells our destroy apart** with a flag set just before it, as a real loss has the same reason.
+- **The callback only sets a flag.** It runs on whichever thread hit the error, inside wgpu's error
+  lock, so reporting happens on the render actor.
+- **`device_alive()` asks before anything that would panic,** by creating and dropping a command
+  encoder, the cheap call that reaches the callback: about 600 ns, twice a frame. The flag alone
+  isn't enough before a submit, since most calls don't set it.
+- **Stops, and reports once:** `UI_TRACE_DEVICE_LOST` (hooks version 4) and the log, so stderr by
+  default. It doesn't send `RENDER_FAILED`, which quits the app.
+- **Frames finish undrawn.** A window's frames are skipped, which keeps the core applying commands and
+  logic running. A skipped frame normally retries at once, so the render actor waits 16 ms instead,
+  or the core and render threads would spin. CPU while lost matches a healthy run (11.3 against
+  11.8 s of user time over 20 s). Atlas updates are dropped and captures return `UI_ERR_GPU`.
+- **Keeps what can't be released.** An image acquired before the loss, the surface holding it, and the
+  device itself are never released. Each would panic. They're lost until the process exits, and
+  `abandoned_devices` keeps leak checkers quiet. M5h will have to accept that a recovery leaks them.
+
+`ui_render_test_lose_device` (in `render.h`) destroys the device without saying it's ours, which is
+exactly the state a real loss leaves, so every panic stays armed. `test_device_loss` loses it between
+frames from another thread, during a frame on the render thread, and before shutdown, under both
+schedulers. It checks that frames, logic, commands and text carry on and teardown is clean. It passes
+in debug, release, asan and tsan.
+
+**That test can't reach a driver error,** so `tools/vk-lost-layer` is a Vulkan layer that returns
+`VK_ERROR_DEVICE_LOST` from a chosen call, needing no real GPU hang. Same result on the GTX 1650 and
+on lavapipe:
+
+| First call to see the loss | This branch | With the patch |
+| --- | --- | --- |
+| `vkQueuePresentKHR` | Survives | Survives |
+| `vkQueueSubmit` | **Aborts** | Survives |
+| `vkGetSemaphoreCounterValue` (a poll, inside wgpu's submit) | **Aborts** | Survives |
+| `vkAcquireNextImageKHR` | **Aborts** | Survives |
+
+Which call sees a real loss first depends on the driver, and submit is a likely one. No real GPU hang
+was tried: it would risk the desktop.
+
+C can't catch those panics. `tools/vk-lost-layer/wgpu-native-device-lost.patch` changes two calls,
+`wgpuQueueSubmit` and `wgpuSurfaceGetCurrentTexture`, to report through the error sink instead. It
+isn't applied: wgpu-native is a pinned, unmodified submodule, so applying it means a fork or a
+patch step. The alternative is to report it upstream and accept the abort until a release has it.
+
+A loss first seen on another thread, as M5a's admin thread could, also races the probe: it can
+happen just after a probe passes. The patch closes that too.
+
+### The run that took the machine down
+The first full run filled the RAM and froze the desktop, and the machine needed a hard reset. It
+wasn't Axe. A software client sends `wl_shm` frames, and wlroots' Vulkan renderer, as sway ran
+here, keeps all of them: about 230 MB/s at 1024x768, in sway, outside any limit on the bench.
+With sway's pixman renderer the same run is flat at 33 MB. So:
+- software runs use pixman, and GPU runs need Vulkan for their dmabufs;
+- `run_gpu_admin.sh` caps each run at 3 GiB with no swap and stops everything below 3 GiB available,
+  which also catches memory outside the cap, such as this;
+- results and driver caches go to disk. `/tmp` is RAM here, and swap is compressed RAM, so a full
+  machine freezes with no OOM kill.
+
+The runs after these changes stayed above 4.8 GiB available, and none peaked above 500 MB.
+
+### Other choices
+- **Phases for single calls are `ACQUIRE`, `SUBMIT` and `SWAP`,** nested in `ENCODE` and `PRESENT`.
+  `PRESENT` already means more than the call. `ACQUIRE` covers an offscreen target too, which is
+  what lets the test lose the device mid-frame.
+- **`ui_render_native_device` is a `void *`,** so `render.h` stays free of WebGPU types. Only this bench
+  uses it, and it's the one bench that sees `webgpu.h`.
+- **The fallback's window is the `FRAME_END` hook,** which runs on the render thread right after
+  present, so the fallback needed no code in the renderer.
+
+### Open
+- [ ] **wgpu-native:** apply the patch, or report it upstream and accept the abort?
+- [ ] **How to measure 144 Hz.** A real display at a true rate, or a compositor with a finer timer.
+  M3c's tracked targets and M5a's criterion both depend on it.
+- [ ] **What delays frames at "144 Hz"** with frame time well inside the budget. It may be this
+  headless setup, or it may be Axe's pacing. A measure from frame callback to `FRAME_BEGIN` would tell.
+
+Run it, on every wgpu upgrade:
+
+```sh
+bench/run_gpu_admin.sh          # about 35 minutes, results under build/gpu-admin
+tools/vk-lost-layer/run.sh      # about 1 minute
+```
+
 ## Milestone 3b.5: a second language binding (Luau)
 
 ### The result

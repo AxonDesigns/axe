@@ -21,7 +21,7 @@ The guiding rule is no shortcuts: decisions that are expensive to retrofit (thre
 | Area | Decision |
 | --- | --- |
 | Core language | C23 built with Clang everywhere (clang-cl on Windows), linking a C++ runtime (HarfBuzz, ThorVG) and Rust crates (wgpu-native, AccessKit) |
-| Threads | Core (OS main thread), logic (JS), render (sole GPU owner); collapsible to one thread |
+| Threads | Core (OS main thread), logic (JS), render (the GPU's owner); collapsible to one thread. One GPU admin thread creates objects, with the GPU layer |
 | JS engine | QuickJS-ng behind a strict engine interface; kept after the language benchmarks (M3b) |
 | Authoring | Language-agnostic C API and wire protocol; TypeScript first (fine-grained signals, TSX compiled to templates), Dart possible later; retained-mode scene, styles as objects |
 | Wire IDL | A custom line-based IDL ([idl.md](idl.md)) generating the C codec, the public enums, the TypeScript encoders and decoders, and the docs' tables |
@@ -150,15 +150,35 @@ Styles are typed objects:
 
 ## Rendering
 
-All GPU work happens on the render thread through the standard webgpu.h, implemented by wgpu-native. Code targets the standard header only; implementation-specific extensions sit behind capability checks.
+All GPU work happens on the render thread through the standard webgpu.h, implemented by wgpu-native, with one exception: the GPU admin thread creates objects. Encoding, submission and surface calls stay on the render actor. Code targets the standard header only; implementation-specific extensions sit behind capability checks.
+
+**The admin-thread exception.** wgpu-native has no asynchronous pipeline creation, and a driver compile takes 10 ms to several seconds, so on the render thread it stalls every surface. One thread under `src/render/` creates shader modules, pipelines and large resources, and it alone uses error scopes, which are one device-wide stack. It runs inline under the single scheduler. The GPU spike measured it ([decisions.md](decisions.md), "GPU spike"): wgpu holds no lock across a compile.
 
 - **Primitives.** Rounded rects, borders, shadows, gradients and images use analytic signed-distance shaders in large instanced batches.
 - **Paths.** Arbitrary paths are tessellated on the CPU first; a compute-based path renderer may follow.
 - **Compositing layers.** Animated subtrees, opacity groups, blurs and backdrop filters render into cached textures, so transform and opacity animations are recomposites.
-- **Damage tracking** limits redraws to changed regions.
+- **Damage tracking** limits redraws to changed regions. Each surface renders into a persistent back store, a retained texture blitted to the swapchain, because partial redraw needs last frame's pixels and `encode` clears the swapchain every frame. Damage has two sources: node changes, and external damage, a new resource version with a sub-rect, since GPU output changes with no scene change. A node that reads its backdrop inflates the damage under it by its radius.
 - **Frame pacing** uses each platform's timing source: Wayland frame callbacks and presentation-time, the DXGI frame-latency waitable object, CVDisplayLink. Variable refresh rates are supported, and the animation clock receives the predicted present time.
-- **Pipeline cache.** All pipeline variants are precompiled at startup to avoid shader-compile stalls.
+- **Pipeline cache.** All built-in pipeline variants are precompiled at startup to avoid shader-compile stalls. User shaders compile at load, on the admin thread.
+- **A lost device** stops rendering and leaves the app running. The render actor stops submitting and reports it once, through the `UI_TRACE_DEVICE_LOST` hook and the log. Frames finish undrawn at about 60 Hz, so commands keep applying and logic keeps running, and windows keep their last frame. Recovery is M5h. wgpu-native aborts the process if the driver reports the loss from inside submit or acquire ([decisions.md](decisions.md), "GPU spike").
 - **Renderer-agnostic display list.** The display list does not depend on WebGPU, so a CPU reference renderer can be added later for deterministic golden tests and as a last-resort fallback.
+
+## GPU layer
+
+Axe can host GPU-heavy creative apps of many kinds (drawing, 3D modeling, texture painting, compositing, data visualization) through a layer beside the display list, not inside it: the list stays renderer-agnostic and only names handles. Logic declares shaders, resources and graphs once as data, and the core and the render actor run them with no JS on the frame path. [gpu-design.md](gpu-design.md) is the design; it's planned as M5a to M5h, and none of it is built yet.
+
+| Part | What it is |
+| --- | --- |
+| AXSL | The shading language: WGSL function bodies, copied verbatim, under a small declarative header. Compiled to WGSL in C, on the job pool |
+| GPU admin thread | The only new thread: creates shader modules, pipelines and large resources (see "Rendering") |
+| Resource table | One generational handle kind for textures, buffers, meshes, programs and graphs |
+| Work graph | A retained list of passes with triggers, dirty regions and a budget class. wgpu inserts barriers, so it's a scheduler, not a classic frame graph |
+| Blobs | A side channel for large bytes. Ops stay small; a mesh or texture travels as a detached buffer that an op names by ID |
+
+- **The two-workload rule.** A feature enters Axe only if at least two workloads need it, and only if apps couldn't build it as a shader plus a graph pass.
+- **GPU work reaches the screen through the FIFO inbox.** The mailbox may replace a list, so ops don't ride on it: each list names the `gpu_seq` it needs, as it does `atlas_seq`.
+- **Determinism carries over.** `TIME` and `FRAME` come from the display list, so the paused and stepped clock applies, and compiles count as preparation. `TIME` wraps at 3,600 s.
+- **The CPU renderer draws a declared fallback color** instead of running a shader; lavapipe covers software execution for goldens.
 
 ## Text
 
@@ -491,8 +511,12 @@ Budgets are enforced in CI with benchmarks from the first milestone. Targets mar
 | M3b.1, M3b.2 | Signals and components (`@axe/ui`); the TSX transform, templates and the language benchmarks | Done, `v0.3.2-m3b.2` |
 | M3b.3 | Hot reload | Done |
 | M3b.4 | Hot reload follow-ups: stable modules as boundaries, the release suite in CI, owner-less warnings, top-level await | Done |
-| M3c | The core's frame cost (below) | Next |
+| M3b.5 | A second language binding: Luau, with a runtime host of its own | Done, `v0.3.5-m3b.5` |
+| GPU spike | Device loss, and whether object creation can leave the render thread ([decisions.md](decisions.md), "GPU spike") | Done |
+| M3c | The core's frame cost, the seven GPU foundations and three entry tests (below) | Next |
+| M5a | The shader node: the riskiest slice of the GPU layer | Planned |
 | M4 | Input, scrolling and virtualized lists | Planned |
+| M5b to M5h | Textures and effects, compute and the graph, budgets and slices, geometry and 3D viewports, picking and pointer streams, reference proofs, recovery and polish | Planned |
 
 **M3c, the core's frame cost.** The language benchmarks showed that the core, not JS, misses refreshes on large scenes: it rebuilds and re-encodes the whole display list every frame. M3c makes the core's frame cost follow what changed:
 
@@ -502,6 +526,26 @@ Budgets are enforced in CI with benchmarks from the first milestone. Targets mar
 
 It passes when the missed-refresh [tracked targets](ui.md#tracked-targets) are met, and when a new benchmark shows that the core's frame time scales with the number of changed nodes, not the total.
 
+**M3c also lays the GPU layer's foundations,** since retrofitting them after an incremental display list exists would mean reworking it ([gpu-design.md](gpu-design.md), section 4):
+
+| Foundation | Why |
+| --- | --- |
+| A persistent back store per surface | Partial redraw, backdrop reads and window capture need retained pixels |
+| External damage: an edge from resource version to node, with a sub-rect | GPU output changes with no scene change |
+| Damage inflation: a per-node `reads_backdrop(radius)` | A backdrop reader depends on everything under it |
+| Frame demand as reasons: a reason mask and an active list, replacing `root->animating` | The scan is O(all nodes), and continuous nodes and GPU work must join it |
+| Pinned resources in retained lists: `protect_epoch` generalized | A retained segment can name a texture for many frames |
+| `gpu_seq` beside `atlas_seq`, keeping the FIFO rule | The mailbox may replace a list, so work can't ride on it |
+| Extensible batch kinds: list segments can hold pipeline changes and pass breaks | `UI_DL_SHADER` and `UI_DL_EFFECT` follow soon |
+
+M3c starts with three entry tests, since the code can't settle them:
+
+1. The back-store blit adds no visible latency and passes byte-identical goldens.
+2. Partial redraw works on `BGRA8UnormSrgb` and `RGBA8UnormSrgb` targets alike.
+3. `wl_surface.damage` helps or not on KWin once the whole swapchain image is redrawn each frame.
+
+M5a comes after M3c, so M3c tests external damage with a fake resource version. M5a to M5h are specified in [gpu-design.md](gpu-design.md), section 3; only M5f waits for M4.
+
 ### The vertical slice
 
 The vertical slice is a thin cut through phases 1 to 4 on Wayland: one window, all three threads plus the single-threaded scheduler, the command buffer, signals, a styled rect, one paragraph, an iOS-physics scroll view, a spring, and one automation command driving it headlessly. The slice also runs the language benchmarks and a minimal second binding. Breadth starts only after it passes the gate. The semantics tree starts in phase 3 and IME in phase 5, never later.
@@ -510,6 +554,14 @@ The vertical slice is a thin cut through phases 1 to 4 on Wayland: one window, a
 
 - [ ] Open-source license: GPLv3, AGPLv3 or source-available with a revenue threshold?
 - [ ] Numeric targets for input latency, startup, memory and size, set after the slice. Frame and latency requirements are decided (see Performance).
+- [ ] Will Axe run shaders from strangers, such as a marketplace? If so, it needs a strict mode that rejects unbounded loops, and possibly helper-process compilation.
+- [ ] Should editing layers stay in `rgba16float`, or does color banding demand `rgba32float` or `rgba16unorm`? M5g can compare them on a gradient.
+- [ ] Is 2 GiB the right default GPU budget? M5d can tune it. No standard API reports VRAM size.
+- [ ] Should tile logic become `@axe/tiles`, or stay as example code? Decide after M5g.
+- [ ] Are the names AXSL and `.axsl` acceptable?
+- [ ] When does HDR surface output matter? The back store allows it, but Wayland color management is not in these milestones.
+- [ ] Should M5f's stream replace the planned render-thread inking path, or feed it? The design recommends replacing it.
+- [ ] Is ThorVG due before M5e? It can use M5b's texture resources and the internal seam at any point after M5b.
 
 Decided:
 
