@@ -68,14 +68,38 @@ function(axe_ts_bundle output entry)
     add_custom_command(
         OUTPUT "${output}"
         COMMAND "${AXE_ESBUILD}" "${bundle_entry}" --bundle --format=esm --platform=neutral --target=es2023
-                --keep-names --external:axe:host --external:axe:test --external:axe:stall --log-level=warning
+                --keep-names --minify-syntax --external:axe:host --external:axe:test --external:axe:stall --log-level=warning
                 "--tsconfig=${AXE_TS_DIR}/tsconfig.json"
-                "--define:AXE_SOURCE_DIR=\"${PROJECT_SOURCE_DIR}\"" "--outfile=${output}"
+                "--define:AXE_SOURCE_DIR=\"${PROJECT_SOURCE_DIR}\"" --define:AXE_DEV=false "--outfile=${output}"
         DEPENDS "${entry}" ${local_sources} ${mirror_depends} ${AXE_TS_DEPENDS} ${ARG_DEPENDS}
         WORKING_DIRECTORY "${AXE_TS_DIR}"
         COMMENT "Bundling ${entry}"
         VERBATIM)
 endfunction()
+
+# Hot reload (docs/ui.md): the @axe/* packages as modules, not hot themselves. Code splitting gives
+# each specifier an entry over shared chunks, so the packages' state is single.
+if(AXE_DEV)
+    set(AXE_DEV_PACKAGES "${CMAKE_BINARY_DIR}/dev/packages")
+    add_custom_command(
+        OUTPUT "${AXE_DEV_PACKAGES}.stamp"
+        COMMAND "${CMAKE_COMMAND}" -E rm -rf "${AXE_DEV_PACKAGES}"
+        COMMAND "${AXE_ESBUILD}"
+                ui=packages/ui/src/index.ts jsx-runtime=packages/ui/src/jsx-runtime.ts hot=packages/ui/src/hot.ts
+                core=packages/core/src/index.ts internal=packages/core/src/internal.ts
+                wire=packages/wire/src/index.ts testing=packages/testing/src/index.ts
+                --bundle --splitting --format=esm --platform=neutral --target=es2023 --keep-names
+                --external:axe:host --external:axe:test --external:axe:stall --log-level=warning
+                "--tsconfig=${AXE_TS_DIR}/tsconfig.json" "--chunk-names=chunk-[hash]"
+                "--define:AXE_SOURCE_DIR=\"${PROJECT_SOURCE_DIR}\"" --define:AXE_DEV=true
+                "--outdir=${AXE_DEV_PACKAGES}"
+        COMMAND "${CMAKE_COMMAND}" -E touch "${AXE_DEV_PACKAGES}.stamp"
+        DEPENDS ${AXE_TS_DEPENDS}
+        WORKING_DIRECTORY "${AXE_TS_DIR}"
+        COMMENT "Building the @axe packages for hot reload"
+        VERBATIM)
+    add_custom_target(axe_dev_packages DEPENDS "${AXE_DEV_PACKAGES}.stamp")
+endif()
 
 # axe_ts_bytecode(<output.axbc> <input.js>)
 function(axe_ts_bytecode output input)

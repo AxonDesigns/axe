@@ -54,6 +54,8 @@ export class Owner {
   declare onError?: ((error: unknown) => void) | null;
   /** For error reports: a component's name. */
   declare name?: string | null;
+  /** Development only: this owner's hot reload scope (hotcore.ts). */
+  declare hot?: unknown;
   /** Context values: an object whose prototype chain is the owners' (context.ts). */
   context: Record<symbol, unknown> | null;
   flags = 0;
@@ -92,12 +94,36 @@ function adopt(child: AnyOwner, parent: AnyOwner | null): void {
 }
 
 let currentOwner: AnyOwner | null = null;
+let errorSink: ((error: unknown, owner: Owner | null) => void) | null = null;
 let listener: Computation | null = null;
 /** The run in progress: sources record it when tracked, so a run links each source once. */
 let runId = 0;
 /** The last link the running computation confirmed. */
 let cursor: Link | null = null;
 let runCount = 0;
+
+/** @internal Development only: the nearest hot reload scope at or above `o`. */
+export function nearestHot(o: AnyOwner | null): unknown {
+  for (; o; o = o.parent) {
+    const h = (o as Owner).hot;
+    if (h) return h;
+  }
+  return null;
+}
+
+/** @internal Development only: makes `o` the current owner, for a module's top level, which
+ * isn't one function call. Returns the one it replaced. */
+export function swapOwner(o: Owner | null): Owner | null {
+  const prev = currentOwner as Owner | null;
+  currentOwner = o;
+  return prev;
+}
+
+/** @internal Development only: errors no boundary takes go to `fn` instead of being reported,
+ * while an update re-runs components. */
+export function setErrorSink(fn: ((error: unknown, owner: Owner | null) => void) | null): void {
+  errorSink = fn;
+}
 
 /** The owner code is running under (components, effects, control flow), or null. */
 export function getOwner(): Owner | null {
@@ -249,6 +275,10 @@ export function handleError(error: unknown, owner: AnyOwner | null, what: string
     } catch (e) {
       error = e; // the boundary itself failed: the next one up gets that
     }
+  }
+  if (AXE_DEV && errorSink) {
+    errorSink(error, owner as Owner | null);
+    return;
   }
   report(error, owner, what);
 }

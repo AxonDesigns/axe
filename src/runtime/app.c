@@ -225,6 +225,8 @@ ui_result ui_image_write_ppm(const ui_image *image, const char *path) {
 
 void ui_app_get_stats(const ui_app *app, ui_app_stats *out) { *out = app->core.stats; }
 
+void ui_app_request_turn(ui_app *app) { ui_core_request_turn(&app->core); }
+
 ui_result ui_app_step_core(ui_app *app) {
     if (app->running) return UI_ERR_WRONG_STATE;
     app->sched->wait_prepared(app);

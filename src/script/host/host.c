@@ -73,6 +73,9 @@ struct ui_script_host {
     rejection *rejections;   // unhandled since the last checkpoint
     uint32_t rejection_count, rejection_capacity;
     uint64_t task_start;
+#ifdef AXE_DEV
+    ui_dev *dev;
+#endif
 };
 
 ui_js *ui_script_host_engine(ui_script_host *h) { return h->js; }
@@ -583,6 +586,9 @@ static bool install(ui_script_host *h) {
 #endif
     for (uint32_t i = 0; ok && i < h->arg_count; i++)
         ok = ui_js_set_index(js, args, i, ui_js_string(js, h->args[i], strlen(h->args[i])));
+#ifdef AXE_DEV
+    if (h->dev) ok = ok && ui_dev_install(h->dev, exports);
+#endif
     ok = ok && ui_js_set(js, exports, "args", args) && ui_js_define_module(js, "axe:host", exports);
     return ok;
 }
@@ -607,6 +613,16 @@ static uint8_t *read_file(const char *path, size_t *size) {
     return data;
 }
 
+#ifdef AXE_DEV
+static char *dev_resolve(void *user, const char *base, const char *specifier) {
+    return ui_dev_resolve(((ui_script_host *)user)->dev, base, specifier);
+}
+
+static bool dev_load(void *user, const char *name, ui_js_module_source *out) {
+    return ui_dev_load(((ui_script_host *)user)->dev, name, out);
+}
+#endif
+
 ui_result ui_script_host_create(const ui_script_desc *desc, const ui_script_env *env, ui_script_host **out) {
     ui_script_host *h = calloc(1, sizeof *h);
     if (!h) return UI_ERR_OUT_OF_MEMORY;
@@ -629,21 +645,36 @@ ui_result ui_script_host_create(const ui_script_desc *desc, const ui_script_env 
     }
     const uint8_t *bytes = desc->bundle;
     size_t size = desc->bundle_size;
-    if (r == UI_OK && desc->bundle_path) {
+    bool has_bundle = true;
+#ifdef AXE_DEV
+    ui_dev_channel *channel = h->internal ? h->internal->dev : NULL;
+    if (channel) has_bundle = false;
+#endif
+    if (r == UI_OK && has_bundle && desc->bundle_path) {
         bytes = h->file = read_file(desc->bundle_path, &size);
         if (!h->file) {
             UI_ERROR(env->log, MODULE, "cannot read the bundle %s", desc->bundle_path);
             r = UI_ERR_IO;
         }
     }
-    if (r == UI_OK && !bytes) r = UI_ERR_INVALID_ARGUMENT;
-    if (r == UI_OK) {
+    if (r == UI_OK && has_bundle && !bytes) r = UI_ERR_INVALID_ARGUMENT;
+    if (r == UI_OK && has_bundle) {
         const char *message;
         r = ui_script_bundle_open(bytes, size, &h->code, &h->code_size, &h->bytecode, &message);
         if (r != UI_OK) UI_ERROR(env->log, MODULE, "%s: %s", name, message);
     }
-    if (r == UI_OK)
-        r = ui_js_create(&(ui_js_desc){.memory_limit = desc->memory_limit, .user = h, .rejection = on_rejection}, &h->js);
+    ui_js_desc engine = {.memory_limit = desc->memory_limit, .user = h, .rejection = on_rejection};
+#ifdef AXE_DEV
+    // The hooks reach the dev table through the host, which creates it after the engine.
+    if (channel) {
+        engine.resolve = dev_resolve;
+        engine.load = dev_load;
+    }
+#endif
+    if (r == UI_OK) r = ui_js_create(&engine, &h->js);
+#ifdef AXE_DEV
+    if (r == UI_OK && channel) r = ui_dev_create(channel, h->js, &h->dev);
+#endif
     if (r == UI_OK) {
         uint32_t scope = ui_js_scope_open(h->js);
         if (!install(h)) {
@@ -675,8 +706,14 @@ void ui_script_host_destroy(ui_script_host *h) {
         ui_js_ref_free(h->js, h->dispatcher);
         ui_js_ref_free(h->js, h->flush);
         ui_js_ref_free(h->js, h->module_promise);
+#ifdef AXE_DEV
+        ui_dev_release(h->dev);
+#endif
         ui_js_destroy(h->js);
     }
+#ifdef AXE_DEV
+    ui_dev_destroy(h->dev);
+#endif
     for (uint32_t i = 0; i < h->arg_count; i++) free(h->args[i]);
     free(h->args);
     free(h->timers);
@@ -706,10 +743,20 @@ static const char *event_name(uint16_t type) {
 // The app's code: evaluated in the first turn, once the turn's time is known.
 static void load(ui_script_host *h) {
     h->loaded = true;
+    ui_js_module_source src = {h->code, h->code_size, h->bytecode};
+    const char *name = h->name;
+#ifdef AXE_DEV
+    // The hot runtime comes first, and it evaluates the app: an entry that doesn't build has
+    // something to show the error.
+    static const char bootstrap[] = "import \"@axe/ui/hot\";\n";
+    if (h->dev) {
+        src = (ui_js_module_source){bootstrap, sizeof bootstrap - 1, false};
+        name = "app:/__bootstrap__";
+    }
+#endif
     ui_js_val promise;
     task_begin(h);
-    ui_js_module_source src = {h->code, h->code_size, h->bytecode};
-    if (ui_js_eval_module(h->js, h->name, &src, &promise)) h->module_promise = ui_js_ref_new(h->js, promise, false);
+    if (ui_js_eval_module(h->js, name, &src, &promise)) h->module_promise = ui_js_ref_new(h->js, promise, false);
     else report_exception(h, "loading the app");
     task_end(h, "evaluating the app");
 }
@@ -747,6 +794,14 @@ void ui_script_host_turn(ui_script_host *h, const uint8_t *events, size_t size, 
         if (c.now_ns > h->turn_ns) h->turn_ns = c.now_ns;
     }
     if (!h->loaded) load(h);
+#ifdef AXE_DEV
+    // Updates apply at the turn's start, before its events, as a task of their own.
+    if (h->dev && ui_dev_take(h->dev)) {
+        task_begin(h);
+        if (!ui_dev_deliver(h->dev)) report_exception(h, "applying a hot update");
+        task_end(h, "applying a hot update");
+    }
+#endif
 
     // Zero copy: JS reads the buffer in place; it is detached when the turn ends.
     ui_js_val ab = ui_js_array_buffer_external(js, (void *)(uintptr_t)events, size, NULL, NULL);

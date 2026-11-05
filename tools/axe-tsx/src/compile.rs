@@ -21,6 +21,7 @@ use oxc_span::{GetSpan, Span};
 use oxc_syntax::scope::ScopeFlags;
 
 use crate::classify::{Class, Classifier};
+use crate::dev::{self, Dev};
 use crate::text::{js_string, jsx_text};
 
 pub struct Diag {
@@ -73,6 +74,8 @@ pub struct Compiler<'s, 'a> {
     in_text: u32,
     /// Spans compiled so far (a Text with none, and no options, is plain text).
     spans: u32,
+    /// With --dev.
+    pub dev: Option<Dev>,
 }
 
 impl<'s, 'a> Compiler<'s, 'a> {
@@ -101,7 +104,13 @@ impl<'s, 'a> Compiler<'s, 'a> {
             next_region: 1,
             in_text: 0,
             spans: 0,
+            dev: None,
         }
+    }
+
+    /// What a module-level name was imported as: (module, imported name).
+    pub fn import_of(&self, name: &str) -> Option<(&str, &str)> {
+        self.imports.get(name).map(|(m, i)| (m.as_str(), i.as_str()))
     }
 
     fn error(&mut self, offset: u32, message: impl Into<String>) {
@@ -305,7 +314,6 @@ impl<'s, 'a> Compiler<'s, 'a> {
         self.add_node(&mut t, el, -1);
         let id = self.next_template;
         self.next_template += 1;
-        let template = self.helper("template");
         let nodes: Vec<String> = t
             .nodes
             .iter()
@@ -323,7 +331,11 @@ impl<'s, 'a> Compiler<'s, 'a> {
                 format!("{{ {} }}", f.join(", "))
             })
             .collect();
-        self.templates.push(format!("const _tmpl${id} = /*#__PURE__*/ {template}([{}]);", nodes.join(", ")));
+        let definition = match &mut self.dev {
+            Some(dev) => dev::template(&dev.template_key(), &nodes.join(", ")),
+            None => format!("/*#__PURE__*/ {}([{}])", self.helper("template"), nodes.join(", ")),
+        };
+        self.templates.push(format!("const _tmpl${id} = {definition};"));
         let instance = self.helper("instance");
         if t.setup.is_empty() {
             format!("{instance}(_tmpl${id})")
@@ -611,6 +623,37 @@ pub struct Finder<'c, 's, 'a> {
     pub reps: Vec<(Span, String)>,
 }
 
+impl<'c, 's, 'a> Finder<'c, 's, 'a> {
+    /// What a call is, for --dev: (kind, the callee as written, or a function calling it).
+    fn keyed(&self, it: &CallExpression<'a>) -> Option<(&'static str, String)> {
+        let imported = |name: &str| {
+            self.c.import_of(name).filter(|(module, _)| *module == "@axe/ui" || *module == "@axe/core").map(|(_, i)| i)
+        };
+        match &it.callee {
+            Expression::Identifier(id) => {
+                let kind = match imported(id.name.as_str())? {
+                    "signal" => "signal",
+                    "style" => "style",
+                    "token" => "token",
+                    "theme" => "theme",
+                    "context" => "context",
+                    _ => return None,
+                };
+                Some((kind, id.name.to_string()))
+            }
+            Expression::StaticMemberExpression(m) => {
+                let Expression::Identifier(object) = &m.object else { return None };
+                let method = m.property.name.as_str();
+                if imported(object.name.as_str())? != "Token" || !matches!(method, "create" | "local") {
+                    return None;
+                }
+                Some(("token", format!("(..._a) => {}.{method}(..._a)", object.name)))
+            }
+            _ => None,
+        }
+    }
+}
+
 impl<'c, 's, 'a> Visit<'a> for Finder<'c, 's, 'a> {
     fn visit_jsx_element(&mut self, it: &JSXElement<'a>) {
         let code = self.c.element(it);
@@ -619,6 +662,75 @@ impl<'c, 's, 'a> Visit<'a> for Finder<'c, 's, 'a> {
     fn visit_jsx_fragment(&mut self, it: &JSXFragment<'a>) {
         let code = self.c.fragment(it);
         self.reps.push((it.span, code));
+    }
+    fn visit_call_expression(&mut self, it: &CallExpression<'a>) {
+        if self.c.dev.is_some()
+            && let Some((kind, callee)) = self.keyed(it)
+        {
+            // The callee and the parenthesis are replaced, up to the first argument, or to the
+            // closing parenthesis when there is none. Type arguments go with them.
+            let open = it.arguments.first().map_or(it.span.end - 1, |a| a.span().start);
+            let args = &self.c.src[open as usize..it.span.end as usize - 1];
+            let args_hash = dev::hash(args);
+            let dev = self.c.dev.as_mut().unwrap();
+            let key = dev.key(kind);
+            self.reps.push((Span::new(it.span.start, open), dev::keyed_call(kind, &key, &args_hash, &callee)));
+            for a in &it.arguments {
+                self.visit_argument(a);
+            }
+            return;
+        }
+        oxc_ast_visit::walk::walk_call_expression(self, it);
+    }
+    fn visit_function(&mut self, it: &Function<'a>, flags: ScopeFlags) {
+        let scope = self.c.dev.as_ref().filter(|d| d.component.is_none()).and_then(|_| dev::component_function(it));
+        if let (Some(name), Some(d)) = (&scope, &mut self.c.dev) {
+            d.component = Some(name.clone());
+        }
+        oxc_ast_visit::walk::walk_function(self, it, flags);
+        if let (Some(_), Some(d)) = (&scope, &mut self.c.dev) {
+            d.component = None;
+        }
+    }
+    fn visit_variable_declarator(&mut self, it: &VariableDeclarator<'a>) {
+        let Some(d) = &mut self.c.dev else {
+            oxc_ast_visit::walk::walk_variable_declarator(self, it);
+            return;
+        };
+        let name = if let BindingPattern::BindingIdentifier(id) = &it.id { Some(id.name.to_string()) } else { None };
+        let pushed = name.is_some();
+        if let Some(n) = name {
+            d.names.push(n);
+        }
+        let scope = if d.component.is_none() { dev::component_variable(it) } else { None };
+        if scope.is_some() {
+            d.component = scope.clone();
+        }
+        oxc_ast_visit::walk::walk_variable_declarator(self, it);
+        let d = self.c.dev.as_mut().unwrap();
+        if scope.is_some() {
+            d.component = None;
+        }
+        if pushed {
+            d.names.pop();
+        }
+    }
+    fn visit_object_property(&mut self, it: &ObjectProperty<'a>) {
+        let Some(d) = &mut self.c.dev else {
+            oxc_ast_visit::walk::walk_object_property(self, it);
+            return;
+        };
+        let named = if let PropertyKey::StaticIdentifier(k) = &it.key {
+            let name = d.names.last().map_or_else(|| k.name.to_string(), |n| format!("{n}.{}", k.name));
+            d.names.push(name);
+            true
+        } else {
+            false
+        };
+        oxc_ast_visit::walk::walk_object_property(self, it);
+        if named {
+            self.c.dev.as_mut().unwrap().names.pop();
+        }
     }
 }
 
@@ -643,7 +755,7 @@ pub struct PropsWarnings<'d> {
     pub diags: &'d mut Vec<Diag>,
 }
 
-struct HasJsx(bool);
+pub struct HasJsx(pub bool);
 impl<'a> Visit<'a> for HasJsx {
     fn visit_jsx_element(&mut self, _: &JSXElement<'a>) {
         self.0 = true;
@@ -653,7 +765,7 @@ impl<'a> Visit<'a> for HasJsx {
     }
 }
 
-fn capitalized(name: &str) -> bool {
+pub fn capitalized(name: &str) -> bool {
     name.starts_with(|c: char| c.is_ascii_uppercase())
 }
 

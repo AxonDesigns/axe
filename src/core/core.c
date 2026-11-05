@@ -890,8 +890,14 @@ static void wake_idle(ui_core *c) {
     }
 }
 
+void ui_core_request_turn(ui_core *c) {
+    atomic_store(&c->turn_requested, true);
+    core_wake(c);
+}
+
 static void flush_events(ui_core *c) {
     if (!c->sent_events) events(c); // logic gets a clock at startup, events or not
+    if (atomic_exchange(&c->turn_requested, false)) events(c);
     if (!c->events.op_count || c->events_in_flight >= MAX_EVENTS_IN_FLIGHT) return;
     // The clock event says when the buffer left (docs/command-buffer.md, Events), so logic
     // keeps time even when nothing draws.
@@ -974,6 +980,7 @@ bool ui_core_frames_done(const ui_core *c) {
 
 bool ui_core_idle(const ui_core *c) {
     if (c->events_in_flight || c->events.op_count || ui_core_preparing(c)) return false;
+    if (atomic_load(&c->turn_requested)) return false;
     for (uint32_t i = 0; i < UI_MAX_SURFACES; i++) {
         const ui_core_surface *s = &c->surfaces[i];
         if (ui_handle_is_null(s->handle)) continue;

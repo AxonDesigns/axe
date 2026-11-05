@@ -18,6 +18,7 @@ import {
 import type { Style, TokenDecl, TextAlign, TextDirection, TextSlant, ColorString } from "@axe/core";
 import { Owner, dispose, getOwner, handleError, renderEffect, runWithOwner, untrack } from "./reactive.js";
 import { MOUNT, Region } from "./regions.js";
+import { instanceBegin } from "./hotcore.js";
 import { styleBinding, type StyleProp } from "./style.js";
 import { themeDefaults } from "./theme.js";
 
@@ -115,6 +116,7 @@ export class ComponentElement<P> implements Mountable {
     const o = new Owner(getOwner());
     o.name = this.fn.name || "Anonymous";
     o.nodes = r;
+    if (AXE_DEV) instanceBegin(o, this.fn, this.props, r);
     runWithOwner(o, () => {
       try {
         mountInto(r, this.fn(this.props));

@@ -5,6 +5,8 @@
 //!                                                  each FILE (under the root) into the same
 //!                                                  path under --out: .tsx compiled, with an
 //!                                                  inline source map; .ts copied
+//!     --dev                                        also what hot reload needs, in .ts files too
+//!                                                  (docs/ui.md, "Hot reload")
 //!
 //! The output is still TypeScript (types are kept: esbuild strips them next) with no JSX left.
 //! Errors and warnings go to stderr as `file:line:col: error: ...`; any error makes the exit
@@ -12,6 +14,7 @@
 
 mod classify;
 mod compile;
+mod dev;
 mod text;
 
 use std::path::{Path, PathBuf};
@@ -27,6 +30,7 @@ use oxc_span::{SourceType, Span};
 use oxc_sourcemap::SourceMapBuilder;
 
 use compile::{Compiler, Diag, Finder, PropsWarnings};
+use dev::Dev;
 use text::Lines;
 
 struct Output {
@@ -52,11 +56,11 @@ fn report(file: &str, src: &str, lines: &Lines, diags: &[Diag]) -> usize {
     errors
 }
 
-fn transform(file: &str, src: &str, t: &mut Timings) -> Output {
+fn transform(file: &str, src: &str, source_type: SourceType, dev: bool, t: &mut Timings) -> Output {
     let lines = Lines::new(src);
     let allocator = Allocator::default();
     let start = Instant::now();
-    let parsed = Parser::new(&allocator, src, SourceType::tsx()).parse();
+    let parsed = Parser::new(&allocator, src, source_type).parse();
     t.parse += start.elapsed().as_micros();
     if !parsed.diagnostics.is_empty() {
         let mut errors = 0;
@@ -75,6 +79,9 @@ fn transform(file: &str, src: &str, t: &mut Timings) -> Output {
     let start = Instant::now();
     let program = &parsed.program;
     let mut c = Compiler::new(src, semantic.scoping(), program);
+    if dev {
+        c.dev = Some(Dev::default());
+    }
     let mut finder = Finder { c: &mut c, reps: Vec::new() };
     finder.visit_program(program);
     let mut reps = finder.reps;
@@ -83,15 +90,22 @@ fn transform(file: &str, src: &str, t: &mut Timings) -> Output {
     c.diags.extend(warnings);
 
     // The runtime import and the templates go after the imports.
-    if !c.helpers.is_empty() || !c.templates.is_empty() {
+    let (registered, wrappers) = if dev { dev::registrations(program, src) } else { (Vec::new(), Vec::new()) };
+    if dev || !c.helpers.is_empty() || !c.templates.is_empty() {
         let at = program
             .body
             .iter()
             .filter_map(|s| if let Statement::ImportDeclaration(d) = s { Some(d.span.end) } else { None })
             .max();
-        let names: Vec<String> = c.helpers.iter().map(|h| format!("{h} as _${h}")).collect();
-        let mut head = format!("import {{ {} }} from \"@axe/ui/jsx-runtime\";\n", names.join(", "));
-        for tpl in &c.templates {
+        let mut head = String::new();
+        if !c.helpers.is_empty() {
+            let names: Vec<String> = c.helpers.iter().map(|h| format!("{h} as _${h}")).collect();
+            head = format!("import {{ {} }} from \"@axe/ui/jsx-runtime\";\n", names.join(", "));
+        }
+        if dev {
+            head.push_str(&dev::head(file));
+        }
+        for tpl in c.templates.iter().chain(&registered) {
             head.push_str(tpl);
             head.push('\n');
         }
@@ -100,8 +114,13 @@ fn transform(file: &str, src: &str, t: &mut Timings) -> Output {
             None => (0, head),
         };
         reps.push((Span::new(offset, offset), head));
-        reps.sort_by_key(|(s, _)| (s.start, s.end));
     }
+    reps.extend(wrappers);
+    if dev {
+        let end = src.len() as u32;
+        reps.push((Span::new(end, end), dev::tail()));
+    }
+    reps.sort_by_key(|(s, _)| (s.start, s.end));
     let (code, map) = assemble(file, src, &lines, &reps);
     t.transform += start.elapsed().as_micros();
     let errors = report(file, src, &lines, &c.diags);
@@ -187,7 +206,7 @@ fn usage() -> ! {
 fn main() {
     let mut args = env::args().skip(1);
     let (mut root, mut out_dir, mut out_file) = (None::<PathBuf>, None::<PathBuf>, None::<PathBuf>);
-    let (mut timings, mut map) = (false, false);
+    let (mut timings, mut map, mut dev) = (false, false, false);
     let mut files = Vec::new();
     while let Some(a) = args.next() {
         match a.as_str() {
@@ -196,6 +215,7 @@ fn main() {
             "-o" => out_file = Some(args.next().unwrap_or_else(|| usage()).into()),
             "--timings" => timings = true,
             "--map" => map = true,
+            "--dev" => dev = true,
             "-h" | "--help" => usage(),
             _ if a.starts_with('-') => usage(),
             _ => files.push(PathBuf::from(a)),
@@ -218,8 +238,10 @@ fn main() {
         };
         let tsx = path.extension().is_some_and(|e| e == "tsx");
         let mut t = Timings { parse: 0, semantic: 0, transform: 0 };
-        let code = if tsx {
-            let o = transform(&name, &src, &mut t);
+        let code = if tsx || dev {
+            let source_type = if tsx { SourceType::tsx() } else { SourceType::ts() };
+            let module = root.as_ref().and_then(|r| path.strip_prefix(r).ok()).map_or(name.clone(), |p| p.to_string_lossy().to_string());
+            let o = transform(if dev { &module } else { &name }, &src, source_type, dev, &mut t);
             if o.errors > 0 {
                 failed = true;
                 if let (Some(r), Some(d)) = (&root, &out_dir) {

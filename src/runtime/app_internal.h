@@ -32,6 +32,9 @@ typedef struct ui_scheduler_ops {
 extern const ui_scheduler_ops ui_scheduler_threaded;
 extern const ui_scheduler_ops ui_scheduler_single;
 
+// Asks for a logic turn, for Axe's dev tools (ui_core_request_turn). Thread: any.
+void ui_app_request_turn(ui_app *app);
+
 // Test-only: like ui_app_frame, but returns once the render actor has finished the frame,
 // without waiting for logic to handle its events. Lets a test keep producing frames while
 // the logic actor is blocked. Thread: main.

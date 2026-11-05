@@ -2,7 +2,7 @@
 
 import type { Surface } from "@axe/core";
 import { createComponent, mountInto, type Component } from "./elements.js";
-import { Owner, dispose, handleError, runWithOwner } from "./reactive.js";
+import { Owner, dispose, getOwner, handleError, onCleanup, runWithOwner } from "./reactive.js";
 import { Region } from "./regions.js";
 
 export interface Mounted {
@@ -23,6 +23,8 @@ export function mount(App: Component<Record<string, never>>, surface: Surface): 
       handleError(e, owner, "mounting the app");
     }
   });
+  // Under a module's owner (hot reload): a new version of the module replaces this.
+  if (AXE_DEV && getOwner()) onCleanup(() => dispose(owner));
   return { unmount: () => dispose(owner) };
 }
 

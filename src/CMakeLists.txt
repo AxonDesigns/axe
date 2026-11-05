@@ -20,6 +20,7 @@ add_library(ui STATIC
     script/host/bundle.c
     script/host/host.c
     script/quickjs/engine_quickjs.c
+    $<$<BOOL:${AXE_DEV}>:script/host/dev.c>
     wire/wire.c
     wire/gen/wire_gen.c
     core/clock.c
@@ -59,6 +60,8 @@ target_include_directories(ui
     PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 # POSIX 2008 + BSD interfaces (clock_gettime, poll) under strict -std=c23.
 target_compile_definitions(ui PRIVATE UI_HOOKS_ENABLED=$<BOOL:${UI_HOOKS}> _DEFAULT_SOURCE)
+# Public: host.h's structs depend on it.
+target_compile_definitions(ui PUBLIC $<$<BOOL:${AXE_DEV}>:AXE_DEV>)
 target_link_libraries(ui PRIVATE m PkgConfig::WAYLAND PkgConfig::XKBCOMMON)
 # The JS engine: only src/script/quickjs/ includes its header (docs/script.md).
 target_link_libraries(ui PRIVATE quickjs)

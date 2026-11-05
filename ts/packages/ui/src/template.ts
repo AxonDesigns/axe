@@ -39,10 +39,10 @@ interface Variant {
 }
 
 export class Template {
-  readonly parents: Int16Array;
+  parents: Int16Array;
   readonly variants = new Map<Theme | null, Variant>();
 
-  constructor(readonly nodes: readonly TemplateNode[]) {
+  constructor(public nodes: readonly TemplateNode[]) {
     this.parents = Int16Array.from(nodes, (n) => n.p);
   }
 }
@@ -90,13 +90,17 @@ function writeOps(w: CommandWriter, t: Template, defaults: ThemeDefaults | undef
   }
 }
 
-function variantOf(t: Template, theme: Theme | null): Variant {
-  let v = t.variants.get(theme);
-  if (v) return v;
+function variantOps(t: Template, theme: Theme | null): Uint8Array {
   const w = new CommandWriter();
   writeOps(w, t, theme?.components, local, NULL_HANDLE, null);
   const bytes = w.finish(WIRE_VERSION);
-  const ops = bytes ? bytes.subarray(16) : new Uint8Array(0);
+  return bytes ? bytes.subarray(16) : new Uint8Array(0);
+}
+
+function variantOf(t: Template, theme: Theme | null): Variant {
+  let v = t.variants.get(theme);
+  if (v) return v;
+  const ops = variantOps(t, theme);
   v = { id: 0, refs: 0, theme };
   if (ops.length <= MAX_OPS) {
     v.id = nextId++;
@@ -105,6 +109,34 @@ function variantOf(t: Template, theme: Theme | null): Variant {
   t.variants.set(theme, v);
   if (theme) (themeVariants.get(theme) ?? themeVariants.set(theme, new Set()).get(theme)!).add({ t, v });
   return v;
+}
+
+/** @internal Development only: `t`'s new nodes, under the ids of its variants. */
+export function redefineTemplate(t: Template, nodes: readonly TemplateNode[]): void {
+  t.nodes = nodes;
+  t.parents = Int16Array.from(nodes, (n) => n.p);
+  for (const v of t.variants.values()) {
+    const ops = variantOps(t, v.theme);
+    if (ops.length > MAX_OPS) {
+      if (v.id) commands.destroyTemplate(v.id);
+      v.id = 0;
+    } else {
+      if (!v.id) v.id = nextId++;
+      commands.defineTemplate(v.id, nodes.length, ops);
+    }
+  }
+}
+
+/** @internal Development only: destroys the variants of `t` no instance uses. They come back
+ * when one is instantiated. */
+export function dropUnusedVariants(t: Template): void {
+  for (const v of [...t.variants.values()]) {
+    if (v.refs > 0) continue;
+    if (v.id) commands.destroyTemplate(v.id);
+    t.variants.delete(v.theme);
+    const set = v.theme ? themeVariants.get(v.theme) : undefined;
+    if (set) for (const e of set) if (e.v === v) set.delete(e);
+  }
 }
 
 // Variants of each theme, and how many ThemeProviders of it are mounted.
@@ -155,8 +187,8 @@ class Instance implements Mountable {
     }
     for (let i = 0; i < slots.length; i++) if (t.parents[i]! < 0) region.adopt(slots[i]!);
     // Only a theme's variant is ever released: the others need no count (nor a cleanup per
-    // instance).
-    if (v.theme && getOwner()) {
+    // instance), except for hot reload, which destroys what no instance uses.
+    if ((AXE_DEV || v.theme) && getOwner()) {
       v.refs++;
       onCleanup(() => {
         v.refs--;

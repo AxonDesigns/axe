@@ -12,6 +12,10 @@
 #include "script/engine.h"
 #include "ui/script.h"
 
+#ifdef AXE_DEV
+#include "script/host/dev.h"
+#endif
+
 // The wire timer the host multiplexes JS timers onto (docs/script.md, "Timers").
 #define UI_SCRIPT_TIMER_ID 0xFFFFFFFFu
 
@@ -24,6 +28,10 @@ struct ui_script_internal {
     // performance.now() reads the animation clock instead of wall time (the test runner),
     // so tests are deterministic.
     bool performance_from_animation_clock;
+#ifdef AXE_DEV
+    // Set: the app is modules from this channel, not a bundle (dev.h).
+    ui_dev_channel *dev;
+#endif
 };
 
 typedef struct ui_script_env {

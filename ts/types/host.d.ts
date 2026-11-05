@@ -74,6 +74,16 @@ declare module "axe:host" {
    * throwing: for errors @axe/ui catches that no error boundary takes. `context` says where
    * ("in an effect of Card"). */
   export function reportError(error: unknown, context: string): void;
+  /** Hot reload (src/script/host/dev.h); these exist only when the app runs from modules. */
+  export function hotSetHandler(fn: (changes: { file: string; deleted: boolean; error?: string }[]) => void): void;
+  /** Stages a new version of each file and returns the names to import. */
+  export function hotBegin(files: string[]): string[];
+  export function hotCommit(): void;
+  export function hotRevert(): void;
+  export function hotImporters(file: string): string[];
+  export function hotSourceMap(name: string): string | undefined;
+  export function hotFiles(): string[];
+  export const hotEntry: string;
   /** True in debug builds of the host. */
   export const debug: boolean;
   /** The app's arguments (axe-run's arguments after `--`). */

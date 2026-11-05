@@ -17,6 +17,14 @@ option(UI_HOOKS "Compile tracepoints in (a relaxed atomic load each when unused)
 option(UI_BUILD_TESTS "Build the test suite" ON)
 option(UI_BUILD_EXAMPLES "Build the examples" ON)
 option(UI_FUZZ "Build the libFuzzer targets (use the fuzz preset)" OFF)
+# Hot reload (docs/ui.md): --dev in axe-run and the host's dev module table. On by default only in
+# Debug, so a release build holds none of it.
+if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+    set(_axe_dev_default ON)
+else()
+    set(_axe_dev_default OFF)
+endif()
+option(AXE_DEV "Compile hot reload in" ${_axe_dev_default})
 set(UI_SANITIZE "" CACHE STRING "Semicolon-separated sanitizers, e.g. address;undefined")
 
 include(cmake/Warnings.cmake)

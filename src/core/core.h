@@ -3,6 +3,8 @@
 // Runs on the main thread under both schedulers.
 #pragma once
 
+#include <stdatomic.h>
+
 #include "core/clock.h"
 #include "core/display_list.h"
 #include "core/prepare.h"
@@ -113,6 +115,7 @@ struct ui_core {
     uint64_t last_anim_ns;
     uint64_t last_clock_ns;      // the last clock event sent: they never go backwards
     bool sent_events;            // the first event buffer (sent at startup) is out
+    atomic_bool turn_requested;  // ui_core_request_turn: the next flush sends a clock at least
 
     bool quit_requested;
     ui_result failure;           // set when an actor reports a fatal error
@@ -135,6 +138,9 @@ ui_core_surface *ui_core_surface_get(ui_core *c, ui_handle handle);
 
 // Marks every configured surface ready to draw now (headless frames, ui_app_frame).
 void ui_core_force_frame(ui_core *c);
+// Logic gets a turn soon, with a clock and whatever events are waiting, even if nothing else
+// happens (hot reload's updates apply at a turn's start). Thread: any.
+void ui_core_request_turn(ui_core *c);
 
 // Actor step: drains messages, produces a frame if any surface is ready, flushes events.
 void ui_core_step(void *self);

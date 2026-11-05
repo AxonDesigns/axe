@@ -37,6 +37,9 @@
       "@axe/ui/jsx-runtime": [
         "./packages/ui/src/jsx-runtime.ts"
       ],
+      "@axe/ui/hot": [
+        "./packages/ui/src/hot.ts"
+      ],
       "@axe/ui/src/*": [
         "./packages/ui/src/*"
       ],

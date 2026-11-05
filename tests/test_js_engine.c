@@ -2,6 +2,7 @@
 // functions and objects, exceptions with stack traces, strong and weak references, modules
 // from source and bytecode, microtasks and rejections, external ArrayBuffers, the interrupt
 // hook, memory limits and stats.
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -425,6 +426,97 @@ static void test_memory(void) {
     CHECK(!strcmp(ui_js_engine_name(), "quickjs-ng") && !strcmp(ui_js_engine_version(), "0.18.0"));
 }
 
+// Hot reload's needs: the same file under versioned names, loaded by import() at run time.
+// (docs/ui.md, "Hot reload").
+typedef struct versioned_module {
+    const char *name, *source;
+} versioned_module;
+
+static const versioned_module versioned[] = {
+    {"app:/a.js?v=1", "import { b } from './b.js?v=1'; export const a = 'a1' + b;\n"},
+    {"app:/b.js?v=1", "export const b = 'b1'; globalThis.evals = (globalThis.evals ?? 0) + 1;\n"},
+    {"app:/a.js?v=2", "import { b } from './b.js?v=1'; export const a = 'a2' + b;\n"},
+    {"app:/broken.js?v=1", "throw new Error('broken at load');\n"},
+    {"app:/syntax.js?v=1", "export const = 1;\n"},
+    {"app:/x.js?v=1", "import { y } from './y.js?v=1'; export const x = () => 'x' + y();\n"},
+    {"app:/y.js?v=1", "import { x } from './x.js?v=1'; export const y = () => 'y'; export const usesX = () => x;\n"},
+    {"app:/p.js?v=1", "import { q } from './q.js?v=1'; export const p = 1;\n"},
+    {"app:/q.js?v=1", "import { p } from './p.js?v=1'; export const q = p + 1;\n"},
+};
+
+static char *versioned_resolve(void *user, const char *base, const char *specifier) {
+    (void)user, (void)base;
+    if (!strncmp(specifier, "app:/", 5)) return strdup(specifier);
+    if (specifier[0] != '.' || specifier[1] != '/') return NULL;
+    char *name = malloc(strlen(specifier) + 6);
+    if (name) sprintf(name, "app:/%s", specifier + 2);
+    return name;
+}
+
+static bool versioned_load(void *user, const char *name, ui_js_module_source *out) {
+    (*(int *)user)++;
+    for (size_t i = 0; i < sizeof versioned / sizeof versioned[0]; i++) {
+        if (strcmp(versioned[i].name, name)) continue;
+        *out = (ui_js_module_source){versioned[i].source, strlen(versioned[i].source), false};
+        return true;
+    }
+    return false;
+}
+
+static void test_dynamic_import(void) {
+    int loads = 0;
+    ui_js *js = make(&(ui_js_desc){.user = &loads, .resolve = versioned_resolve, .load = versioned_load});
+    uint32_t scope = ui_js_scope_open(js);
+    const char *driver = "globalThis.load = (name) => import(name);\n";
+    ui_js_val promise;
+    CHECK(ui_js_eval_module(js, "app:/driver.js", &(ui_js_module_source){driver, strlen(driver), false}, &promise));
+    ui_js_run_microtasks(js, NULL, NULL);
+
+    // Two versions of a file are two modules; the import they share is evaluated once.
+    ui_js_val p1 = eval(js, "globalThis.p1 = load('app:/a.js?v=1').then((m) => m.a); p1");
+    ui_js_run_microtasks(js, NULL, NULL);
+    ui_js_val value;
+    CHECK(ui_js_promise_get(js, p1, &value) == UI_JS_FULFILLED && equals(js, value, "a1b1"));
+    ui_js_val p2 = eval(js, "load('app:/a.js?v=2').then((m) => m.a)");
+    ui_js_run_microtasks(js, NULL, NULL);
+    CHECK(ui_js_promise_get(js, p2, &value) == UI_JS_FULFILLED && equals(js, value, "a2b1"));
+    CHECK(number(js, eval(js, "evals")) == 1);
+    CHECK(loads == 3);
+
+    // Importing a loaded module again gives the same namespace, with no load.
+    ui_js_val same = eval(js, "Promise.all([load('app:/a.js?v=1'), load('app:/a.js?v=1')])"
+                              ".then(([x, y]) => x === y)");
+    ui_js_run_microtasks(js, NULL, NULL);
+    CHECK(ui_js_promise_get(js, same, &value) == UI_JS_FULFILLED && ui_js_truthy(js, value));
+    CHECK(loads == 3);
+
+    // Failures reject the import's promise and leave the engine working: a throwing module, a
+    // syntax error, a file the loader doesn't have, a cycle reading a binding too early.
+    static const char *const failing[] = {"load('app:/broken.js?v=1')", "load('app:/syntax.js?v=1')",
+                                          "load('app:/gone.js?v=1')", "load('app:/p.js?v=1')"};
+    static const char *const messages[] = {"broken at load", NULL, "gone.js", "not initialized"};
+    for (int i = 0; i < 4; i++) {
+        ui_js_val p = eval(js, failing[i]);
+        ui_js_val caught = eval(js, "(p) => p.catch(() => {})");
+        ui_js_val r;
+        CHECK(ui_js_call(js, caught, ui_js_undefined(js), 1, &p, &r));
+        ui_js_run_microtasks(js, NULL, NULL);
+        CHECK(ui_js_promise_get(js, p, &value) == UI_JS_REJECTED);
+        if (messages[i]) {
+            char *text = ui_js_to_utf8(js, value, NULL);
+            CHECK(text && strstr(text, messages[i]));
+            free(text);
+        }
+    }
+
+    // A cycle links and runs.
+    ui_js_val cycle = eval(js, "load('app:/x.js?v=1').then((m) => m.x())");
+    ui_js_run_microtasks(js, NULL, NULL);
+    CHECK(ui_js_promise_get(js, cycle, &value) == UI_JS_FULFILLED && equals(js, value, "xy"));
+    ui_js_scope_close(js, scope);
+    ui_js_destroy(js);
+}
+
 int main(void) {
     RUN(test_values);
     RUN(test_scopes);
@@ -432,6 +524,7 @@ int main(void) {
     RUN(test_exceptions);
     RUN(test_refs);
     RUN(test_modules);
+    RUN(test_dynamic_import);
     RUN(test_microtasks);
     RUN(test_array_buffers);
     RUN(test_interrupt);
