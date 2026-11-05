@@ -12,19 +12,27 @@ cc -std=gnu2x -shared -fPIC -fvisibility=hidden -O1 -o "$WORK/libVkLayer_axe_dev
     "$HERE/vk_lost_layer.c" || exit 1
 cp "$HERE/VkLayer_axe_device_lost.json" "$WORK/"
 
-cat >"$WORK/cfg" <<CFG
+# A software client needs sway's pixman renderer, or sway keeps every frame in RAM, and a GPU
+# client needs its Vulkan renderer (bench/run_gpu_admin.sh).
+SWAY_PID=
+start_sway() { # RENDERER
+    [ -n "$SWAY_PID" ] && kill "$SWAY_PID" 2>/dev/null && wait "$SWAY_PID" 2>/dev/null
+    rm -f "$WORK/display"
+    cat >"$WORK/cfg" <<CFG
 output HEADLESS-1 mode 1024x768@60Hz scale 1
 exec sh -c 'echo \$WAYLAND_DISPLAY > $WORK/display'
 CFG
-env -u WAYLAND_DISPLAY -u DISPLAY WLR_BACKENDS=headless WLR_LIBINPUT_NO_DEVICES=1 \
-    WLR_RENDERER=vulkan sway -c "$WORK/cfg" >"$WORK/sway.log" 2>&1 &
-SWAY_PID=$!
-for _ in $(seq 100); do [ -s "$WORK/display" ] && break; sleep 0.1; done
-export WAYLAND_DISPLAY=$(cat "$WORK/display")
+    env -u WAYLAND_DISPLAY -u DISPLAY WLR_BACKENDS=headless WLR_LIBINPUT_NO_DEVICES=1 \
+        WLR_RENDERER=$1 sway -c "$WORK/cfg" >"$WORK/sway.log" 2>&1 &
+    SWAY_PID=$!
+    for _ in $(seq 100); do [ -s "$WORK/display" ] && break; sleep 0.1; done
+    export WAYLAND_DISPLAY=$(cat "$WORK/display")
+}
 
 export VK_LAYER_PATH=$WORK VK_INSTANCE_LAYERS=VK_LAYER_AXE_device_lost VK_LOST_AFTER=120
 failed=0
 for gpu in hardware software; do
+    [ "$gpu" = software ] && start_sway pixman || start_sway vulkan
     for site in present submit poll acquire; do
         UI_GPU=$gpu VK_LOST_SITE=$site timeout 25 "$BENCH" --seconds 3 --rows=100 >"$WORK/out" 2>&1
         code=$?
