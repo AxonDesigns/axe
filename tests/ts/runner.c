@@ -13,6 +13,9 @@
 //   cEvents()        an event buffer of every event, encoded by the C codec
 //   hotEdit({path: text | null})  AXE_DEV: writes or deletes the app's files, rebuilds them and
 //                    posts the result (--dev)
+//   hotSave(path, text, how)  AXE_DEV: saves a file the way an editor does, for the watcher (how:
+//                    "write", "rename", "recreate", or "delete" with no text)
+//   hotWatching()    AXE_DEV: the app started under the watcher (--watch)
 //   capture(path)    writes the surface as a PPM after the next frame
 // Without requests the runner keeps making frames (preparation, font loads); a test that
 // neither steps nor finishes within the frame budget fails.
@@ -31,6 +34,7 @@
 
 #include "build.h"
 #include "runtime/app_internal.h"
+#include "session.h"
 #endif
 #include "script/host/host.h"
 #include "ui/ui.h"
@@ -302,6 +306,36 @@ static ui_js_val t_hot_edit(ui_js *js, const ui_js_call_info *call) {
 }
 #endif
 
+#ifdef AXE_DEV
+static ui_js_val t_hot_save(ui_js *js, const ui_js_call_info *call) {
+    runner *r = call->data;
+    char *name = ui_js_to_utf8(js, call->args[0], NULL);
+    char *text = ui_js_to_utf8(js, call->args[1], NULL);
+    char *how = ui_js_to_utf8(js, call->args[2], NULL);
+    if (!name || !text || !how) return (ui_js_val){0};
+    char path[8192], temp[8192 + 8];
+    snprintf(path, sizeof path, "%s/%s", r->build.root, name);
+    snprintf(temp, sizeof temp, "%s.tmp~", path);
+    make_parents(path);
+    if (!strcmp(how, "delete")) {
+        unlink(path);
+    } else {
+        if (!strcmp(how, "recreate")) unlink(path);
+        bool rename_over = !strcmp(how, "rename");
+        FILE *f = fopen(rename_over ? temp : path, "wb");
+        if (f) {
+            fputs(text, f);
+            fclose(f);
+        }
+        if (rename_over) rename(temp, path);
+    }
+    free(name);
+    free(text);
+    free(how);
+    return ui_js_undefined(js);
+}
+#endif
+
 static void setup(void *user, ui_js *js) {
     ui_js_val m = ui_js_object(js);
     ui_js_set(js, m, "requestStep", ui_js_function(js, "requestStep", 1, t_request_step, user));
@@ -313,6 +347,7 @@ static void setup(void *user, ui_js *js) {
     ui_js_set(js, m, "capture", ui_js_function(js, "capture", 1, t_capture, user));
 #ifdef AXE_DEV
     ui_js_set(js, m, "hotEdit", ui_js_function(js, "hotEdit", 1, t_hot_edit, user));
+    ui_js_set(js, m, "hotSave", ui_js_function(js, "hotSave", 3, t_hot_save, user));
 #endif
     ui_js_define_module(js, "axe:test", m);
 }
@@ -328,6 +363,7 @@ int main(int argc, char **argv) {
     ui_scheduler_kind scheduler = UI_SCHEDULER_FROM_ENV;
 #ifdef AXE_DEV
     const char *dev_dir = NULL, *entry = "main.tsx";
+    bool watch = false;
 #endif
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--scheduler") && i + 1 < argc) {
@@ -339,6 +375,8 @@ int main(int argc, char **argv) {
             dev_dir = argv[++i];
         } else if (!strcmp(argv[i], "--entry") && i + 1 < argc) {
             entry = argv[++i];
+        } else if (!strcmp(argv[i], "--watch")) {
+            watch = true;
 #endif
         } else {
             bundle = argv[i];
@@ -381,6 +419,7 @@ int main(int argc, char **argv) {
     ui_hooks_subscribe(app, on_trace, &r, NULL);
 #ifdef AXE_DEV
     if (r.channel) ui_dev_channel_set_wake(r.channel, wake_core, app);
+    ui_dev_session *session = watch && r.channel ? ui_dev_session_start(&r.build, r.channel) : NULL;
 #endif
     int frames = 0;
     ui_result res = UI_OK;
@@ -393,6 +432,10 @@ int main(int argc, char **argv) {
             ui_app_clock_step(app, step);
         }
         if (res == UI_OK) res = ui_app_frame(app);
+#ifdef AXE_DEV
+        // The watcher works in wall time: the frame budget has to mean something to it.
+        if (session) thrd_sleep(&(struct timespec){.tv_nsec = 1000000}, NULL);
+#endif
         char *capture = atomic_exchange(&r.capture, NULL);
         if (capture) {
             ui_image image;
@@ -405,6 +448,9 @@ int main(int argc, char **argv) {
             free(capture);
         }
     }
+#ifdef AXE_DEV
+    ui_dev_session_stop(session);
+#endif
     ui_app_destroy(app);
 #ifdef AXE_DEV
     ui_dev_channel_destroy(r.channel);

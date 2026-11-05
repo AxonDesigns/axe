@@ -277,10 +277,6 @@ target_link_libraries(axe-test-js PRIVATE ui)
 ui_target_warnings(axe-test-js)
 if(AXE_DEV)
     target_link_libraries(axe-test-js PRIVATE axe_dev)
-    target_compile_definitions(axe-test-js PRIVATE
-        AXE_TSX_PATH="${CMAKE_BINARY_DIR}/tools/axe-tsx" AXE_ESBUILD_PATH="${AXE_ESBUILD}"
-        AXE_DEV_PACKAGES="${AXE_DEV_PACKAGES}")
-    add_dependencies(axe-test-js axe_dev_packages)
 endif()
 
 function(axe_ts_test name file)
@@ -311,9 +307,17 @@ if(AXE_DEV)
             VERBATIM)
         add_custom_target(hot_${name} ALL DEPENDS "${js}")
     endfunction()
+    add_executable(test_watch test_watch.c)
+    target_link_libraries(test_watch PRIVATE axe_dev)
+    ui_target_warnings(test_watch)
+    add_test(NAME test_watch COMMAND test_watch "${CMAKE_CURRENT_BINARY_DIR}/watch-tmp")
     axe_hot_driver(hot.test)
     add_test(NAME ts_hot COMMAND axe-test-js --dev "${CMAKE_CURRENT_BINARY_DIR}/hot/run-hot" "${CMAKE_CURRENT_BINARY_DIR}/hot/hot.test.js")
     set_tests_properties(ts_hot PROPERTIES ENVIRONMENT "UI_GPU=software" TIMEOUT 300)
+    # The same through real saves and the watcher.
+    axe_hot_driver(hot_watch.test)
+    add_test(NAME ts_hot_watch COMMAND axe-test-js --dev "${CMAKE_CURRENT_BINARY_DIR}/hot/run-watch" --watch "${CMAKE_CURRENT_BINARY_DIR}/hot/hot_watch.test.js")
+    set_tests_properties(ts_hot_watch PROPERTIES ENVIRONMENT "UI_GPU=software" TIMEOUT 300)
     # The scene after an update equals a fresh build of the new version, in the same state.
     axe_hot_driver(hot_scene.test)
     add_test(NAME hot_scene COMMAND ${CMAKE_COMMAND} -DRUNNER=$<TARGET_FILE:axe-test-js>

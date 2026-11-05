@@ -363,6 +363,13 @@ export function App() {
   expect(hotState().overlay ?? "").toContain("still imports it");
   await edit({ "c14/app.tsx": app("") });
   expect(hotState().overlay).toBe(null);
+  // Or the file comes back, with a new value.
+  await edit({ "c14/lib.ts": lib, "c14/app.tsx": app(`import { value } from "./lib"; probe.lib = value;`) });
+  await edit({ "c14/lib.ts": null });
+  expect(hotState().overlay ?? "").toContain("still imports it");
+  await edit({ "c14/lib.ts": `export const value = 2;\n` });
+  expect(hotState().overlay).toBe(null);
+  expect(probe["lib"]).toBe(2);
 });
 
 test("no update reported an uncaught error", () => {

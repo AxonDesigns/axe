@@ -2,6 +2,7 @@
 // esbuild per file, as subprocesses. Used by axe-run --dev and the test runner.
 #pragma once
 
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 

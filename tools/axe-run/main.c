@@ -27,6 +27,11 @@
 #include <stdlib.h>
 #include <string.h>
 
+#ifdef AXE_DEV
+#include "runtime/app_internal.h"
+#include "script/host/host.h"
+#include "session.h"
+#endif
 #include "ui/ui.h"
 
 #ifndef AXE_RUN_WIDTH
@@ -61,7 +66,8 @@ static int usage(const char *argv0) {
     fprintf(stderr,
             "usage: %s [--scheduler single|threaded] [--headless [--at S] [--out f.ppm] [--scale N]]\n"
             "       [--size WxH] [--title T] [--font F]... [--no-system-fonts] [--memory-limit MB]\n"
-            "       [--long-task MS] [--strict] %s [-- app arguments]\n",
+            "       [--long-task MS] [--strict] [--dev [--dev-root DIR --dev-entry FILE]] %s\n"
+            "       [-- app arguments]\n",
             argv0,
 #if defined(AXE_RUN_EMBED) || defined(AXE_RUN_BUNDLE)
             "[bundle.{js,axbc}]"
@@ -72,8 +78,12 @@ static int usage(const char *argv0) {
     return 2;
 }
 
+#ifdef AXE_DEV
+static void wake_core(void *user) { ui_app_request_turn(user); }
+#endif
+
 int main(int argc, char **argv) {
-    bool headless = false, strict = false, system_fonts = true;
+    bool headless = false, strict = false, system_fonts = true, dev = false;
     double at = 0, memory_mb = 0, long_task_ms = 0;
     uint32_t width = AXE_RUN_WIDTH, height = AXE_RUN_HEIGHT, scale = AXE_RUN_SCALE;
     const char *out = "out.ppm", *title = AXE_RUN_TITLE, *bundle = NULL;
@@ -82,6 +92,11 @@ int main(int argc, char **argv) {
     ui_scheduler_kind scheduler = UI_SCHEDULER_FROM_ENV;
 #ifdef AXE_RUN_FONT
     fonts[font_count++] = AXE_RUN_FONT;
+#endif
+#ifdef AXE_RUN_DEV_ROOT
+    const char *dev_root = AXE_RUN_DEV_ROOT, *dev_entry = AXE_RUN_DEV_ENTRY, *dev_work = AXE_RUN_DEV_WORK;
+#elif defined(AXE_DEV)
+    const char *dev_root = NULL, *dev_entry = NULL, *dev_work = "axe-dev";
 #endif
     int i = 1;
     for (; i < argc; i++) {
@@ -109,9 +124,21 @@ int main(int argc, char **argv) {
             fonts[font_count++] = argv[++i];
         } else if (!strcmp(a, "--memory-limit") && more) memory_mb = atof(argv[++i]);
         else if (!strcmp(a, "--long-task") && more) long_task_ms = atof(argv[++i]);
+        else if (!strcmp(a, "--dev")) dev = true;
+#ifdef AXE_DEV
+        else if (!strcmp(a, "--dev-root") && more) dev_root = argv[++i];
+        else if (!strcmp(a, "--dev-entry") && more) dev_entry = argv[++i];
+#endif
         else if (a[0] != '-' && !bundle) bundle = a;
         else return usage(argv[0]);
     }
+
+#ifndef AXE_DEV
+    if (dev) {
+        fprintf(stderr, "--dev is only in development builds: Debug, or the AXE_DEV CMake option (docs/ui.md, \"Hot reload\")\n");
+        return 2;
+    }
+#endif
 
     ui_script_desc script = {
         .bundle_path = bundle,
@@ -120,7 +147,19 @@ int main(int argc, char **argv) {
         .memory_limit = (size_t)(memory_mb * 1024 * 1024),
         .long_task_ns = (uint64_t)(long_task_ms * 1e6),
     };
-    if (!bundle) {
+#ifdef AXE_DEV
+    ui_dev_channel *channel = NULL;
+    ui_script_internal internal = {0};
+    if (dev) {
+        if (!dev_root || !dev_entry) return usage(argv[0]);
+        if (ui_dev_channel_create(&(ui_dev_desc){.entry = dev_entry, .packages = AXE_DEV_PACKAGES}, &channel) != UI_OK)
+            return 1;
+        internal.dev = channel;
+        script.internal = &internal;
+        script.bundle_path = NULL;
+    }
+#endif
+    if (!bundle && !dev) {
 #if defined(AXE_RUN_EMBED)
         script.bundle = embedded;
         script.bundle_size = sizeof embedded;
@@ -146,6 +185,20 @@ int main(int argc, char **argv) {
         return 1;
     }
     ui_hooks_subscribe(app, on_trace, NULL, NULL);
+#ifdef AXE_DEV
+    ui_dev_session *session = NULL;
+    ui_dev_build_desc build = {dev_root, dev_work, AXE_TSX_PATH, AXE_ESBUILD_PATH, AXE_DEV_SOURCE_DIR};
+    if (dev) {
+        ui_dev_channel_set_wake(channel, wake_core, app);
+        session = ui_dev_session_start(&build, channel);
+        if (!session) {
+            fprintf(stderr, "cannot watch %s\n", dev_root);
+            ui_app_destroy(app);
+            ui_dev_channel_destroy(channel);
+            return 1;
+        }
+    }
+#endif
     int status = 0;
     if (headless) {
         // As the C examples step it: two frames build the scene, then 60 Hz steps of the paused
@@ -175,7 +228,13 @@ int main(int argc, char **argv) {
             status = 1;
         }
     }
+#ifdef AXE_DEV
+    ui_dev_session_stop(session); // before the app it wakes
+#endif
     ui_app_destroy(app);
+#ifdef AXE_DEV
+    ui_dev_channel_destroy(channel);
+#endif
     if (strict && atomic_load(&errors) && !status) {
         fprintf(stderr, "%u uncaught error(s) reported\n", atomic_load(&errors));
         status = 3;

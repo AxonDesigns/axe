@@ -568,6 +568,7 @@ async function apply(changes: { file: string; deleted: boolean; error?: string }
       pending.delete(c.file);
     } else {
       pending.add(c.file);
+      danglingErrors.delete(c.file); // it's back
     }
   }
   checkDangling(deleted);

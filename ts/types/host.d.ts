@@ -101,6 +101,8 @@ declare module "axe:test" {
   export function capture(path: string): void;
   /** Hot reload's tests: writes or (null) deletes files of the app, and posts their rebuild. */
   export function hotEdit(files: Record<string, string | null>): void;
+  /** Saves a file as an editor does, for the watcher to see. */
+  export function hotSave(path: string, text: string, how: "write" | "rename" | "recreate" | "delete"): void;
   export function cBuffer(name: string): ArrayBuffer;
   export function cEvents(): ArrayBuffer;
 }
