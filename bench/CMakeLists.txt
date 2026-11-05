@@ -60,6 +60,16 @@ target_link_libraries(bench_ui_live PRIVATE ui m)
 add_dependencies(bench_ui_live bench_ui_bundles)
 ui_target_warnings(bench_ui_live)
 
+# Does creating GPU objects on a second thread stall frames? (docs/decisions.md, "GPU spike").
+# Runs by hand, on real GPUs, through run_gpu_admin.sh. The one bench that sees webgpu.h.
+add_executable(bench_gpu_admin bench_gpu_admin.c)
+target_include_directories(bench_gpu_admin PRIVATE ${PROJECT_SOURCE_DIR}/src)
+target_compile_definitions(bench_gpu_admin PRIVATE _DEFAULT_SOURCE AXE_SOURCE_DIR="${PROJECT_SOURCE_DIR}"
+    UI_LIST10K_AXBC="${CMAKE_CURRENT_BINARY_DIR}/apps/list10k.axbc")
+target_link_libraries(bench_gpu_admin PRIVATE ui ui_webgpu m)
+add_dependencies(bench_gpu_admin bench_ui_bundles)
+ui_target_warnings(bench_gpu_admin)
+
 # Hot reload's latency (docs/ui.md, "Hot reload"): needs AXE_DEV.
 if(AXE_DEV)
     add_executable(bench_hot bench_hot.c)
