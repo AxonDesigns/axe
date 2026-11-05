@@ -19,6 +19,7 @@ add_library(ui STATIC
     runtime/sched_threaded.c
     script/host/bundle.c
     script/host/host.c
+    script/host/runtime.c
     script/quickjs/engine_quickjs.c
     $<$<BOOL:${AXE_DEV}>:script/host/dev.c>
     wire/wire.c

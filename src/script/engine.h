@@ -1,7 +1,8 @@
 // The JS engine interface: everything the runtime host (src/script/host/) needs from an
 // engine, and nothing that names one. QuickJS-ng implements it in src/script/quickjs/, the
 // only place that includes quickjs.h. docs/script.md, "Engine interface", is the contract a
-// future engine (JavaScriptCore, V8) or language (Dart, Luau) implements.
+// future JS engine (JavaScriptCore, V8) implements. Another language implements
+// ui_script_runtime (script/host/runtime.h) instead.
 //
 // Conventions:
 // - An engine (ui_js) is one heap and one realm, used by one thread at a time: the thread

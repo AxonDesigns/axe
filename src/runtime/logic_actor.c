@@ -49,7 +49,7 @@ static ui_result logic_start(void *self) {
     if (l->script) {
         // Like a JS exception at startup: reported, and the app keeps running (empty).
         ui_script_env env = {.log = l->log, .hooks = l->hooks, .start_ns = l->start_ns};
-        ui_result r = ui_script_host_create(l->script, &env, &l->host);
+        ui_result r = l->runtime->create(l->script, &env, l->runtime->config, &l->host);
         if (r != UI_OK) UI_ERROR(l->log, MODULE, "the script host failed to start: %s", ui_result_str(r));
         return UI_OK;
     }
@@ -78,7 +78,7 @@ static void logic_step(void *self) {
         if (l->script) {
             uint8_t *cmds = NULL;
             size_t size = 0;
-            if (l->host) ui_script_host_turn(l->host, msg.ptr, msg.size, &cmds, &size);
+            if (l->host) l->runtime->turn(l->host, msg.ptr, msg.size, &cmds, &size);
             // u64: when it was sent, for the hook API's COMMANDS_APPLIED.
             if (cmds) send(l, (ui_msg){.type = UI_MSG_CMD_BUFFER, .ptr = cmds, .size = size, .u64 = ui_monotonic_ns()});
         } else if (l->desc.on_events) {
@@ -94,7 +94,7 @@ static void logic_step(void *self) {
 
 static void logic_stop(void *self) {
     ui_logic *l = self;
-    ui_script_host_destroy(l->host);
+    if (l->host) l->runtime->destroy(l->host);
     l->host = NULL;
     if (l->desc.stop) l->desc.stop(l->desc.user);
     ui_cmd_writer_destroy(l->writer);
@@ -146,6 +146,7 @@ ui_result ui_logic_init(ui_logic *l, const ui_logic_desc *desc, const ui_script_
     if (script && (desc->start || desc->on_events || desc->stop)) return UI_ERR_INVALID_ARGUMENT;
     l->script = NULL;
     l->host = NULL;
+    l->runtime = script && script->internal && script->internal->runtime ? script->internal->runtime : &ui_script_runtime_js;
     l->hooks = hooks;
     l->start_ns = ui_monotonic_ns();
     if (script && !(l->script = copy_script(script))) return UI_ERR_OUT_OF_MEMORY;

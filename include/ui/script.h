@@ -1,6 +1,7 @@
 // Apps in a script language: a bundle run on the logic thread by the script host
 // (docs/script.md). The host talks to the core only through the command and event buffers,
-// as C logic (ui_logic_desc) does. JavaScript (QuickJS-ng) is the only language so far.
+// as C logic (ui_logic_desc) does. JavaScript (QuickJS-ng) is the language apps get; bindings/luau
+// is a second one, which keeps the layer honest and isn't a product (ui_script_internal.runtime).
 #pragma once
 
 #include <stdbool.h>

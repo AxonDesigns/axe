@@ -8,7 +8,7 @@
 #include "runtime/common.h"
 #include "ui/app.h"
 
-typedef struct ui_script_host ui_script_host;
+typedef struct ui_script_runtime ui_script_runtime;
 
 typedef struct ui_logic {
     ui_actor actor;
@@ -19,12 +19,13 @@ typedef struct ui_logic {
     ui_msg *outbox;          // messages not yet accepted by the core (only on OOM)
     uint32_t outbox_count, outbox_capacity;
     bool reported_oom;
-    // A script app: its desc (copied), the hooks it reports to, and the host, created on the
-    // logic thread when the actor starts.
+    // A script app: its desc (copied), the hooks it reports to, its language's runtime, and the
+    // host, which that runtime creates on the logic thread when the actor starts.
     ui_script_desc *script;
     ui_hooks *hooks;
     uint64_t start_ns;
-    ui_script_host *host;
+    const ui_script_runtime *runtime;
+    void *host;
 } ui_logic;
 
 // `script` (optional) replaces `desc`'s callbacks.

@@ -7,17 +7,12 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include "hooks/hooks_internal.h"
-#include "runtime/common.h"
 #include "script/engine.h"
-#include "ui/script.h"
+#include "script/host/runtime.h"
 
 #ifdef AXE_DEV
 #include "script/host/dev.h"
 #endif
-
-// The wire timer the host multiplexes JS timers onto (docs/script.md, "Timers").
-#define UI_SCRIPT_TIMER_ID 0xFFFFFFFFu
 
 // For Axe's own tools (ui_script_desc.internal).
 struct ui_script_internal {
@@ -28,17 +23,14 @@ struct ui_script_internal {
     // performance.now() reads the animation clock instead of wall time (the test runner),
     // so tests are deterministic.
     bool performance_from_animation_clock;
+    // Set: another language's runtime runs the bundle (bindings/luau), which reads only this and
+    // the desc; the fields above and `dev` are the JavaScript host's. NULL: JavaScript.
+    const ui_script_runtime *runtime;
 #ifdef AXE_DEV
     // Set: the app is modules from this channel, not a bundle (dev.h).
     ui_dev_channel *dev;
 #endif
 };
-
-typedef struct ui_script_env {
-    const ui_logger *log;
-    ui_hooks *hooks;
-    uint64_t start_ns; // CLOCK_MONOTONIC when the app started: performance.now()'s origin
-} ui_script_env;
 
 typedef struct ui_script_host ui_script_host;
 

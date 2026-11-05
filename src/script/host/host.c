@@ -19,18 +19,11 @@
 #define MODULE "script"
 #define DEFAULT_LONG_TASK_NS 50000000ull
 #define COMMAND_CAPACITY (64u << 10)
-#define NO_DEADLINE UINT64_MAX
 #define MAX_TIMER_ARGS 16u
 
 static const char prelude_js[] = {
 #embed "prelude.js"
     , 0};
-
-typedef struct script_timer {
-    uint64_t deadline, seq, interval; // interval 0: setTimeout
-    uint32_t id;
-    ui_js_ref *fn, *args;
-} script_timer;
 
 typedef struct rejection {
     ui_js_ref *promise, *reason;
@@ -64,11 +57,7 @@ struct ui_script_host {
     uint8_t *out;
     size_t out_size;
 
-    script_timer *timers;    // a binary heap by (deadline, seq)
-    uint32_t timer_count, timer_capacity;
-    uint64_t next_seq;
-    uint32_t next_id;
-    uint64_t armed;          // the wire timer's deadline, NO_DEADLINE when disarmed
+    ui_script_timers timers;
 
     rejection *rejections;   // unhandled since the last checkpoint
     uint32_t rejection_count, rejection_capacity;
@@ -84,17 +73,7 @@ ui_js *ui_script_host_engine(ui_script_host *h) { return h->js; }
 
 static void report(ui_script_host *h, ui_trace_kind kind, const char *prefix, const ui_js_exception *e,
                    const char *context) {
-    const char *stack = e->stack && e->stack[0] ? e->stack : "";
-    size_t n = strlen(prefix) + strlen(e->name) + strlen(e->message) + strlen(stack) + strlen(context) + 32;
-    char *text = malloc(n);
-    if (!text) return;
-    snprintf(text, n, "%s%s%s%s (%s)%s%s", prefix, e->name, e->name[0] ? ": " : "", e->message, context,
-             stack[0] ? "\n" : "", stack);
-    size_t len = strlen(text);
-    while (len && text[len - 1] == '\n') text[--len] = 0;
-    UI_ERROR(h->env.log, MODULE, "%s", text);
-    UI_HOOK_SCRIPT(h->env.hooks, kind, text, 0);
-    free(text);
+    ui_script_report(&h->env, kind, prefix, e->name, e->message, e->stack ? e->stack : "", context);
 }
 
 // Reports the pending exception as uncaught; the app keeps running.
@@ -162,63 +141,12 @@ static void task_begin(ui_script_host *h) { h->task_start = ui_monotonic_ns(); }
 static void task_end(ui_script_host *h, const char *what) {
     ui_js_run_microtasks(h->js, on_job_error, h);
     report_rejections(h);
-    uint64_t took = ui_monotonic_ns() - h->task_start;
-    if (took <= h->long_task_ns) return;
-    char text[160];
-    snprintf(text, sizeof text, "long task: %s took %.1f ms (threshold %.1f ms)", what, (double)took / 1e6,
-             (double)h->long_task_ns / 1e6);
-    UI_WARN(h->env.log, MODULE, "%s", text);
-    UI_HOOK_SCRIPT(h->env.hooks, UI_TRACE_SCRIPT_LONG_TASK, text, took);
+    ui_script_report_long_task(&h->env, what, h->task_start, h->long_task_ns);
 }
 
 // ---- Timers ------------------------------------------------------------------------------
 
-static bool timer_before(const script_timer *a, const script_timer *b) {
-    return a->deadline < b->deadline || (a->deadline == b->deadline && a->seq < b->seq);
-}
-
-static void sift_up(script_timer *t, uint32_t i) {
-    while (i) {
-        uint32_t parent = (i - 1) / 2;
-        if (!timer_before(&t[i], &t[parent])) break;
-        script_timer x = t[i];
-        t[i] = t[parent];
-        t[parent] = x;
-        i = parent;
-    }
-}
-
-static void sift_down(script_timer *t, uint32_t n, uint32_t i) {
-    for (;;) {
-        uint32_t l = 2 * i + 1, r = l + 1, m = i;
-        if (l < n && timer_before(&t[l], &t[m])) m = l;
-        if (r < n && timer_before(&t[r], &t[m])) m = r;
-        if (m == i) return;
-        script_timer x = t[i];
-        t[i] = t[m];
-        t[m] = x;
-        i = m;
-    }
-}
-
-static bool push_timer(ui_script_host *h, script_timer t) {
-    if (ui_grow((void **)&h->timers, &h->timer_capacity, h->timer_count + 1, sizeof *h->timers) != UI_OK) return false;
-    h->timers[h->timer_count] = t;
-    sift_up(h->timers, h->timer_count++);
-    return true;
-}
-
-static script_timer remove_timer(ui_script_host *h, uint32_t i) {
-    script_timer t = h->timers[i];
-    h->timers[i] = h->timers[--h->timer_count];
-    if (i < h->timer_count) {
-        sift_down(h->timers, h->timer_count, i);
-        sift_up(h->timers, i);
-    }
-    return t;
-}
-
-static void free_timer(ui_script_host *h, script_timer *t) {
+static void free_timer(ui_script_host *h, ui_script_timer *t) {
     ui_js_ref_free(h->js, t->fn);
     ui_js_ref_free(h->js, t->args);
 }
@@ -227,24 +155,14 @@ static void free_timer(ui_script_host *h, script_timer *t) {
 // set by these callbacks wait for a later turn, even with a 0 delay.
 static void run_timers(ui_script_host *h) {
     ui_js *js = h->js;
-    uint64_t batch = h->next_seq;
-    while (h->timer_count && h->timers[0].deadline <= h->turn_ns && h->timers[0].seq < batch) {
-        script_timer t = remove_timer(h, 0);
-        if (t.interval) {
-            // Each deadline follows the previous one, so an interval doesn't drift; a clock
-            // that jumped several periods ahead fires it once.
-            script_timer next = t;
-            next.deadline = t.deadline + t.interval;
-            if (next.deadline <= h->turn_ns) next.deadline = h->turn_ns + t.interval;
-            if (!push_timer(h, next)) {
-                UI_ERROR(h->env.log, MODULE, "out of memory re-arming an interval; it stops");
-                t.interval = 0;
-            }
-        }
+    uint64_t batch = h->timers.next_seq;
+    ui_script_timer t;
+    while (ui_script_timers_pop(&h->timers, h->turn_ns, batch, h->env.log, &t)) {
+        ui_js_ref *fn_ref = t.fn, *args_ref = t.args;
         uint32_t scope = ui_js_scope_open(js);
         ui_js_val fn, args, argv[MAX_TIMER_ARGS];
         uint32_t argc = 0;
-        bool ok = ui_js_ref_get(js, t.fn, &fn) && ui_js_ref_get(js, t.args, &args) && ui_js_length(js, args, &argc);
+        bool ok = ui_js_ref_get(js, fn_ref, &fn) && ui_js_ref_get(js, args_ref, &args) && ui_js_length(js, args, &argc);
         if (argc > MAX_TIMER_ARGS) argc = MAX_TIMER_ARGS;
         for (uint32_t i = 0; ok && i < argc; i++) ok = ui_js_get_index(js, args, i, &argv[i]);
         task_begin(h);
@@ -283,31 +201,6 @@ static void detach_buffer(ui_script_host *h) {
     h->cmd_buffer = NULL;
 }
 
-// Appends set_timer to the turn's buffer (making one if JS sent none).
-static void append_timer(ui_script_host *h, uint64_t deadline) {
-    ui_wire_set_timer op = {.id = UI_SCRIPT_TIMER_ID, .deadline_ns = deadline};
-    if (!h->out) {
-        ui_wire_buf b;
-        ui_wire_buf_init(&b, UI_WIRE_MAGIC_CMD);
-        if (ui_wire_set_timer_put(&b, &op) != UI_OK) return;
-        h->out = ui_wire_buf_finish(&b, &h->out_size);
-        return;
-    }
-    size_t at = h->out_size, size = at + UI_WIRE_OP_HEADER_SIZE + UI_WIRE_SET_TIMER_SIZE;
-    uint8_t *grown = realloc(h->out, size);
-    if (!grown) {
-        UI_ERROR(h->env.log, MODULE, "out of memory arming the timers");
-        return;
-    }
-    ui_wire_put_u16(grown + at, UI_OP_SET_TIMER);
-    ui_wire_put_u16(grown + at + 2, UI_WIRE_OP_HEADER_SIZE + UI_WIRE_SET_TIMER_SIZE);
-    ui_wire_set_timer_write(grown + at + UI_WIRE_OP_HEADER_SIZE, &op);
-    ui_wire_put_u32(grown + 8, (uint32_t)size);                 // total_bytes
-    ui_wire_put_u32(grown + 12, ui_wire_get_u32(grown + 12) + 1); // op_count
-    h->out = grown;
-    h->out_size = size;
-}
-
 // ---- Natives: the prelude's ----------------------------------------------------------------
 
 static ui_script_host *host_of(const ui_js_call_info *call) { return call->data; }
@@ -336,26 +229,17 @@ static ui_js_val native_set_timer(ui_js *js, const ui_js_call_info *call) {
     bool ok = true;
     double ms = arg_number(js, call, 1, &ok);
     if (!ok) return (ui_js_val){0};
-    if (!(ms > 0)) ms = 0; // NaN and negative delays are 0
     bool repeat = call->argc > 3 && ui_js_truthy(js, call->args[3]);
-    if (repeat && ms < 1) ms = 1; // an interval of 0 would fire on every core step
-    double ns = ms * 1e6;
-    uint64_t delay = ns >= 1.8e19 ? UINT64_MAX / 2 : (uint64_t)llround(ns);
-    if (++h->next_id == 0) h->next_id = 1; // ids are never 0, as on the web
-    script_timer t = {
-        .deadline = h->turn_ns + delay < h->turn_ns ? UINT64_MAX - 1 : h->turn_ns + delay,
-        .seq = h->next_seq++,
-        .interval = repeat ? delay : 0,
-        .id = h->next_id,
-        .fn = ui_js_ref_new(js, call->args[0], false),
-        .args = call->argc > 2 ? ui_js_ref_new(js, call->args[2], false) : NULL,
-    };
-    if (!t.args) t.args = ui_js_ref_new(js, ui_js_array(js), false);
-    if (!t.fn || !t.args || !push_timer(h, t)) {
-        free_timer(h, &t);
+    ui_js_ref *fn = ui_js_ref_new(js, call->args[0], false);
+    ui_js_ref *args = call->argc > 2 ? ui_js_ref_new(js, call->args[2], false) : NULL;
+    if (!args) args = ui_js_ref_new(js, ui_js_array(js), false);
+    uint32_t id;
+    if (!fn || !args || !ui_script_timers_add(&h->timers, h->turn_ns, ms, repeat, fn, args, &id)) {
+        ui_js_ref_free(js, fn);
+        ui_js_ref_free(js, args);
         return ui_js_throw_error(js, UI_JS_RANGE_ERROR, "out of memory for a timer");
     }
-    return ui_js_number(js, t.id);
+    return ui_js_number(js, id);
 }
 
 static ui_js_val native_clear_timer(ui_js *js, const ui_js_call_info *call) {
@@ -363,12 +247,8 @@ static ui_js_val native_clear_timer(ui_js *js, const ui_js_call_info *call) {
     bool ok = true;
     double id = arg_number(js, call, 0, &ok);
     if (!ok) return (ui_js_val){0};
-    for (uint32_t i = 0; i < h->timer_count; i++) {
-        if ((double)h->timers[i].id != id) continue;
-        script_timer t = remove_timer(h, i);
-        free_timer(h, &t);
-        break;
-    }
+    ui_script_timer t;
+    if (ui_script_timers_clear(&h->timers, id, &t)) free_timer(h, &t);
     return ui_js_undefined(js);
 }
 
@@ -595,24 +475,6 @@ static bool install(ui_script_host *h) {
 
 // ---- Lifecycle ---------------------------------------------------------------------------
 
-static uint8_t *read_file(const char *path, size_t *size) {
-    FILE *f = fopen(path, "rb");
-    if (!f) return NULL;
-    uint8_t *data = NULL;
-    if (fseek(f, 0, SEEK_END) == 0) {
-        long n = ftell(f);
-        if (n >= 0 && fseek(f, 0, SEEK_SET) == 0 && (data = malloc((size_t)n + 1))) {
-            if (fread(data, 1, (size_t)n, f) != (size_t)n) {
-                free(data);
-                data = NULL;
-            }
-            *size = (size_t)n;
-        }
-    }
-    fclose(f);
-    return data;
-}
-
 #ifdef AXE_DEV
 static char *dev_resolve(void *user, const char *base, const char *specifier) {
     return ui_dev_resolve(((ui_script_host *)user)->dev, base, specifier);
@@ -629,7 +491,7 @@ ui_result ui_script_host_create(const ui_script_desc *desc, const ui_script_env 
     h->env = *env;
     h->internal = desc->internal;
     h->long_task_ns = desc->long_task_ns ? desc->long_task_ns : DEFAULT_LONG_TASK_NS;
-    h->armed = NO_DEADLINE;
+    ui_script_timers_init(&h->timers);
     struct timespec ts;
     timespec_get(&ts, TIME_UTC);
     double since_start = (double)(ui_monotonic_ns() - env->start_ns) / 1e6;
@@ -651,7 +513,7 @@ ui_result ui_script_host_create(const ui_script_desc *desc, const ui_script_env 
     if (channel) has_bundle = false;
 #endif
     if (r == UI_OK && has_bundle && desc->bundle_path) {
-        bytes = h->file = read_file(desc->bundle_path, &size);
+        bytes = h->file = ui_script_read_file(desc->bundle_path, &size);
         if (!h->file) {
             UI_ERROR(env->log, MODULE, "cannot read the bundle %s", desc->bundle_path);
             r = UI_ERR_IO;
@@ -695,7 +557,7 @@ ui_result ui_script_host_create(const ui_script_desc *desc, const ui_script_env 
 void ui_script_host_destroy(ui_script_host *h) {
     if (!h) return;
     if (h->js) {
-        for (uint32_t i = 0; i < h->timer_count; i++) free_timer(h, &h->timers[i]);
+        for (uint32_t i = 0; i < h->timers.count; i++) free_timer(h, &h->timers.heap[i]);
         for (uint32_t i = 0; i < h->rejection_count; i++) {
             ui_js_ref_free(h->js, h->rejections[i].promise);
             ui_js_ref_free(h->js, h->rejections[i].reason);
@@ -716,7 +578,7 @@ void ui_script_host_destroy(ui_script_host *h) {
 #endif
     for (uint32_t i = 0; i < h->arg_count; i++) free(h->args[i]);
     free(h->args);
-    free(h->timers);
+    ui_script_timers_free(&h->timers);
     free(h->rejections);
     free(h->cmd);
     free(h->out);
@@ -785,14 +647,7 @@ void ui_script_host_turn(ui_script_host *h, const uint8_t *events, size_t size, 
         ui_js_scope_close(js, scope);
         return;
     }
-    // The turn's time: the clock event first in the buffer (docs/command-buffer.md).
-    ui_wire_reader peek = rd;
-    if (ui_wire_reader_next(&peek, &op) == UI_OK && op.opcode == UI_EVENT_CLOCK &&
-        ui_wire_event_framed(op.opcode, op.payload, op.payload_size)) {
-        ui_wire_clock c;
-        ui_wire_clock_read(op.payload, op.payload_size, &c);
-        if (c.now_ns > h->turn_ns) h->turn_ns = c.now_ns;
-    }
+    ui_script_turn_time(rd, &h->turn_ns);
     if (!h->loaded) load(h);
 #ifdef AXE_DEV
     // Updates apply at the turn's start, before its events, as a task of their own.
@@ -813,14 +668,9 @@ void ui_script_host_turn(ui_script_host *h, const uint8_t *events, size_t size, 
             res = UI_ERR_MALFORMED;
             break;
         }
-        if (op.opcode == UI_EVENT_TIMER_FIRED) {
-            ui_wire_timer_fired t;
-            ui_wire_timer_fired_read(op.payload, op.payload_size, &t);
-            if (t.id == UI_SCRIPT_TIMER_ID) {
-                h->armed = NO_DEADLINE; // a fired wire timer is disarmed
-                run_timers(h);
-                continue;
-            }
+        if (ui_script_timers_fired(&h->timers, &op)) {
+            run_timers(h);
+            continue;
         }
         if (!ui_js_is_empty(ab)) dispatch(h, ab, &op, events);
     }
@@ -834,11 +684,7 @@ void ui_script_host_turn(ui_script_host *h, const uint8_t *events, size_t size, 
         if (!ui_js_call(js, fn, ui_js_undefined(js), 0, NULL, &r)) report_exception(h, "flushing commands");
         task_end(h, "flushing commands");
     }
-    uint64_t next = h->timer_count ? h->timers[0].deadline : NO_DEADLINE;
-    if (next != h->armed) {
-        append_timer(h, next == NO_DEADLINE ? UI_WIRE_TIMER_CANCEL : next);
-        h->armed = next;
-    }
+    ui_script_timers_arm(&h->timers, h->env.log, &h->out, &h->out_size);
 #ifdef AXE_DEV
     if (hot_update) {
         uint64_t event_ns = ui_dev_take_event_ns(h->dev);
@@ -851,3 +697,18 @@ void ui_script_host_turn(ui_script_host *h, const uint8_t *events, size_t size, 
     h->out = NULL;
     h->out_size = 0;
 }
+
+// ---- The runtime host interface ----------------------------------------------------------------
+
+static ui_result js_create(const ui_script_desc *desc, const ui_script_env *env, void *config, void **out) {
+    (void)config;
+    return ui_script_host_create(desc, env, (ui_script_host **)out);
+}
+
+static void js_turn(void *host, const uint8_t *events, size_t size, uint8_t **cmds, size_t *cmds_size) {
+    ui_script_host_turn(host, events, size, cmds, cmds_size);
+}
+
+static void js_destroy(void *host) { ui_script_host_destroy(host); }
+
+const ui_script_runtime ui_script_runtime_js = {.create = js_create, .turn = js_turn, .destroy = js_destroy};
