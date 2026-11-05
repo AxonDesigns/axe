@@ -11,14 +11,27 @@
 //   gc()             a full collection now (FinalizationRegistry callbacks follow)
 //   cBuffer(name)    a command buffer the C writer encodes (the encoder's reference cases)
 //   cEvents()        an event buffer of every event, encoded by the C codec
+//   hotEdit({path: text | null})  AXE_DEV: writes or deletes the app's files, rebuilds them and
+//                    posts the result (--dev)
+//   capture(path)    writes the surface as a PPM after the next frame
 // Without requests the runner keeps making frames (preparation, font loads); a test that
 // neither steps nor finishes within the frame budget fails.
+//
+//   axe-test-js --dev DIR [--entry main.tsx] driver.js
+// runs driver.js as a module next to an app of hot-reloaded modules, in DIR/src (emptied first).
 #include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <threads.h>
 
+#ifdef AXE_DEV
+#include <sys/stat.h>
+#include <unistd.h>
+
+#include "build.h"
+#include "runtime/app_internal.h"
+#endif
 #include "script/host/host.h"
 #include "ui/ui.h"
 #include "wire/gen/wire_gen.h"
@@ -36,6 +49,11 @@ typedef struct runner {
         char *text;
     } hooks[MAX_HOOKS];
     uint32_t hook_count;
+    _Atomic(char *) capture; // a path, malloc'd
+#ifdef AXE_DEV
+    ui_dev_channel *channel;
+    ui_dev_build_desc build;
+#endif
 } runner;
 
 static void on_trace(void *user, const ui_trace_event *ev) {
@@ -230,6 +248,60 @@ static ui_js_val t_c_events(ui_js *js, const ui_js_call_info *call) {
     return ab;
 }
 
+static ui_js_val t_capture(ui_js *js, const ui_js_call_info *call) {
+    runner *r = call->data;
+    char *path = call->argc ? ui_js_to_utf8(js, call->args[0], NULL) : NULL;
+    free(atomic_exchange(&r->capture, path));
+    return ui_js_undefined(js);
+}
+
+#ifdef AXE_DEV
+static void make_parents(char *path) {
+    for (char *p = strchr(path + 1, '/'); p; p = strchr(p + 1, '/')) {
+        *p = 0;
+        mkdir(path, 0777);
+        *p = '/';
+    }
+}
+
+// hotEdit({path: text | null}): the same build axe-run's watcher runs.
+static ui_js_val t_hot_edit(ui_js *js, const ui_js_call_info *call) {
+    runner *r = call->data;
+    ui_js_val keys_fn, keys, global = ui_js_global(js), object;
+    uint32_t n = 0;
+    if (!ui_js_get(js, global, "Object", &object) || !ui_js_get(js, object, "keys", &keys_fn) ||
+        !ui_js_call(js, keys_fn, object, 1, call->args, &keys) || !ui_js_length(js, keys, &n))
+        return (ui_js_val){0};
+    const char **files = calloc(n ? n : 1, sizeof *files);
+    for (uint32_t i = 0; i < n; i++) {
+        ui_js_val key, value;
+        if (!ui_js_get_index(js, keys, i, &key)) return (ui_js_val){0};
+        char *name = ui_js_to_utf8(js, key, NULL);
+        if (!name || !ui_js_get(js, call->args[0], name, &value)) return (ui_js_val){0};
+        files[i] = name;
+        size_t size = strlen(r->build.root) + strlen(name) + 2;
+        char *path = malloc(size);
+        snprintf(path, size, "%s/%s", r->build.root, name);
+        make_parents(path);
+        if (ui_js_typeof(js, value) == UI_JS_NULL) {
+            unlink(path);
+        } else {
+            char *text = ui_js_to_utf8(js, value, NULL);
+            FILE *f = fopen(path, "wb");
+            if (f && text) fputs(text, f);
+            if (f) fclose(f);
+            free(text);
+        }
+        free(path);
+    }
+    ui_dev_batch *b = ui_dev_build(&r->build, files, n, ui_monotonic_ns());
+    if (b) ui_dev_channel_post(r->channel, b);
+    for (uint32_t i = 0; i < n; i++) free((void *)(uintptr_t)files[i]);
+    free(files);
+    return ui_js_undefined(js);
+}
+#endif
+
 static void setup(void *user, ui_js *js) {
     ui_js_val m = ui_js_object(js);
     ui_js_set(js, m, "requestStep", ui_js_function(js, "requestStep", 1, t_request_step, user));
@@ -238,15 +310,36 @@ static void setup(void *user, ui_js *js) {
     ui_js_set(js, m, "gc", ui_js_function(js, "gc", 0, t_gc, user));
     ui_js_set(js, m, "cBuffer", ui_js_function(js, "cBuffer", 1, t_c_buffer, user));
     ui_js_set(js, m, "cEvents", ui_js_function(js, "cEvents", 0, t_c_events, user));
+    ui_js_set(js, m, "capture", ui_js_function(js, "capture", 1, t_capture, user));
+#ifdef AXE_DEV
+    ui_js_set(js, m, "hotEdit", ui_js_function(js, "hotEdit", 1, t_hot_edit, user));
+#endif
     ui_js_define_module(js, "axe:test", m);
 }
 
+#ifdef AXE_DEV
+static void wake_core(void *user) { ui_app_request_turn(user); }
+#endif
+
 int main(int argc, char **argv) {
     const char *bundle = NULL;
+    const char *args[8];
+    uint32_t arg_count = 0;
     ui_scheduler_kind scheduler = UI_SCHEDULER_FROM_ENV;
+#ifdef AXE_DEV
+    const char *dev_dir = NULL, *entry = "main.tsx";
+#endif
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--scheduler") && i + 1 < argc) {
             scheduler = !strcmp(argv[++i], "single") ? UI_SCHEDULER_SINGLE : UI_SCHEDULER_THREADED;
+        } else if (!strcmp(argv[i], "--arg") && i + 1 < argc && arg_count < 8) {
+            args[arg_count++] = argv[++i];
+#ifdef AXE_DEV
+        } else if (!strcmp(argv[i], "--dev") && i + 1 < argc) {
+            dev_dir = argv[++i];
+        } else if (!strcmp(argv[i], "--entry") && i + 1 < argc) {
+            entry = argv[++i];
+#endif
         } else {
             bundle = argv[i];
         }
@@ -259,7 +352,22 @@ int main(int argc, char **argv) {
     mtx_init(&r.lock, mtx_plain);
     ui_script_internal internal = {.setup = setup, .user = &r, .performance_from_animation_clock = true};
     // A runaway test fails on JS's out-of-memory error instead of taking the machine's memory.
-    ui_script_desc script = {.bundle_path = bundle, .internal = &internal, .memory_limit = (size_t)512 << 20};
+    ui_script_desc script = {.bundle_path = bundle, .internal = &internal, .memory_limit = (size_t)512 << 20,
+                             .args = args, .arg_count = arg_count};
+#ifdef AXE_DEV
+    char src_dir[4096], work_dir[4096], command[8300];
+    if (dev_dir) {
+        snprintf(src_dir, sizeof src_dir, "%s/src", dev_dir);
+        snprintf(work_dir, sizeof work_dir, "%s/work", dev_dir);
+        snprintf(command, sizeof command, "rm -rf '%s' '%s' && mkdir -p '%s' '%s'", src_dir, work_dir, src_dir, work_dir);
+        if (system(command) != 0) return 1;
+        r.build = (ui_dev_build_desc){src_dir, work_dir, AXE_TSX_PATH, AXE_ESBUILD_PATH, AXE_SOURCE_DIR};
+        ui_dev_desc d = {.entry = entry, .packages = AXE_DEV_PACKAGES, .driver = bundle};
+        if (ui_dev_channel_create(&d, &r.channel) != UI_OK) return 1;
+        internal.dev = r.channel;
+        script.bundle_path = NULL;
+    }
+#endif
     static const char *const fonts[] = {AXE_SOURCE_DIR "/tests/fonts/NotoSans-VF.ttf"};
     ui_app_desc desc = {
         .scheduler = scheduler,
@@ -271,6 +379,9 @@ int main(int argc, char **argv) {
     ui_app *app;
     if (ui_app_create(&desc, &app) != UI_OK) return 1;
     ui_hooks_subscribe(app, on_trace, &r, NULL);
+#ifdef AXE_DEV
+    if (r.channel) ui_dev_channel_set_wake(r.channel, wake_core, app);
+#endif
     int frames = 0;
     ui_result res = UI_OK;
     while (res == UI_OK && !atomic_load(&r.done) && frames++ < MAX_FRAMES) {
@@ -282,8 +393,22 @@ int main(int argc, char **argv) {
             ui_app_clock_step(app, step);
         }
         if (res == UI_OK) res = ui_app_frame(app);
+        char *capture = atomic_exchange(&r.capture, NULL);
+        if (capture) {
+            ui_image image;
+            if (res == UI_OK) res = ui_app_frame(app);
+            if (res == UI_OK) res = ui_surface_capture(app, ui_app_main_surface(app), &image);
+            if (res == UI_OK) {
+                res = ui_image_write_ppm(&image, capture);
+                ui_image_free(&image);
+            }
+            free(capture);
+        }
     }
     ui_app_destroy(app);
+#ifdef AXE_DEV
+    ui_dev_channel_destroy(r.channel);
+#endif
     for (uint32_t i = 0; i < r.hook_count; i++) free(r.hooks[i].text);
     if (!atomic_load(&r.done)) {
         fprintf(stderr, "%s: the tests didn't finish within %d frames\n", bundle, MAX_FRAMES);

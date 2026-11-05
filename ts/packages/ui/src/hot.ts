@@ -474,13 +474,15 @@ function spread(changed: Iterable<string>, past: boolean): { dirty: Set<string>;
   return { dirty, reached };
 }
 
+// A deleted file that is still imported holds the update back, unless every importer is changing
+// too: that may be the edit removing the import, and if it isn't, the import fails and says so.
 function checkDangling(deleted: string[]): void {
-  for (const f of deleted) {
+  for (const f of deleted) danglingErrors.set(f, "");
+  for (const f of [...danglingErrors.keys()]) {
     const importers = host.hotImporters(f);
-    if (importers.length) danglingErrors.set(f, `${f} was deleted, but ${importers.join(", ")} still imports it`);
+    if (importers.some((i) => !pending.has(i))) danglingErrors.set(f, `${f} was deleted, but ${importers.join(", ")} still imports it`);
     else danglingErrors.delete(f);
   }
-  for (const f of [...danglingErrors.keys()]) if (!host.hotImporters(f).length) danglingErrors.delete(f);
 }
 
 // Forgets an update: `committed` when its definitions were already applied.

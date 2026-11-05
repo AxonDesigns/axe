@@ -57,6 +57,7 @@
     "types/**/*.d.ts",
     "../examples/**/*.ts",
     "../tests/ts/**/*.ts",
+    "../tests/hot/*.ts",
     "../bench/**/*.ts",
     "../tests/ui/*.json",
     "packages/*/src/**/*.tsx",

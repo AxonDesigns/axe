@@ -8,6 +8,7 @@
 
 #define APP_PREFIX "app:/"
 #define PKG_PREFIX "pkg:/"
+#define DRIVER_NAME "drv:/driver.js"
 #define MAP_MARKER "//# sourceMappingURL=data:application/json;base64,"
 #define MAPS_KEPT 4u
 
@@ -16,7 +17,7 @@ struct ui_dev_channel {
     ui_dev_batch *head, *tail;
     void (*wake)(void *);
     void *wake_user;
-    char *entry, *packages;
+    char *entry, *packages, *driver;
 };
 
 ui_result ui_dev_channel_create(const ui_dev_desc *desc, ui_dev_channel **out) {
@@ -24,9 +25,11 @@ ui_result ui_dev_channel_create(const ui_dev_desc *desc, ui_dev_channel **out) {
     if (!ch) return UI_ERR_OUT_OF_MEMORY;
     ch->entry = strdup(desc->entry);
     ch->packages = strdup(desc->packages);
+    ch->driver = desc->driver ? strdup(desc->driver) : NULL;
     if (!ch->entry || !ch->packages || mtx_init(&ch->lock, mtx_plain) != thrd_success) {
         free(ch->entry);
         free(ch->packages);
+        free(ch->driver);
         free(ch);
         return UI_ERR_OUT_OF_MEMORY;
     }
@@ -55,6 +58,7 @@ void ui_dev_channel_destroy(ui_dev_channel *ch) {
     mtx_destroy(&ch->lock);
     free(ch->entry);
     free(ch->packages);
+    free(ch->driver);
     free(ch);
 }
 
@@ -293,7 +297,8 @@ static char *pkg_name(const char *file) {
 
 char *ui_dev_resolve(void *dev, const char *base, const char *specifier) {
     ui_dev *d = dev;
-    if (!strncmp(specifier, APP_PREFIX, strlen(APP_PREFIX)) || !strncmp(specifier, PKG_PREFIX, strlen(PKG_PREFIX)))
+    if (!strncmp(specifier, APP_PREFIX, strlen(APP_PREFIX)) || !strncmp(specifier, PKG_PREFIX, strlen(PKG_PREFIX)) ||
+        !strcmp(specifier, DRIVER_NAME))
         return strdup(specifier);
     const char *package = package_entry(specifier);
     if (package) return pkg_name(package);
@@ -325,13 +330,8 @@ char *ui_dev_resolve(void *dev, const char *base, const char *specifier) {
     return versioned_name(m, m->staged ? m->staged : m->version);
 }
 
-static char *read_package(ui_dev *d, const char *file, size_t *size) {
-    size_t n = strlen(d->ch->packages) + strlen(file) + 2;
-    char *path = malloc(n);
-    if (!path) return NULL;
-    snprintf(path, n, "%s/%s", d->ch->packages, file);
+static char *read_file(const char *path, size_t *size) {
     FILE *f = fopen(path, "rb");
-    free(path);
     if (!f) return NULL;
     char *data = NULL;
     if (fseek(f, 0, SEEK_END) == 0) {
@@ -402,9 +402,20 @@ static void remember_map(dev_module *m, uint32_t version) {
 
 bool ui_dev_load(void *dev, const char *name, ui_js_module_source *out) {
     ui_dev *d = dev;
-    if (!strncmp(name, PKG_PREFIX, strlen(PKG_PREFIX))) {
+    bool package = !strncmp(name, PKG_PREFIX, strlen(PKG_PREFIX));
+    if (package || (d->ch->driver && !strcmp(name, DRIVER_NAME))) {
         size_t size = 0;
-        char *code = read_package(d, name + strlen(PKG_PREFIX), &size);
+        char *code = NULL;
+        if (package) {
+            const char *file = name + strlen(PKG_PREFIX);
+            size_t n = strlen(d->ch->packages) + strlen(file) + 2;
+            char *path = malloc(n);
+            if (path) snprintf(path, n, "%s/%s", d->ch->packages, file);
+            code = path ? read_file(path, &size) : NULL;
+            free(path);
+        } else {
+            code = read_file(d->ch->driver, &size);
+        }
         if (!code) return false;
         free(d->package_code); // only the load call reads it
         d->package_code = code;
@@ -420,6 +431,10 @@ bool ui_dev_load(void *dev, const char *name, ui_js_module_source *out) {
     remember_map(m, version);
     *out = (ui_js_module_source){m->code, m->size, false};
     return true;
+}
+
+const char *ui_dev_bootstrap(ui_dev *d) {
+    return d->ch->driver ? "import \"@axe/ui/hot\";\nimport \"" DRIVER_NAME "\";\n" : "import \"@axe/ui/hot\";\n";
 }
 
 // ---- Batches -------------------------------------------------------------------------------

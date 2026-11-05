@@ -97,6 +97,10 @@ declare module "axe:test" {
   /** kind: 0 exception, 1 rejection, 2 long task, 3 leak. */
   export function hooks(): { kind: number; text: string }[];
   export function gc(): void;
+  /** Writes the surface as a PPM after the next frame. */
+  export function capture(path: string): void;
+  /** Hot reload's tests: writes or (null) deletes files of the app, and posts their rebuild. */
+  export function hotEdit(files: Record<string, string | null>): void;
   export function cBuffer(name: string): ArrayBuffer;
   export function cEvents(): ArrayBuffer;
 }

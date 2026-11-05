@@ -18,6 +18,15 @@ target_include_directories(axe-jsc PRIVATE ${PROJECT_SOURCE_DIR}/src)
 target_link_libraries(axe-jsc PRIVATE ui)
 ui_target_warnings(axe-jsc)
 
+# Hot reload's tools: the rebuild and the watcher, shared with tests.
+if(AXE_DEV)
+    add_library(axe_dev STATIC axe-run/dev/build.c)
+    target_include_directories(axe_dev PUBLIC axe-run/dev ${PROJECT_SOURCE_DIR}/src)
+    target_compile_definitions(axe_dev PRIVATE _GNU_SOURCE)
+    target_link_libraries(axe_dev PUBLIC ui)
+    ui_target_warnings(axe_dev)
+endif()
+
 add_executable(axe-run axe-run/main.c)
 target_compile_definitions(axe-run PRIVATE _DEFAULT_SOURCE)
 target_link_libraries(axe-run PRIVATE ui)

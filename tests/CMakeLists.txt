@@ -275,6 +275,13 @@ target_include_directories(axe-test-js PRIVATE ${PROJECT_SOURCE_DIR}/src)
 target_compile_definitions(axe-test-js PRIVATE AXE_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
 target_link_libraries(axe-test-js PRIVATE ui)
 ui_target_warnings(axe-test-js)
+if(AXE_DEV)
+    target_link_libraries(axe-test-js PRIVATE axe_dev)
+    target_compile_definitions(axe-test-js PRIVATE
+        AXE_TSX_PATH="${CMAKE_BINARY_DIR}/tools/axe-tsx" AXE_ESBUILD_PATH="${AXE_ESBUILD}"
+        AXE_DEV_PACKAGES="${AXE_DEV_PACKAGES}")
+    add_dependencies(axe-test-js axe_dev_packages)
+endif()
 
 function(axe_ts_test name file)
     set(js "${CMAKE_CURRENT_BINARY_DIR}/ts/${name}.js")
@@ -288,6 +295,32 @@ foreach(file IN LISTS _ts_tests)
     get_filename_component(name "${file}" NAME_WE)
     axe_ts_test(${name} "${file}")
 endforeach()
+
+# Hot reload, headless (docs/ui.md, "Hot reload"): a driver next to an app of hot-reloaded modules,
+# with no watcher. The driver shares the app's @axe/* modules, so they stay external here.
+if(AXE_DEV)
+    function(axe_hot_driver name)
+        set(js "${CMAKE_CURRENT_BINARY_DIR}/hot/${name}.js")
+        set(src "${CMAKE_CURRENT_SOURCE_DIR}/hot/${name}.ts")
+        add_custom_command(
+            OUTPUT "${js}"
+            COMMAND "${AXE_ESBUILD}" "${src}" --format=esm --target=es2023 --keep-names --log-level=warning
+                    "--define:AXE_SOURCE_DIR=\"${PROJECT_SOURCE_DIR}\"" --define:AXE_DEV=true "--outfile=${js}"
+            DEPENDS "${src}"
+            COMMENT "Building the hot reload driver ${name}"
+            VERBATIM)
+        add_custom_target(hot_${name} ALL DEPENDS "${js}")
+    endfunction()
+    axe_hot_driver(hot.test)
+    add_test(NAME ts_hot COMMAND axe-test-js --dev "${CMAKE_CURRENT_BINARY_DIR}/hot/run-hot" "${CMAKE_CURRENT_BINARY_DIR}/hot/hot.test.js")
+    set_tests_properties(ts_hot PROPERTIES ENVIRONMENT "UI_GPU=software" TIMEOUT 300)
+    # The scene after an update equals a fresh build of the new version, in the same state.
+    axe_hot_driver(hot_scene.test)
+    add_test(NAME hot_scene COMMAND ${CMAKE_COMMAND} -DRUNNER=$<TARGET_FILE:axe-test-js>
+             -DDRIVER=${CMAKE_CURRENT_BINARY_DIR}/hot/hot_scene.test.js -DOUT=${CMAKE_CURRENT_BINARY_DIR}/hot/scene
+             -P ${CMAKE_CURRENT_SOURCE_DIR}/hot/scene.cmake)
+    set_tests_properties(hot_scene PROPERTIES ENVIRONMENT "UI_GPU=software" TIMEOUT 300)
+endif()
 
 add_test(NAME ts_typecheck COMMAND "${AXE_TSC}" -p "${PROJECT_SOURCE_DIR}/ts/tsconfig.json")
 

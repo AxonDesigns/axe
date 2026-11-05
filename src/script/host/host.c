@@ -748,9 +748,9 @@ static void load(ui_script_host *h) {
 #ifdef AXE_DEV
     // The hot runtime comes first, and it evaluates the app: an entry that doesn't build has
     // something to show the error.
-    static const char bootstrap[] = "import \"@axe/ui/hot\";\n";
     if (h->dev) {
-        src = (ui_js_module_source){bootstrap, sizeof bootstrap - 1, false};
+        const char *bootstrap = ui_dev_bootstrap(h->dev);
+        src = (ui_js_module_source){bootstrap, strlen(bootstrap), false};
         name = "app:/__bootstrap__";
     }
 #endif

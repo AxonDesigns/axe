@@ -33,6 +33,7 @@ typedef struct ui_dev_channel ui_dev_channel;
 typedef struct ui_dev_desc {
     const char *entry;    // the entry module, relative to the root
     const char *packages; // the directory of the prebuilt @axe/* modules
+    const char *driver;   // tests: a module evaluated before the app (drv:/); NULL: none
 } ui_dev_desc;
 
 // Ownership: destroy after the app. The channel must outlive the app.
@@ -51,6 +52,9 @@ ui_result ui_dev_create(ui_dev_channel *ch, ui_js *js, ui_dev **out);
 void ui_dev_destroy(ui_dev *d);
 char *ui_dev_resolve(void *dev, const char *base, const char *specifier);
 bool ui_dev_load(void *dev, const char *name, ui_js_module_source *out);
+// What the host evaluates first: the hot runtime, and the test driver if there is one. Valid as
+// long as the table.
+const char *ui_dev_bootstrap(ui_dev *d);
 // The host API's dev functions, added to `axe:host`'s exports.
 bool ui_dev_install(ui_dev *d, ui_js_val exports);
 // Moves what was posted into the table, and returns true when the hot runtime should see it.
