@@ -18,6 +18,7 @@ import axe_idl  # noqa: E402
 import idl_c  # noqa: E402
 import idl_luau  # noqa: E402
 import idl_model  # noqa: E402
+import idl_reserved  # noqa: E402
 import idl_ts  # noqa: E402
 from idl_model import IdlError, compat, parse  # noqa: E402
 
@@ -506,6 +507,107 @@ class Generator(unittest.TestCase):
         r = subprocess.run([sys.executable, "-I", os.path.join(HERE, "axe_idl.py"), "--check", "--compat-base", "HEAD"],
                            capture_output=True, text=True, cwd=ROOT)
         self.assertEqual(r.returncode, 0, r.stderr)
+
+
+class Strings(unittest.TestCase):
+    """`utf8` and `no_nul` by target: docs/idl.md, "Checks"."""
+
+    OPS = """\
+command ping = 1  original 8
+  id          u32
+  name_bytes  u16 = count(name)
+  reserved    u16
+  tail
+  name        bytes[name_bytes] pad 4  utf8 no_nul
+event pong = 1  original 4
+  id  u32
+"""
+
+    def test_utf8_is_for_targets_whose_strings_can_be_invalid(self):
+        s = schema(ops=self.OPS)
+        self.assertIn("ui_utf8_valid(name, v->name_bytes)", idl_c.gen_c(s))
+        self.assertIn("RT.is_utf8(name)", idl_luau.commands_luau(s))
+        self.assertNotIn("Utf8", idl_ts.commands_ts(s).split("export class CommandWriter")[1])
+
+    def test_no_nul_is_for_every_target(self):
+        # Well-formed UTF-8 can hold a NUL, and TextEncoder keeps one.
+        s = schema(ops=self.OPS)
+        self.assertIn("memchr(name, 0, v->name_bytes)", idl_c.gen_c(s))
+        self.assertIn('string.find(name, "\\0", 1, true)', idl_luau.commands_luau(s))
+        self.assertIn("name.indexOf(0) >= 0", idl_ts.commands_ts(s))
+
+    def wire(self):
+        with open(os.path.join(ROOT, "idl/wire.idl"), encoding="utf-8") as f:
+            return parse(f.read(), "idl/wire.idl")
+
+    def test_the_wire_says_what_the_core_checks(self):
+        s = self.wire()
+        checks = lambda r, t: {c.kind for c in r.tail_item(t).checks}
+        text = next(r for r in s.commands if r.name == "set_text")
+        self.assertEqual(checks(text, "strings"), {"utf8"})  # NUL-separated: NUL can't be refused
+        self.assertEqual(checks(text, "ellipsis"), {"utf8", "no_nul"})
+        font = next(r for r in s.commands if r.name == "load_font")
+        self.assertEqual(checks(font, "path"), {"utf8", "no_nul"})
+        string = s.unions["style_value"].variant("string").fields[0]
+        self.assertLessEqual({"utf8", "no_nul"}, {c.kind for c in string.checks})
+
+    def test_style_strings_are_checked_from_the_idl(self):
+        s = self.wire()
+        self.assertIn("ui_utf8_valid((const uint8_t *)v->string.bytes", idl_c.gen_c(s))
+        self.assertIn("RT.is_utf8(x)", idl_luau.styles_luau(s))
+        styles = idl_ts.styles_ts(s)
+        self.assertIn('s.indexOf("\\0") < 0', styles)
+        self.assertNotIn("Utf8(", styles.split("function stringOk")[1].split("}")[0].replace("utf8Length(", ""))
+
+    def test_utf8_needs_a_string(self):
+        with self.assertRaisesRegex(IdlError, "doesn't apply in a union"):
+            s = self.wire()
+            s.unions["style_value"].variant("px").fields[0].checks.append(idl_model.Check("utf8"))
+            idl_model.check_union(s, s.unions["style_value"])
+
+
+class ReservedWords(unittest.TestCase):
+    def wire(self):
+        with open(os.path.join(ROOT, "idl/wire.idl"), encoding="utf-8") as f:
+            return parse(f.read(), "idl/wire.idl")
+
+    def collisions(self, field: str) -> set[str]:
+        s = schema(ops=f"command ping = 1  original 8\n  {field}  node\nevent pong = 1  original 4\n  id  u32\n")
+        return {t for t, found in idl_reserved.collisions(s).items() if field in found}
+
+    def test_no_new_collision(self):
+        for target, found in idl_reserved.collisions(self.wire()).items():
+            for name, what in found.items():
+                self.assertIn(name, idl_reserved.ALLOWED[target],
+                              f"{name} ({', '.join(sorted(what))}) is reserved in {target}: make its generator "
+                              "handle it, or rename it before it ships, then list it in idl_reserved.ALLOWED")
+
+    def test_allowed_names_still_collide(self):
+        found = idl_reserved.collisions(self.wire())
+        for target, names in idl_reserved.ALLOWED.items():
+            self.assertEqual(set(names), set(found[target]), target)
+
+    def test_every_kind_of_name_is_checked(self):
+        names = idl_reserved.names(self.wire())
+        self.assertIn("create_node", names)        # a command
+        self.assertIn("frame_committed", names)    # an event
+        self.assertIn("flex_direction", names)     # an enum, and a style property
+        self.assertIn("space_between", names)      # an enum value
+        self.assertIn("predicted_present_ns", names)  # a field
+        self.assertIn("ellipsis", names)           # a tail
+        self.assertIn("stiffness", names)          # a union's member
+        self.assertIn("border_top_width", names)   # a style property
+
+    def test_a_new_keyword_fails(self):
+        self.assertEqual(self.collisions("while"), {"c", "typescript", "luau"})
+        self.assertEqual(self.collisions("register"), {"c"})
+        self.assertEqual(self.collisions("class"), {"typescript"})
+        self.assertEqual(self.collisions("repeat"), {"luau"})
+        self.assertEqual(self.collisions("span"), set())
+
+    def test_each_target_is_checked_as_it_spells_the_name(self):
+        # `type_of` is `typeOf` in TypeScript and `type_of` in C: neither is `typeof`.
+        self.assertEqual(self.collisions("type_of"), set())
 
 
 if __name__ == "__main__":
