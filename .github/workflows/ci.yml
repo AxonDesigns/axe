@@ -2,11 +2,13 @@
 # (tsan: ThreadSanitizer, which catches data races on every run, not only when the timing
 # exposes them; tools/tsan/), and
 # runs each libFuzzer target from its seed corpus (the fuzz preset's tests). Longer fuzzing
-# runs nightly in fuzz.yml. bench-callgrind guards the benchmarks' instruction counts, idl
+# runs nightly in fuzz.yml. device-loss has a Vulkan layer fake a lost device, and
+# bench-callgrind guards the benchmarks' instruction counts, idl
 # checks the wire IDL's generated code and evolution rules (and has the base's reader read
 # the new fixtures), and actionlint checks the workflows. A manual run can be limited to the benchmark guard.
 # The wgpu-native build (vendored crates + Cargo target dir) is cached per preset, keyed on
-# the pinned submodule commit and the Rust toolchain, so a warm run only builds our C code.
+# the pinned submodule commit, its patches and the Rust toolchain, so a warm run only builds
+# our C code.
 name: ci
 
 on:
@@ -92,6 +94,50 @@ jobs:
             build/${{ matrix.preset }}/fuzz/leak-*
             build/${{ matrix.preset }}/fuzz/timeout-*
           if-no-files-found: ignore
+
+  # A driver that says VK_ERROR_DEVICE_LOST, from present, submit, a poll and acquire: the app
+  # must report it once and keep running (tools/vk-lost-layer). test_device_loss can't reach
+  # a driver error, and it needs a window, so this runs on lavapipe in a headless sway.
+  device-loss:
+    name: device loss (lavapipe)
+    if: inputs.jobs != 'bench'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set up
+        id: setup
+        uses: ./.github/actions/setup
+        with:
+          preset: release
+
+      - name: Install sway
+        run: sudo apt-get install -y --no-install-recommends sway
+
+      - name: Configure
+        run: cmake --preset release
+
+      - name: Build
+        run: cmake --build --preset release --target bench_gpu_admin
+
+      - name: Save vendored crates
+        if: always() && steps.setup.outputs.vendor-key != '' && steps.setup.outputs.vendor-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: third_party/rust-vendor
+          key: ${{ steps.setup.outputs.vendor-key }}
+
+      - name: Save wgpu-native build
+        if: always() && steps.setup.outputs.cargo-key != '' && steps.setup.outputs.cargo-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: build/release/cargo
+          key: ${{ steps.setup.outputs.cargo-key }}
+
+      - name: Lose the device at each call
+        run: tools/vk-lost-layer/run.sh software
 
   # The benchmark guard: instruction counts of the CPU benchmark cases under Callgrind,
   # against bench/baselines.json. Fails when a case is more than 2% above its baseline; a

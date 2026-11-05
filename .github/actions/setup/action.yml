@@ -69,6 +69,7 @@ runs:
       run: |
         echo "wgpu=$(git rev-parse HEAD:third_party/wgpu-native)" >> "$GITHUB_OUTPUT"
         echo "tsx=$(git rev-parse HEAD:tools/axe-tsx/Cargo.lock | cut -c1-12)" >> "$GITHUB_OUTPUT"
+        echo "patches=$(git rev-parse HEAD:third_party/patches | cut -c1-12)" >> "$GITHUB_OUTPUT"
 
     - name: Restore vendored crates
       id: vendor
@@ -87,7 +88,7 @@ runs:
       uses: actions/cache/restore@v4
       with:
         path: build/${{ inputs.preset }}/cargo
-        key: rust-build-${{ inputs.preset }}-${{ steps.key.outputs.wgpu }}-${{ steps.key.outputs.tsx }}-rust${{ inputs.rust-version }}-llvm${{ inputs.llvm-version }}
+        key: rust-build-${{ inputs.preset }}-${{ steps.key.outputs.wgpu }}-${{ steps.key.outputs.patches }}-${{ steps.key.outputs.tsx }}-rust${{ inputs.rust-version }}-llvm${{ inputs.llvm-version }}
 
     - name: Tool versions
       shell: bash

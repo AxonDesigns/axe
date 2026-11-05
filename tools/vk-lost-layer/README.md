@@ -15,18 +15,21 @@ returns the error, and then every call that can return it does.
 | `poll` | `vkGetSemaphoreCounterValue` | A loss seen polling for finished work, which wgpu does inside its submit |
 | `acquire` | `vkAcquireNextImageKHR` | A loss seen acquiring the next image |
 
-`run.sh` builds it and runs all four, on the GPU and on lavapipe, in a headless sway:
+`run.sh` builds it and runs all four, on the GPU and on lavapipe, in a headless sway. Name one to
+run only that one:
 
 ```sh
-tools/vk-lost-layer/run.sh
+tools/vk-lost-layer/run.sh            # hardware and software
+tools/vk-lost-layer/run.sh software   # what CI's device-loss job runs
 ```
 
-Each line says whether the app survived, with one report and a clean exit. Rerun it on every
-wgpu upgrade, and use the layer for M5h's injected losses.
+Each line says whether the app survived, with one report and a clean exit. CI needs `sway`, which
+its job installs. Rerun it locally on every wgpu upgrade, since CI only has lavapipe, and use the
+layer for M5h's injected losses.
 
-`wgpu-native-device-lost.patch` is the change that makes all four survive. It isn't applied: see
-[decisions.md](../../docs/decisions.md), "GPU spike". To try it, apply it in `third_party/wgpu-native`
-and rebuild. `run.sh` then shows the difference.
+Three of the four survive only because of
+[`third_party/patches/wgpu-native-device-lost.patch`](../../third_party/patches/wgpu-native-device-lost.patch).
+Without it they abort inside wgpu-native ([VERSIONS.md](../../third_party/VERSIONS.md), "Patches").
 
 There are no Vulkan headers among the project's dependencies, so the layer declares the few types
-it needs, which are stable ABI. It isn't built by CMake, since no test depends on it.
+it needs, which are stable ABI. `run.sh` compiles it, so CMake doesn't build it.
