@@ -51,9 +51,11 @@ The approved design (3b plan, section 6), and what 3b.1 and 3b.2 changed:
   showed that a style-only edit otherwise evaluates every importer and runs its components.
 - **A deleted file blocks an update only while something unchanged imports it,** or the edit that
   removes the import could never apply; and it clears when the file returns.
-- **`--minify-syntax` in every bundle.** Without it esbuild tree-shakes dev functions but leaves
-  `if (false) instanceBegin(...)` in the text. Bundles are about 5% smaller. This moves the
-  Callgrind baselines (below).
+- **`AXE_DEV:` labels, not `if (AXE_DEV)`.** Dev hooks are labeled statements, which bundles drop
+  with esbuild's `--drop-labels`. Without minifying, `if (false) instanceBegin(...)` stays in the
+  text. `--minify-syntax` removed it, but the guard caught it costing 2.66% on
+  `ui_for_mount_10k` (isolated by building the same tree without the flag), and that mount is a
+  tracked target. Labels rewrite nothing else.
 
 ### Tried, no gain
 Stripping the inline source map from module source before the engine compiles it: the heap per

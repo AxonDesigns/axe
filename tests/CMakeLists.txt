@@ -301,7 +301,7 @@ if(AXE_DEV)
         add_custom_command(
             OUTPUT "${js}"
             COMMAND "${AXE_ESBUILD}" "${src}" --format=esm --target=es2023 --keep-names --log-level=warning
-                    "--define:AXE_SOURCE_DIR=\"${PROJECT_SOURCE_DIR}\"" --define:AXE_DEV=true "--outfile=${js}"
+                    "--define:AXE_SOURCE_DIR=\"${PROJECT_SOURCE_DIR}\"" "--outfile=${js}"
             DEPENDS "${src}"
             COMMENT "Building the hot reload driver ${name}"
             VERBATIM)

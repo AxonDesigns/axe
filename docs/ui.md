@@ -394,7 +394,7 @@ build/debug/examples/layout_cards_tsx --dev
 
 `--dev` exists only in Debug builds, or with the `AXE_DEV` CMake option. Without it, `axe-run`
 refuses the flag. Bundles hold none of this: the transform writes its registrations only with
-`--dev`, and `@axe/ui`'s hooks are dead code that esbuild removes.
+`--dev`, and `@axe/ui`'s hooks are labeled statements that esbuild drops from bundles.
 
 **A walkthrough.** With `layout_cards_tsx --dev` running, in `examples/layout_cards`:
 1. **In `styles.ts`,** change the page's `padding`. The cards move, and the log says `0 instances

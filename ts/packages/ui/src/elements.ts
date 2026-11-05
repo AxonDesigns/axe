@@ -116,7 +116,7 @@ export class ComponentElement<P> implements Mountable {
     const o = new Owner(getOwner());
     o.name = this.fn.name || "Anonymous";
     o.nodes = r;
-    if (AXE_DEV) instanceBegin(o, this.fn, this.props, r);
+    AXE_DEV: instanceBegin(o, this.fn, this.props, r);
     runWithOwner(o, () => {
       try {
         mountInto(r, this.fn(this.props));

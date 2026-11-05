@@ -165,6 +165,14 @@ export function provideTheme(theme: Theme): void {
   });
 }
 
+function countInstance(t: Template, v: Variant): void {
+  v.refs++;
+  onCleanup(() => {
+    v.refs--;
+    release(t, v);
+  });
+}
+
 class Instance implements Mountable {
   constructor(
     readonly t: Template,
@@ -188,13 +196,8 @@ class Instance implements Mountable {
     for (let i = 0; i < slots.length; i++) if (t.parents[i]! < 0) region.adopt(slots[i]!);
     // Only a theme's variant is ever released: the others need no count (nor a cleanup per
     // instance), except for hot reload, which destroys what no instance uses.
-    if ((AXE_DEV || v.theme) && getOwner()) {
-      v.refs++;
-      onCleanup(() => {
-        v.refs--;
-        release(t, v);
-      });
-    }
+    if (v.theme && getOwner()) countInstance(t, v);
+    else AXE_DEV: if (getOwner()) countInstance(t, v);
     this.setup?.(slots);
   }
 }

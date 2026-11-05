@@ -1,6 +1,7 @@
 // Hot reload's bookkeeping (docs/ui.md, "Hot reload"), only in development: which instance of
 // which component is where, so a new version can re-run it in place and its state can be
-// found again. Everything calling this sits behind `if (AXE_DEV)`, so bundles hold none of it.
+// found again. Everything calling this is a statement labeled `AXE_DEV:`, which bundles drop
+// (esbuild's --drop-labels), so they hold none of it.
 //
 // A scope is a component instance, a row of For or a module. Scopes form a tree of their own
 // beside the owners: the path to a scope (family and ordinal under its parent, a row's key) is

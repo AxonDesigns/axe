@@ -194,10 +194,10 @@ function mountRowContent<T>(row: Row<T>, i: number): void {
     const el = row.children(row.item, row.index ?? (() => i));
     if (el instanceof ComponentElement) {
       row.name = el.fn.name || "Anonymous";
-      if (AXE_DEV) instanceBegin(row, el.fn, el.props, row.region, row);
+      AXE_DEV: instanceBegin(row, el.fn, el.props, row.region, row);
       mountInto(row.region, el.fn(el.props));
     } else {
-      if (AXE_DEV) instanceBegin(row, null, undefined, row.region, row);
+      AXE_DEV: instanceBegin(row, null, undefined, row.region, row);
       mountInto(row.region, el);
     }
   } catch (e) {

@@ -24,7 +24,7 @@ export function mount(App: Component<Record<string, never>>, surface: Surface): 
     }
   });
   // Under a module's owner (hot reload): a new version of the module replaces this.
-  if (AXE_DEV && getOwner()) onCleanup(() => dispose(owner));
+  AXE_DEV: if (getOwner()) onCleanup(() => dispose(owner));
   return { unmount: () => dispose(owner) };
 }
 

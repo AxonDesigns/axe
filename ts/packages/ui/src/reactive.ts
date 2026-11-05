@@ -276,7 +276,7 @@ export function handleError(error: unknown, owner: AnyOwner | null, what: string
       error = e; // the boundary itself failed: the next one up gets that
     }
   }
-  if (AXE_DEV && errorSink) {
+  AXE_DEV: if (errorSink) {
     errorSink(error, owner as Owner | null);
     return;
   }

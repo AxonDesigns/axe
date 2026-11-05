@@ -68,9 +68,9 @@ function(axe_ts_bundle output entry)
     add_custom_command(
         OUTPUT "${output}"
         COMMAND "${AXE_ESBUILD}" "${bundle_entry}" --bundle --format=esm --platform=neutral --target=es2023
-                --keep-names --minify-syntax --external:axe:host --external:axe:test --external:axe:stall --log-level=warning
+                --keep-names --external:axe:host --external:axe:test --external:axe:stall --log-level=warning
                 "--tsconfig=${AXE_TS_DIR}/tsconfig.json"
-                "--define:AXE_SOURCE_DIR=\"${PROJECT_SOURCE_DIR}\"" --define:AXE_DEV=false "--outfile=${output}"
+                "--define:AXE_SOURCE_DIR=\"${PROJECT_SOURCE_DIR}\"" --drop-labels=AXE_DEV "--outfile=${output}"
         DEPENDS "${entry}" ${local_sources} ${mirror_depends} ${AXE_TS_DEPENDS} ${ARG_DEPENDS}
         WORKING_DIRECTORY "${AXE_TS_DIR}"
         COMMENT "Bundling ${entry}"
@@ -91,7 +91,7 @@ if(AXE_DEV)
                 --bundle --splitting --format=esm --platform=neutral --target=es2023 --keep-names
                 --external:axe:host --external:axe:test --external:axe:stall --log-level=warning
                 "--tsconfig=${AXE_TS_DIR}/tsconfig.json" "--chunk-names=chunk-[hash]"
-                "--define:AXE_SOURCE_DIR=\"${PROJECT_SOURCE_DIR}\"" --define:AXE_DEV=true
+                "--define:AXE_SOURCE_DIR=\"${PROJECT_SOURCE_DIR}\""
                 "--outdir=${AXE_DEV_PACKAGES}"
         COMMAND "${CMAKE_COMMAND}" -E touch "${AXE_DEV_PACKAGES}.stamp"
         DEPENDS ${AXE_TS_DEPENDS}

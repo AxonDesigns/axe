@@ -194,7 +194,6 @@ ui_dev_batch *ui_dev_build(const ui_dev_build_desc *d, const char *const *files,
     es_argv[es_argc++] = "--sourcemap=inline";
     es_argv[es_argc++] = "--keep-names";
     es_argv[es_argc++] = "--log-level=error";
-    es_argv[es_argc++] = "--define:AXE_DEV=true";
     es_argv[es_argc++] = define;
     es_argv[es_argc++] = outdir;
     es_argv[es_argc++] = outbase;
