@@ -9,7 +9,8 @@
 // output depends on them, so no cache recognizes it. `baseline` mode has no second thread.
 //
 //   bench_gpu_admin [--mode baseline|admin|fallback|render|burn] [--seconds S] [--rows=N] [--same]
-//                   [--large-steps N] [--budget-ms MS] [--label TEXT] [--json FILE] [bundle.axbc]
+//                   [--large-steps N] [--budget-ms MS] [--nice N] [--label TEXT] [--json FILE]
+//                   [bundle.axbc]
 //
 // --same repeats identical sources, a control that shows what caches would have hidden.
 // `fallback` creates only modules off the render thread, and pipelines on it, in a window after
@@ -17,6 +18,7 @@
 // `render` is the same with no budget, every pipeline in the first window it reaches: the
 // control that shows this bench can see a stall. `burn` spins on the second thread and calls
 // no GPU function: it tells CPU contention from locks, on a software rasterizer above all.
+// --nice lowers the second thread's priority, as an admin thread's could be.
 //
 // Run it in a compositor with a fixed refresh rate, through bench/run_gpu_admin.sh. On one line
 // of JSON (--json) or a page of text, it reports:
@@ -32,7 +34,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/resource.h>
+#include <sys/syscall.h>
 #include <threads.h>
+#include <unistd.h>
 
 #include <webgpu.h>
 
@@ -70,6 +75,7 @@ static struct {
     WGPUDevice device;
     uint64_t start, seconds, end;
     bool same, fallback, unbudgeted;
+    int nice;
     uint64_t budget_ns;
     uint32_t large_steps;
     series series[S_COUNT];
@@ -357,6 +363,7 @@ static int burn_thread(void *arg) {
 
 static int compile_thread(void *arg) {
     (void)arg;
+    if (run.nice) setpriority(PRIO_PROCESS, (id_t)syscall(SYS_gettid), run.nice); // Linux: per thread
     WGPUBindGroupLayoutEntry entries[2] = {WGPU_BIND_GROUP_LAYOUT_ENTRY_INIT,
                                            WGPU_BIND_GROUP_LAYOUT_ENTRY_INIT};
     entries[0].binding = 0;
@@ -471,6 +478,7 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--json") && i + 1 < argc) json = argv[++i];
         else if (!strcmp(argv[i], "--large-steps") && i + 1 < argc) run.large_steps = (uint32_t)atoi(argv[++i]);
         else if (!strcmp(argv[i], "--budget-ms") && i + 1 < argc) run.budget_ns = (uint64_t)(atof(argv[++i]) * 1e6);
+        else if (!strcmp(argv[i], "--nice") && i + 1 < argc) run.nice = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--same")) run.same = true;
         else if (!strncmp(argv[i], "--rows=", 7)) args[arg_count++] = argv[i];
         else bundle = argv[i];

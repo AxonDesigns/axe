@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """The table of bench_gpu_admin's runs, and the pass criterion: over the baseline, frame time p99
-rises by at most 1 ms, with 0 added missed refreshes. Baselines and loads are compared by the
-median across repeats, and the spread between repeats is printed beside it, because one run's
-missed refreshes are noisy."""
+rises by at most 1 ms, with 0 added missed refreshes. Frame time compares the median across runs,
+and missed refreshes all the runs of a mode pooled, since one run's are noisy. The first table
+prints each run's, because the verdict can't tell a real rise from that noise."""
 import json
 import sys
 from collections import defaultdict
@@ -35,19 +35,17 @@ for (label, mode), group in sorted(runs.items()):
           f"| {med(group, 'interval'):.2f} |")
 
 print()
-print("| Config | Mode | Frame p99 rise | Missed rise, median | Worst base run | Best load run | "
-      "Criterion |")
-print("| --- | --- | --- | --- | --- | --- | --- |")
+print("| Config | Mode | Frame p99 rise | Missed, all runs | Baseline missed, all runs | Criterion |")
+print("| --- | --- | --- | --- | --- | --- |")
 for (label, mode), group in sorted(runs.items()):
-    base = runs.get((label.replace("-stress", ""), "baseline"))
+    base = runs.get((label.replace("-stress", "").replace("-nice", ""), "baseline"))
     if mode == "baseline" or not base:
         continue
     rise = med(group, "frame") - med(base, "frame")
-    missed_rise = median(missed_pct(r) for r in group) - median(missed_pct(r) for r in base)
-    verdict = "pass" if rise <= 1.0 and missed_rise <= 0 else "FAIL"
-    print(f"| {label} | {mode} | {rise:+.2f} ms | {missed_rise:+.2f}% "
-          f"| {max(missed_pct(r) for r in base):.2f}% | {min(missed_pct(r) for r in group):.2f}% "
-          f"| {verdict} |")
+    pooled = 100.0 * sum(r["missed"] for r in group) / sum(r["missed"] + r["frames"] for r in group)
+    base_pooled = 100.0 * sum(r["missed"] for r in base) / sum(r["missed"] + r["frames"] for r in base)
+    verdict = "pass" if rise <= 1.0 and pooled <= base_pooled else "FAIL"
+    print(f"| {label} | {mode} | {rise:+.2f} ms | {pooled:.2f}% | {base_pooled:.2f}% | {verdict} |")
 
 print()
 compiles = [(key, name) for key, group in sorted(runs.items())

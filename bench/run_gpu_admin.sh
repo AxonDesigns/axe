@@ -2,9 +2,11 @@
 # Runs bench_gpu_admin (docs/decisions.md, "GPU spike") in a headless sway at each refresh rate,
 # on the GPU and on lavapipe, and prints the table. Rerun it on every wgpu upgrade.
 #
-#   bench/run_gpu_admin.sh [--repeats N] [--seconds S] [--out DIR] [CONFIG...]
+#   bench/run_gpu_admin.sh [--repeats N] [--seconds S] [--out DIR] [--controls "NAME..."] [CONFIG...]
 #
-# CONFIG picks from gpu-60, gpu-144 and software-60 (default: all three). Needs sway; it takes
+# CONFIG picks from gpu-60, gpu-144 and software-60 (default: all three). --controls picks the
+# runs after the baseline and admin pairs, from render, stress, same, burn, fallback (default: all
+# of these), nice and baseline, and can name one more than once. Runs add to --out's results. Needs sway; it takes
 # about 30 minutes, and should have the machine to itself: anything else running is measured too.
 #
 # Baseline and load runs alternate, so slow drift in the machine lands on both.
@@ -26,12 +28,14 @@ ROOT=$(cd "$(dirname "$0")/.." && pwd)
 BENCH=${BENCH:-$ROOT/build/release/bench/bench_gpu_admin}
 REPEATS=3 SECONDS_PER_RUN=60 OUT= ROWS=100
 MEM_CAP=${MEM_CAP:-3G} MIN_AVAILABLE_MB=${MIN_AVAILABLE_MB:-3000}
+CONTROLS="render stress same burn fallback"
 CONFIGS=()
 while [ $# -gt 0 ]; do
     case $1 in
     --repeats) REPEATS=$2; shift ;;
     --seconds) SECONDS_PER_RUN=$2; shift ;;
     --out) OUT=$2; shift ;;
+    --controls) CONTROLS=$2; shift ;;
     *) CONFIGS+=("$1") ;;
     esac
     shift
@@ -103,9 +107,9 @@ run() { # LABEL MODE ARGS...
 
 for config in "${CONFIGS[@]}"; do
     case $config in
-    gpu-60) size=1920x1080 hz=60 gpu=hardware renderer=vulkan ;;
-    gpu-144) size=1920x1080 hz=144 gpu=hardware renderer=vulkan ;;
-    software-60) size=1024x768 hz=60 gpu=software renderer=pixman ;;
+    gpu-60) size=1920x1080 hz=60 gpu=hardware renderer=vulkan budget=8 ;;
+    gpu-144) size=1920x1080 hz=144 gpu=hardware renderer=vulkan budget=3 ;;
+    software-60) size=1024x768 hz=60 gpu=software renderer=pixman budget=8 ;;
     *) echo "unknown config $config" >&2; exit 2 ;;
     esac
     start_sway "$size" "$hz" "$renderer"
@@ -114,14 +118,23 @@ for config in "${CONFIGS[@]}"; do
         run "$config" baseline
         run "$config" admin
     done
-    # What a pipeline costs on the render thread: must fail, or this bench sees nothing.
-    run "$config" render
-    # The largest shaders anyone should expect: about 2,000 lines, seconds each on NVIDIA.
-    run "$config" admin --large-steps 150 --label "$config-stress"
-    # The same sources again and again: what caches would hide if compiles weren't all new.
-    run "$config" admin --same
-    # No GPU calls at all: what's left is CPU contention, not locks.
-    run "$config" burn
+    for control in $CONTROLS; do
+        case $control in
+        # What a pipeline costs on the render thread: must fail, or this bench sees nothing.
+        render) run "$config" render ;;
+        baseline) run "$config" baseline ;;
+        # The second thread at the lowest priority: scheduling, if it helps.
+        nice) run "$config" admin --nice 19 --label "$config-nice" ;;
+        # The largest shaders anyone should expect: about 2,000 lines, seconds each on NVIDIA.
+        stress) run "$config" admin --large-steps 150 --label "$config-stress" ;;
+        # The same sources again and again: what caches would hide if compiles weren't all new.
+        same) run "$config" admin --same ;;
+        # No GPU calls at all: what's left is CPU contention, not locks.
+        burn) run "$config" burn ;;
+        # About half a refresh after present for pipelines, as the design's fallback proposes.
+        fallback) run "$config" fallback --budget-ms "$budget" ;;
+        esac
+    done
     stop_sway
 done
 python3 "$ROOT/bench/gpu_admin_table.py" "$JSON"
