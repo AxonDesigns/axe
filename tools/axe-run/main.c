@@ -21,16 +21,25 @@
 // debug builds), and its defaults (AXE_RUN_WIDTH, AXE_RUN_HEIGHT, AXE_RUN_SCALE, AXE_RUN_TITLE,
 // AXE_RUN_FONT). A bundle on the command line replaces it.
 //
+// Built by axe_luau_app (bindings/luau), it runs Luau instead (AXE_RUN_LUAU), with the same options
+// and none of JavaScript's hot reload.
+//
 // Environment: UI_SCHEDULER, UI_GPU=software, UI_LOG, UI_TRACE.
 #include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-#ifdef AXE_DEV
+// Hot reload: JavaScript's.
+#if defined(AXE_DEV) && !defined(AXE_RUN_LUAU)
+#define RUN_DEV
 #include "runtime/app_internal.h"
 #include "script/host/host.h"
 #include "session.h"
+#endif
+#ifdef AXE_RUN_LUAU
+#include "axe_luau.h"
+#include "script/host/host.h"
 #endif
 #include "ui/ui.h"
 
@@ -78,7 +87,7 @@ static int usage(const char *argv0) {
     return 2;
 }
 
-#ifdef AXE_DEV
+#ifdef RUN_DEV
 static void wake_core(void *user) { ui_app_request_turn(user); }
 #endif
 
@@ -95,7 +104,7 @@ int main(int argc, char **argv) {
 #endif
 #ifdef AXE_RUN_DEV_ROOT
     const char *dev_root = AXE_RUN_DEV_ROOT, *dev_entry = AXE_RUN_DEV_ENTRY, *dev_work = AXE_RUN_DEV_WORK;
-#elif defined(AXE_DEV)
+#elif defined(RUN_DEV)
     const char *dev_root = NULL, *dev_entry = NULL, *dev_work = "axe-dev";
 #endif
     int i = 1;
@@ -125,7 +134,7 @@ int main(int argc, char **argv) {
         } else if (!strcmp(a, "--memory-limit") && more) memory_mb = atof(argv[++i]);
         else if (!strcmp(a, "--long-task") && more) long_task_ms = atof(argv[++i]);
         else if (!strcmp(a, "--dev")) dev = true;
-#ifdef AXE_DEV
+#ifdef RUN_DEV
         else if (!strcmp(a, "--dev-root") && more) dev_root = argv[++i];
         else if (!strcmp(a, "--dev-entry") && more) dev_entry = argv[++i];
 #endif
@@ -133,7 +142,7 @@ int main(int argc, char **argv) {
         else return usage(argv[0]);
     }
 
-#ifndef AXE_DEV
+#ifndef RUN_DEV
     if (dev) {
         fprintf(stderr, "--dev is only in development builds: Debug, or the AXE_DEV CMake option (docs/ui.md, \"Hot reload\")\n");
         return 2;
@@ -147,7 +156,13 @@ int main(int argc, char **argv) {
         .memory_limit = (size_t)(memory_mb * 1024 * 1024),
         .long_task_ns = (uint64_t)(long_task_ms * 1e6),
     };
-#ifdef AXE_DEV
+#ifdef AXE_RUN_LUAU
+    ui_script_runtime runtime;
+    axe_luau_runtime(&runtime, NULL);
+    ui_script_internal internal = {.runtime = &runtime};
+    script.internal = &internal;
+#endif
+#ifdef RUN_DEV
     ui_dev_channel *channel = NULL;
     ui_script_internal internal = {0};
     if (dev) {
@@ -185,7 +200,7 @@ int main(int argc, char **argv) {
         return 1;
     }
     ui_hooks_subscribe(app, on_trace, NULL, NULL);
-#ifdef AXE_DEV
+#ifdef RUN_DEV
     ui_dev_session *session = NULL;
     ui_dev_build_desc build = {dev_root, dev_work, AXE_TSX_PATH, AXE_ESBUILD_PATH, AXE_DEV_SOURCE_DIR};
     if (dev) {
@@ -228,11 +243,11 @@ int main(int argc, char **argv) {
             status = 1;
         }
     }
-#ifdef AXE_DEV
+#ifdef RUN_DEV
     ui_dev_session_stop(session); // before the app it wakes
 #endif
     ui_app_destroy(app);
-#ifdef AXE_DEV
+#ifdef RUN_DEV
     ui_dev_channel_destroy(channel);
 #endif
     if (strict && atomic_load(&errors) && !status) {

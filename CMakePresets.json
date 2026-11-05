@@ -50,7 +50,8 @@
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "RelWithDebInfo",
         "UI_SANITIZE": "address;undefined",
-        "UI_FUZZ": "ON"
+        "UI_FUZZ": "ON",
+        "UI_BUILD_LUAU": "OFF"
       }
     }
   ],

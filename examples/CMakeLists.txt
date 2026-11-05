@@ -32,3 +32,9 @@ axe_ts_app(layout_cards_ts ENTRY ${CMAKE_CURRENT_SOURCE_DIR}/layout_cards/main.t
 # And in TSX, with signals and components (docs/ui.md).
 axe_ts_app(layout_cards_tsx ENTRY ${CMAKE_CURRENT_SOURCE_DIR}/layout_cards/main.tsx
            WIDTH 980 HEIGHT 640 SCALE 150 TITLE "Axe — layout_cards (TSX)")
+
+# And in Luau: the second binding (bindings/luau).
+if(TARGET axe_luau)
+    axe_luau_app(spring_rect_luau ENTRY ${CMAKE_CURRENT_SOURCE_DIR}/spring_rect/main.luau
+                 TITLE "Axe — spring_rect (Luau)")
+endif()

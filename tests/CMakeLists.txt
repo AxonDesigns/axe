@@ -270,8 +270,8 @@ set_tests_properties(script_host PROPERTIES ENVIRONMENT "UI_GPU=software" TIMEOU
 # TypeScript: each test file is bundled and run inside the script host by axe-test-js,
 # headless on a paused clock (docs/typescript.md, "Tests"); tsc type-checks every package,
 # test and example with strict settings.
-add_executable(axe-test-js ts/runner.c)
-target_include_directories(axe-test-js PRIVATE ${PROJECT_SOURCE_DIR}/src)
+add_executable(axe-test-js ts/runner.c wire/reference.c)
+target_include_directories(axe-test-js PRIVATE ${PROJECT_SOURCE_DIR}/src ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_definitions(axe-test-js PRIVATE AXE_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
 target_link_libraries(axe-test-js PRIVATE ui)
 ui_target_warnings(axe-test-js)
@@ -369,6 +369,36 @@ if(UI_BUILD_EXAMPLES)
              --out ${CMAKE_CURRENT_BINARY_DIR}/spring_rect_ts.ppm)
     set_tests_properties(layout_cards_equivalence layout_cards_equivalence_dark_rtl spring_rect_ts
                          PROPERTIES ENVIRONMENT "UI_GPU=software" TIMEOUT 600)
+endif()
+
+# The Luau binding (bindings/luau): its wire package against the C codec, the host and the API
+# inside the host, under both schedulers, and spring_rect against C and TypeScript.
+if(TARGET axe_luau)
+    add_executable(axe-test-luau luau/runner.c wire/reference.c)
+    target_include_directories(axe-test-luau PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_compile_definitions(axe-test-luau PRIVATE AXE_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
+    target_link_libraries(axe-test-luau PRIVATE axe_luau luau)
+    set_source_files_properties(luau/runner.c PROPERTIES OBJECT_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/luau/testing.luau")
+    ui_target_warnings(axe-test-luau)
+    foreach(name wire host api)
+        foreach(scheduler single threaded)
+            add_test(NAME luau_${name}_${scheduler}
+                     COMMAND axe-test-luau ${CMAKE_CURRENT_SOURCE_DIR}/luau/${name}.test.luau --scheduler ${scheduler})
+            set_tests_properties(luau_${name}_${scheduler} PROPERTIES ENVIRONMENT "UI_GPU=software" TIMEOUT 300)
+        endforeach()
+    endforeach()
+    if(UI_BUILD_EXAMPLES)
+        add_test(NAME spring_rect_equivalence
+                 COMMAND ${CMAKE_COMMAND} -DC=$<TARGET_FILE:spring_rect> -DTS=$<TARGET_FILE:spring_rect_ts>
+                         -DLUAU=$<TARGET_FILE:spring_rect_luau> -DOUT=${CMAKE_CURRENT_BINARY_DIR}/equivalence-spring
+                         "-DTIMES=0;1;2.1;2.5;4.2;6.6" -P ${CMAKE_CURRENT_SOURCE_DIR}/ts/equivalence.cmake)
+        # An app that fails while loading is reported, and the frames go on.
+        add_test(NAME luau_failed_load
+                 COMMAND spring_rect_luau --headless --strict --out ${CMAKE_CURRENT_BINARY_DIR}/luau_failed_load.ppm
+                         ${CMAKE_CURRENT_SOURCE_DIR}/luau/failed_load.luau)
+        set_tests_properties(luau_failed_load PROPERTIES PASS_REGULAR_EXPRESSION "1 uncaught error\\(s\\) reported")
+        set_tests_properties(spring_rect_equivalence luau_failed_load PROPERTIES ENVIRONMENT "UI_GPU=software" TIMEOUT 600)
+    endif()
 endif()
 
 # A busy JS loop doesn't stop frames or springs (the C version: test_stall).

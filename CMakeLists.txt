@@ -5,7 +5,7 @@ if(NOT CMAKE_C_COMPILER_ID MATCHES "Clang" OR NOT CMAKE_CXX_COMPILER_ID MATCHES 
     message(FATAL_ERROR "Axe builds with Clang only (got ${CMAKE_C_COMPILER_ID} / "
                         "${CMAKE_CXX_COMPILER_ID}). Use the CMake presets or set "
                         "CMAKE_C_COMPILER=clang and CMAKE_CXX_COMPILER=clang++. C++ is only "
-                        "used to build HarfBuzz.")
+                        "used to build HarfBuzz and Luau.")
 endif()
 
 set(CMAKE_C_STANDARD 23)
@@ -17,6 +17,7 @@ option(UI_HOOKS "Compile tracepoints in (a relaxed atomic load each when unused)
 option(UI_BUILD_TESTS "Build the test suite" ON)
 option(UI_BUILD_EXAMPLES "Build the examples" ON)
 option(UI_FUZZ "Build the libFuzzer targets (use the fuzz preset)" OFF)
+option(UI_BUILD_LUAU "Build the Luau binding (bindings/luau), which guards the language layer" ON)
 # Hot reload (docs/ui.md): --dev in axe-run and the host's dev module table. On by default only in
 # Debug, so a release build holds none of it.
 if(CMAKE_BUILD_TYPE STREQUAL "Debug")
@@ -40,6 +41,9 @@ endif()
 
 add_subdirectory(third_party)
 add_subdirectory(src)
+if(UI_BUILD_LUAU)
+    add_subdirectory(bindings/luau)
+endif()
 add_subdirectory(tools)
 
 if(UI_BUILD_EXAMPLES)

@@ -1,14 +1,18 @@
-# The C, TypeScript and TSX versions of an example must draw byte-identical headless images at
-# the same times under both schedulers (tests/CMakeLists.txt: layout_cards_equivalence).
+# The C, TypeScript, TSX and Luau versions of an example must draw byte-identical headless images
+# at the same times under both schedulers (tests/CMakeLists.txt: layout_cards_equivalence,
+# spring_rect_equivalence).
 #
-#   cmake -DC=<c binary> -DTS=<ts binary> [-DTSX=<tsx binary>] -DOUT=<dir> -DTIMES="0;1.3"
+#   cmake -DC=<c binary> -DTS=<ts binary> [-DTSX=<tsx binary>] [-DLUAU=<luau binary>] -DOUT=<dir>
+#         -DTIMES="0;1.3"
 #         [-DARGS="--dark;--rtl"] -P equivalence.cmake
 file(MAKE_DIRECTORY "${OUT}")
 set(failures 0)
 set(ports TS)
-if(TSX)
-    list(APPEND ports TSX)
-endif()
+foreach(port TSX LUAU)
+    if(${port})
+        list(APPEND ports ${port})
+    endif()
+endforeach()
 foreach(scheduler single threaded)
     foreach(at IN LISTS TIMES)
         set(c_out "${OUT}/c-${scheduler}-${at}.ppm")
