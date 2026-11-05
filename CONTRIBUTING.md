@@ -46,6 +46,15 @@ script host by `axe-test-js`, and `ts_typecheck` runs `tsc` with strict settings
 [docs/typescript.md](docs/typescript.md). `layout_cards_equivalence` requires the C and
 TypeScript `layout_cards` to draw byte-identical images; change both together.
 
+## Luau
+
+[`bindings/luau`](bindings/luau/README.md) guards the language layer and isn't a product. It builds
+with everything else (`UI_BUILD_LUAU`), and its tests run in every preset but `fuzz`:
+`luau_wire`, `luau_host` and `luau_api` under each scheduler, and `spring_rect_equivalence`, which
+requires the C, TypeScript and Luau `spring_rect` to draw byte-identical images; change the three
+together. A wire change regenerates its encoders with the rest, and a new op needs a reference case
+in `tests/wire/reference.c`: `luau_wire` fails if an op has none.
+
 ## Fuzzing
 
 Every target in `fuzz/` runs briefly in CI (the `fuzz` preset's tests) and for 10 minutes

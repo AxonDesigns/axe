@@ -12,17 +12,35 @@ ui_app_desc desc = {.surface = {...}, .script = &script};
 
 | Layer | Where | Per language? |
 | --- | --- | --- |
-| Engine interface | `src/script/engine.h`; QuickJS-ng in `src/script/quickjs/` | One adapter per engine |
-| Runtime host | `src/script/host/`: turns, timers, errors, host API, bundles | One per runtime (shared by JS engines) |
+| Runtime host interface | `src/script/host/runtime.h`: what the logic actor calls, and what every host shares | No |
+| Runtime host | `src/script/host/`: the turn, the host API, bundles | One per runtime (shared by JS engines) |
+| Engine interface | `src/script/engine.h`; QuickJS-ng in `src/script/quickjs/` | One adapter per JS engine |
 | Wire package | `@axe/wire`, generated from `idl/wire.idl` | Generated per language |
 | Language framework | `@axe/core` (later: signals, TSX) | Yes |
 
+## Runtime hosts
+
+A language reaches the core through three functions, `ui_script_runtime` in
+`src/script/host/runtime.h`: create, one turn per event buffer, destroy. A turn takes an event
+buffer and gives a command buffer, and nothing in it names a language. JavaScript's host is
+`src/script/host/host.c`; [`bindings/luau`](../bindings/luau/README.md) is a second one, selected by
+`ui_script_internal.runtime`.
+
+`runtime.h` also holds what a host shouldn't write again: timers on the animation clock and their
+wire timer, the turn's time, and reporting. So [Timers](#timers) and [Errors](#errors) hold for every
+language. The rest of this page is JavaScript's host. What it has that another runtime may not:
+
+- **Microtask checkpoints and rejections:** no promises, none of either.
+- **Commands and events without copies:** a language whose VM can't borrow host memory copies them.
+- **Leak reports:** they need a finalizer that can run code.
+
 ## Engine interface
 
-`src/script/engine.h` is the contract between the host and an engine. Nothing outside
-`src/script/<engine>/` names an engine type; QuickJS-ng is the only implementation. Another
-engine (JavaScriptCore, V8), or another language with a comparable runtime (Luau, Dart),
-implements the same header.
+`src/script/engine.h` is the contract between JavaScript's host and a JS engine. Nothing outside
+`src/script/<engine>/` names an engine type; QuickJS-ng is the only implementation. Another JS
+engine (JavaScriptCore, V8) implements the same header. Another language doesn't: the host above it
+evaluates JavaScript, and the header promises what only JS has (promises, ES modules, ArrayBuffers
+over host memory). It implements `ui_script_runtime` instead.
 
 **Model.**
 

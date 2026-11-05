@@ -3,6 +3,104 @@
 Choices the architecture document leaves open, recorded as they are made. Newest
 milestone first.
 
+## Milestone 3b.5: a second language binding (Luau)
+
+### The result
+`spring_rect` in Luau draws byte-identical images to C and TypeScript at six times, under both
+schedulers (`spring_rect_equivalence`). The wire format and the IDL's grammar needed no change, and
+neither did the core. The layer that assumed JavaScript was the host: the logic actor called the JS
+host directly, and `engine.h` turned out to be a JS engine interface.
+
+### The decisions
+- **Luau 0.745, a submodule like the others,** built by a project-owned `third_party/luau.cmake`:
+  VM and compiler only. `LUA_USE_LONGJMP`, since errors can't cross C frames as C++ exceptions, and
+  C linkage through defines that apply to Luau's C++ alone. `ui` doesn't link it; `axe_luau` is a
+  library of its own, and the fuzz preset doesn't build it.
+- **The binding lives in `bindings/luau/`,** not `src/script/<engine>/`: it isn't an engine behind
+  `engine.h`, and it's easy to remove.
+- **A second host, not an adapter under `engine.h`.** See below. The seam is the three functions the
+  logic actor already called, now a struct (`ui_script_runtime`).
+- **The seam is selected by `ui_script_internal.runtime`,** not `ui_script_desc`: the binding isn't a
+  product, so the public header gains nothing.
+- **Timers, the re-arm, the turn's time and reporting moved to `src/script/host/runtime.c`,** shared
+  by both hosts. That went beyond "reuse the host as it is", deliberately: a copy would have let
+  the two languages' timers drift, and it is the same code, moved, with the JS host's behavior
+  unchanged.
+- **Encoders commit last.** `op()` reserves and `commit()` publishes, so a method that fails halfway
+  leaves nothing, with no check needed for what the checks don't cover (a handle that isn't one).
+- **Generated names can't collide with the IDL's:** `set_styles` has a parameter `ids` and `set_color`
+  one named `b`, so generated code uses `IDS`, `RT`, `STYLES` and `_`-prefixed locals, which the IDL's
+  name rule forbids.
+- **Top-level state goes in tables:** Luau allows 200 locals per function, which is why the output
+  isn't shaped like the TypeScript's.
+- **`utf8.len` is the UTF-8 check.** It looked too lax; it is strict (surrogates, overlongs, past
+  U+10FFFF), and the test that assumed otherwise was wrong.
+- **`spring_rect` gained `--at`,** stepped as `axe-run` steps. C and TypeScript had never been compared:
+  they match. The reference cases moved from `tests/ts/runner.c` to `tests/wire/reference.c`, gained a
+  `templates` case, and `luau_wire` fails if an op or event has none.
+- **Declarations go in property id order.** `pairs` has no order, and a logical property must beat
+  its physical side deterministically.
+
+### What didn't fit, and what happened to it
+
+**Wire format: nothing had to change.**
+
+| Assumption | Luau | Outcome |
+| --- | --- | --- |
+| "Commands and events cross without copies" (docs/script.md) | A `buffer` owns its bytes inline and can't wrap host memory | Each is copied once per turn. Nothing on the wire depends on it. The claim is now marked as JS's |
+| Fields are 4-aligned for typed-array views | `buffer` reads any offset | Harmless |
+| `time` is rounded where there are no 64-bit integers | Doubles, as in JS | Fits. Luau's new `integer` type is behind a flag, so not used |
+| UTF-8 offsets at the ABI, converted by each binding | Strings are bytes | Fits better than JS: no conversion at all |
+| Strings are well-formed | A Luau string holds any bytes | **Found a gap,** below |
+
+**The gap in the wire's description.** The core rejects invalid UTF-8 in `style_value.string`, and in
+`set_text`'s `strings` and `ellipsis`, dropping the op. The IDL says so for none of them: no `utf8`
+check, because TypeScript can't produce such a string. So "encoders validate as the core does" held
+by luck of the language. The Luau generator hard-codes the check for style strings, and `axe.luau`
+checks families and ellipses. **Proposed:** `utf8 no_nul` in the IDL for the style string, `utf8` for
+`ellipsis` and `strings`, so C, TypeScript and Luau all get it from one place. Not done here: it
+touches the C `_check` path and costs TypeScript a scan on every style string.
+
+**IDL and generator.**
+
+| Assumption | Outcome |
+| --- | --- |
+| Names work as identifiers in every language. `end` is a Luau keyword (`text_span.end`, `flex_align.end`, `text_align.end`) | Changed: the Luau target quotes keywords. The name can't change (`--compat-base`), so the API calls a span's end `stop`. **Proposed:** a test that lists each target's reserved words against the IDL, for the next language |
+| Language-neutral helpers lived in `idl_ts.py` (`user_fields`, `as_object`, `optional_tails`, `short_header_fields`, `union_kind_of`) | Changed: moved to `idl_model.py`. TypeScript's output is byte-identical |
+| `leaves()` builds TypeScript syntax into its expressions (`[0]!`, camelCase) | Left: `idl_luau.py` has its own |
+| Bytes are `Uint8Array`, arrays 0-based, `switch` exists, 32-bit packing | Target-local: strings, `ipairs`, tables of functions, the `buffer` library. No grammar change |
+| An encoder's atomicity comes from checking everything first | TypeScript still does; a value no check covers writes zeros. Luau's commit-last is stronger. **Proposed, low priority:** the same in `WireWriter` |
+
+**The runtime host interface.**
+
+| Assumption | Outcome |
+| --- | --- |
+| docs/script.md: "another language with a comparable runtime (Luau, Dart) implements the same header" | **Wrong, corrected.** `engine.h` can't be implemented: `ui_js_array_buffer_external` and detach have no Luau equivalent, and neither do ES modules (`define_module`, `eval_module`, `module_namespace`), promises, microtasks or the rejection tracker. Scopes, refs, natives, errors and bytecode would fit |
+| `host.c` is engine-independent ("nothing here names QuickJS") | True of QuickJS, not of JavaScript: `install()` evaluates `prelude.js` unconditionally, so a non-JS engine fails before the app. Not changed |
+| The logic actor knows one host | Changed: `ui_script_runtime`. **Proposed, when a second language is a product:** a public `ui_script_desc.runtime` |
+| `ui_script_internal` is the tools' way in | `setup` takes a `ui_js *`, so Luau has its own (`axe_luau_config`). **Proposed:** `void *` and a per-runtime config, with the runtime proposal above |
+| A task ends with a microtask checkpoint | JS's. Luau has no microtasks: `task_end` only reports long tasks. The shared part is `ui_script_report_long_task` |
+| `UI_TRACE_SCRIPT_REJECTION` and `_LEAK` | Never fire in Luau: no promises, and no finalizer can run Luau code. There is no `__gc`, and a userdata destructor runs inside the collector, where touching the VM isn't safe. "Language finalizers are only a safety net", so this loses no guarantee. **Proposed if it matters:** nodes as userdata whose destructor queues the slot for the host |
+| A failure can't stop the app: an engine's calls return errors | A Luau error outside a protected call aborts the process, so every VM call that can fail runs in a `lua_pcall` or `lua_cpcall`, the event copy too |
+| Async results are "wrapped as Promises or Futures" | Fits as a callback: the request id and its event are all it needs |
+| A bundle is one ES module; `.axbc` carries a hash of the JS engine | Luau gets one chunk, and `require` finds built-in modules. No bytecode, so `bundle.c` isn't used: its engine id comes from `ui_js_engine_name`. **Proposed if Luau bytecode is ever wanted:** take the id from the runtime |
+| `axe-run` and hot reload | `AXE_DEV` meant "this binary has JS hot reload". `main.c` now says `RUN_DEV`, which Luau leaves off |
+
+**The shared host costs nothing that shows.** Callgrind on CI's Ubuntu image, against
+`bench/baselines.json`: everything passes, the worst being `script_dispatch` at +0.22%. Against master
+with the same local toolchain, nothing moved past 0.43% either way, and `bench_layout` not at all.
+Local counts can't be compared with the baselines: clang 23 fails 11 cases on master too.
+
+**In the TypeScript API, not the wire:** `Decls` relies on JS objects keeping insertion order; `undefined`
+and `null` mean different things in `setText`, which Luau spells `nil` and `false`.
+
+### What the binding took
+Hand-written, excluding generated code, tests and blank lines and comments: 412 lines of C and 10 of
+header for the host, 461 of Luau for the API, 145 for the wire package's runtime and reader: **1,028
+lines** (1,295 with comments and blanks). Also hand-written: the generator target, 579 lines of
+Python, and 57 for the example. Generated: 1,099 lines of Luau. `runtime.c` and `runtime.h` are 317
+lines, most of them moved out of `host.c`, which went from 853 lines to 714.
+
 ## Milestone 3b.4: hot reload follow-ups
 
 ### Stable modules are boundaries

@@ -117,7 +117,7 @@ Design rules:
 
 **Dart hosting.** The recommended model embeds the Dart VM on the logic thread, as Flutter does, so the core keeps the OS main thread. It brings Dart hot reload in development and AOT snapshots in release; the cost is a heavy VM build. Dart as host through dart:ffi conflicts with the core owning the main thread and is not planned.
 
-**Keeping the layer honest.** The C test harness drives the C API and wire protocol directly from day one. The vertical slice adds a minimal throwaway second binding (Luau or Dart creating nodes and handling a tap) to expose leaks.
+**Keeping the layer honest.** The C test harness drives the C API and wire protocol directly from day one. A minimal second binding ([`bindings/luau`](../bindings/luau/README.md), milestone 3b.5) has its own runtime host and draws `spring_rect` byte-identically to C and TypeScript in CI; what it found is in [decisions.md](decisions.md), milestone 3b.5.
 
 **Language benchmarks** run in the vertical slice, with thresholds set before running:
 
