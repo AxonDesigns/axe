@@ -57,6 +57,11 @@ The approved design (3b plan, section 6), and what 3b.1 and 3b.2 changed:
   `ui_for_mount_10k` (isolated by building the same tree without the flag), and that mount is a
   tracked target. Labels rewrite nothing else.
 
+### CI
+No job ran release tests, so `bench-callgrind`, the one release build, also runs
+`axe_run_refuses_dev` and `bundle_no_dev_code`, with `--no-tests=error`: `ctest -R` passes when
+nothing matches, and a renamed test would stop being checked without a sound.
+
 ### Tried, no gain
 Stripping the inline source map from module source before the engine compiles it: the heap per
 edit didn't change at all, because QuickJS doesn't keep the text. A plain module of 10 functions
