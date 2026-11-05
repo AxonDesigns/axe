@@ -40,3 +40,6 @@ set(UI_WEBGPU_HEADERS "${_wgpu_dir}/ffi/webgpu-headers/webgpu.h" "${_wgpu_dir}/f
     PARENT_SCOPE)
 include(${CMAKE_CURRENT_SOURCE_DIR}/harfbuzz.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/quickjs.cmake)
+if(UI_BUILD_LUAU)
+    include(${CMAKE_CURRENT_SOURCE_DIR}/luau.cmake)
+endif()

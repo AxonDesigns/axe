@@ -11,6 +11,7 @@
 | Corrosion | v0.6.1 (`1499b14`) | copied into `third_party/corrosion` | MIT |
 | HarfBuzz | 15.0.0 (`35f656a`) | git submodule `third_party/harfbuzz`, built by `third_party/harfbuzz.cmake` | Old MIT |
 | QuickJS-ng | v0.18.0 (`d7215b0`) | git submodule `third_party/quickjs-ng`, built by `third_party/quickjs.cmake` (engine only: no `quickjs-libc`, no `qjs`/`qjsc`) | MIT |
+| Luau | 0.745 (`2a3d893`) | git submodule `third_party/luau`, built by `third_party/luau.cmake` (VM and compiler only: no analyzer, no native code generation, no tools); `bindings/luau` only | MIT |
 
 wgpu-native is built with `--no-default-features --features wgsl,vulkan` (Linux needs only
 Vulkan and WGSL) and always in the `release` profile.
@@ -27,7 +28,7 @@ Vulkan and WGSL) and always in the `release` profile.
 | Tool | Version |
 | --- | --- |
 | Rust | 1.97 (`rust-toolchain.toml`: one toolchain for wgpu-native and axe-tsx; wgpu-native pins 1.93 but builds on it) |
-| Clang / Clang++ | 19 or newer (C23, `#embed`); CI pins 22, developed with 22–23. C++ only for HarfBuzz (C++17) |
+| Clang / Clang++ | 19 or newer (C23, `#embed`); CI pins 22, developed with 22–23. C++ only for HarfBuzz and Luau (C++17) |
 | CMake | 3.28 or newer |
 | Node.js | 24 (CI); npm installs the TypeScript tools only, nothing at run time uses Node |
 | esbuild | 0.28.2, pinned by `ts/package-lock.json` (MIT); bundles TypeScript apps and tests |
