@@ -160,7 +160,7 @@ All GPU work happens on the render thread through the standard webgpu.h, impleme
 - **Damage tracking** limits redraws to changed regions. Each surface renders into a persistent back store, a retained texture blitted to the swapchain, because partial redraw needs last frame's pixels and `encode` clears the swapchain every frame. Damage has two sources: node changes, and external damage, a new resource version with a sub-rect, since GPU output changes with no scene change. A node that reads its backdrop inflates the damage under it by its radius.
 - **Frame pacing** uses each platform's timing source: Wayland frame callbacks and presentation-time, the DXGI frame-latency waitable object, CVDisplayLink. Variable refresh rates are supported, and the animation clock receives the predicted present time.
 - **Pipeline cache.** All built-in pipeline variants are precompiled at startup to avoid shader-compile stalls. User shaders compile at load, on the admin thread.
-- **A lost device** stops rendering and leaves the app running. The render actor stops submitting and reports it once, through the `UI_TRACE_DEVICE_LOST` hook and the log. Frames finish undrawn at about 60 Hz, so commands keep applying and logic keeps running, and windows keep their last frame. Recovery is M5h. wgpu-native aborts the process if the driver reports the loss from inside submit or acquire ([decisions.md](decisions.md), "GPU spike").
+- **A lost device** stops rendering and leaves the app running. The render actor stops submitting and reports it once, through the `UI_TRACE_DEVICE_LOST` hook and the log. Frames finish undrawn at about 60 Hz, so commands keep applying and logic keeps running, and windows keep their last frame. Recovery is M5h. wgpu-native would abort the process if the driver reports the loss from inside submit or acquire, so we build it with a patch ([VERSIONS.md](../third_party/VERSIONS.md), "Patches"), and CI fakes a lost driver on lavapipe at each of those calls ([decisions.md](decisions.md), "GPU spike").
 - **Renderer-agnostic display list.** The display list does not depend on WebGPU, so a CPU reference renderer can be added later for deterministic golden tests and as a last-resort fallback.
 
 ## GPU layer
@@ -524,7 +524,9 @@ Budgets are enforced in CI with benchmarks from the first milestone. Targets mar
 - **An incremental display list** that re-encodes only changed subtrees.
 - **Layer caching with damage tracking** ("Rendering").
 
-It passes when the missed-refresh [tracked targets](ui.md#tracked-targets) are met, and when a new benchmark shows that the core's frame time scales with the number of changed nodes, not the total.
+It passes when the late-frame [tracked targets](ui.md#tracked-targets) are met, and when a new benchmark shows that the core's frame time scales with the number of changed nodes, not the total.
+
+The gate is Axe's own work, not the compositor's: the share of frames whose core and render work, up to submit, finishes after the frame's deadline, at 60 and 144 Hz. The time from frame callback to `FRAME_BEGIN` is measured beside it, to show delays in pacing. A headless sway can't give a true 144 Hz ([decisions.md](decisions.md), "GPU spike"), so end-to-end runs on a real 144 Hz display validate the result but don't gate it.
 
 **M3c also lays the GPU layer's foundations,** since retrofitting them after an incremental display list exists would mean reworking it ([gpu-design.md](gpu-design.md), section 4):
 
@@ -544,7 +546,7 @@ M3c starts with three entry tests, since the code can't settle them:
 2. Partial redraw works on `BGRA8UnormSrgb` and `RGBA8UnormSrgb` targets alike.
 3. `wl_surface.damage` helps or not on KWin once the whole swapchain image is redrawn each frame.
 
-M5a comes after M3c, so M3c tests external damage with a fake resource version. M5a to M5h are specified in [gpu-design.md](gpu-design.md), section 3; only M5f waits for M4.
+M5a comes after M3c, so M3c tests external damage with a fake resource version. M5a to M5h are specified in [gpu-design.md](gpu-design.md), section 3, and its addendum changes M5a: a save-to-pixels criterion against a reference shader, admin-queue priorities and cancellation, module errors before pipelines finish, the first draw with a new pipeline measured first, and the pipeline disk cache moved in from M5h. Only M5f waits for M4.
 
 ### The vertical slice
 

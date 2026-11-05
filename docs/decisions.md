@@ -15,9 +15,9 @@ case within 2% of its baseline.
   1.9 ms. The fallback, on the render thread, missed 61% to 81% of refreshes.
 - **The pass criterion is met at 60 Hz on the GPU, not shown at 144 Hz, and not met on lavapipe.**
   See below; none of the three is a lock.
-- **Device loss:** the app now survives a loss the driver reports from present. A loss it reports
-  from submit or acquire still aborts, inside wgpu-native. **That needs a decision:** a two-site
-  patch closes it, and it's kept unapplied, below.
+- **Device loss:** the app now survives a loss the driver reports from present, submit, a poll or
+  acquire. All but present need a two-site patch to wgpu-native, which we now build with, and CI
+  tests all four on lavapipe.
 
 ### Off-thread creation: what was measured
 `bench_gpu_admin` runs the real app and renderer in a headless sway: `list10k` with 100 rows, writing
@@ -92,10 +92,11 @@ NVIDIA's disk cache cut a small pipeline from 10 ms to 0.6 ms.
 
 ### What this changes
 - **M5a's pass criterion needs a better place to run.** The 144 Hz half can't be judged in a headless
-  sway. See "Open".
+  sway. M3c's measure doesn't cover it either. See "Open".
 - **M3c's has the same problem,** and sooner. Its tracked target is at most 0.5% missed at 144 Hz, and
   this setup misses up to 9.8% with 100 rows, with frames well inside the budget. It also runs at
-  160 Hz, so `docs/ui.md`'s "144 Hz" figures are about 160 Hz. Settle how to measure before M3c.
+  160 Hz, so `docs/ui.md`'s "144 Hz" figures are about 160 Hz. M3c's gate moved as a result: see
+  "What was decided".
 - **M5a's save to pixels, 100 ms at p95, holds only for small shaders.** The large one takes about
   a second for its two pipelines. The criterion should name a reference shader.
 - **Cost grows faster than size:** twice the lines took 3 times as long, and 4 times the lines
@@ -104,7 +105,8 @@ NVIDIA's disk cache cut a small pipeline from 10 ms to 0.6 ms.
 - **Modules are cheap and pipelines aren't,** by 30 to 100 times. So a shader's errors can be
   reported in milliseconds, long before its pipelines are done, and validation can come first.
 - **The disk cache pays off more than planned:** 45 to 200 times on the GTX, where M5h asks for an
-  80% cut. It's worth more than the plan assumed, though its place in the order needn't change.
+  80% cut. That was NVIDIA's own cache, though, and wgpu-native can't create one yet: see
+  "What was decided".
 - **Not measured: the first use of a new pipeline.** This bench never draws with what it creates. A
   driver may do lazy work at the first bind, on the render thread. M5a should measure that first.
 - **Any lavapipe window test needs sway's pixman renderer** (below), M3c's entry tests included.
@@ -149,7 +151,7 @@ in debug, release, asan and tsan.
 `VK_ERROR_DEVICE_LOST` from a chosen call, needing no real GPU hang. Same result on the GTX 1650 and
 on lavapipe:
 
-| First call to see the loss | This branch | With the patch |
+| First call to see the loss | Without the patch | With it |
 | --- | --- | --- |
 | `vkQueuePresentKHR` | Survives | Survives |
 | `vkQueueSubmit` | **Aborts** | Survives |
@@ -159,13 +161,43 @@ on lavapipe:
 Which call sees a real loss first depends on the driver, and submit is a likely one. No real GPU hang
 was tried: it would risk the desktop.
 
-C can't catch those panics. `tools/vk-lost-layer/wgpu-native-device-lost.patch` changes two calls,
-`wgpuQueueSubmit` and `wgpuSurfaceGetCurrentTexture`, to report through the error sink instead. It
-isn't applied: wgpu-native is a pinned, unmodified submodule, so applying it means a fork or a
-patch step. The alternative is to report it upstream and accept the abort until a release has it.
+C can't catch those panics. `third_party/patches/wgpu-native-device-lost.patch` changes two calls,
+`wgpuQueueSubmit` and `wgpuSurfaceGetCurrentTexture`, to report through the error sink instead.
 
 A loss first seen on another thread, as M5a's admin thread could, also races the probe: it can
 happen just after a probe passes. The patch closes that too.
+
+### What was decided
+After reading these results:
+
+1. **wgpu-native is patched at build time, with no fork.** Upstream's trunk has the same two calls,
+   so the patch went upstream as [#641](https://github.com/gfx-rs/wgpu-native/pull/641), and it goes
+   once a release includes it (`third_party/VERSIONS.md`, "Patches").
+   - The build copies the submodule to `<build>/third_party/wgpu-native-patched`, applies the patch
+     and builds the copy. Patching the submodule in place would leave it dirty, and shared
+     between presets.
+   - The copy is redone only when a source or a patch changes, because each redo touches the
+     patched files and rebuilds the crate. CI's cache key covers `third_party/patches`.
+   - A patch that stops applying fails the configure, so an upgrade can't drop it silently.
+   - CI's new `device-loss` job runs the layer on lavapipe at present, submit, a poll and acquire.
+2. **M3c's gate is Axe-side.** It's the share of frames whose core and render work, up to submit,
+   finishes after the frame's deadline, at 60 and 144 Hz, with the time from frame callback to
+   `FRAME_BEGIN` beside it. End-to-end runs on a real 144 Hz display validate but don't gate.
+   - A frame's deadline is one refresh period after its frame callback. The core had no such term,
+     so this fixes it.
+   - The thresholds stay as they were, on the new measure: 0 at 60 Hz, at most 0.5% at 144 Hz.
+   - `docs/ui.md` now says its "144 Hz" figures were about 160 Hz. They weren't measured again.
+3. **The window criterion doesn't apply on lavapipe,** since its miss is CPU contention in a software
+   renderer.
+4. **`TIME` wraps every 3,600 s,** as one named constant. The addendum stands.
+5. **M5a changes,** in `docs/gpu-design.md`'s addendum: a save-to-pixels criterion against a reference
+   shader, admin-queue priorities and cancellation, module errors before pipelines finish, the
+   first draw with a new pipeline measured first, and the pipeline disk cache moved in from M5h.
+
+**The cache move has a catch.** At the pin and on trunk, wgpu-native has the feature flag but no
+function to create a pipeline cache, and [the pull request adding one](https://github.com/gfx-rs/wgpu-native/pull/618)
+is a draft. So the 45 to 200 times was NVIDIA's disk cache, which Axe doesn't control, and M5a
+has to choose how to build its own.
 
 ### The run that took the machine down
 The first full run filled the RAM and froze the desktop, and the machine needed a hard reset. It
@@ -190,11 +222,16 @@ The runs after these changes stayed above 4.8 GiB available, and none peaked abo
   present, so the fallback needed no code in the renderer.
 
 ### Open
-- [ ] **wgpu-native:** apply the patch, or report it upstream and accept the abort?
-- [ ] **How to measure 144 Hz.** A real display at a true rate, or a compositor with a finer timer.
-  M3c's tracked targets and M5a's criterion both depend on it.
+- [x] **wgpu-native:** patched at build time, and sent upstream. See "What was decided".
+- [x] **How M3c measures 144 Hz:** Axe-side, the same section.
+- [ ] **[#641](https://github.com/gfx-rs/wgpu-native/pull/641)** isn't merged. Until a release has it,
+  every wgpu upgrade carries the patch.
+- [ ] **M5a's "0 added missed refreshes" at 144 Hz** is still end-to-end. M3c's measure stops at
+  submit, so it can't see a stall in present, which is what this criterion is for. It needs a real
+  144 Hz display or its own measure.
 - [ ] **What delays frames at "144 Hz"** with frame time well inside the budget. It may be this
-  headless setup, or it may be Axe's pacing. A measure from frame callback to `FRAME_BEGIN` would tell.
+  headless setup, or it may be Axe's pacing. M3c's measure from frame callback to `FRAME_BEGIN` will tell.
+- [ ] **How M5a builds the pipeline disk cache,** given that wgpu-native can't create one yet.
 
 Run it, on every wgpu upgrade:
 

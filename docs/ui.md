@@ -585,8 +585,13 @@ The language benchmarks of milestone 3b, with thresholds agreed before they ran.
 | B2 | A turn writing 100 items' signals | p50 1.5 ms, p99 2.1 ms | ≤ 2, ≤ 4 ms ✓ |
 | B2 | Update delay, a turn's writes to the screen | p99 1.75 frames | ≤ 2 frames ✓ |
 | B2 | Missed refreshes, 10,000 rows streaming | about 24 fps whatever the refresh rate | 0 at 60 Hz, ≤ 0.5% at 144 Hz ✗ |
-| B2 | The same with 1,000 rows | 0 at 60 Hz; about 26% at 144 Hz | |
+| B2 | The same with 1,000 rows | 0 at 60 Hz; about 26% at "144 Hz", really about 160 Hz | |
 | B3 | 1,000 bound texts updated in one turn | 7.2 ms | ≤ 8 ms ✓ |
+
+**"144 Hz" here means about 160 Hz.** A headless sway times its output in whole milliseconds, so
+asking for 144 Hz gives a 6 ms timer and a period of about 6.2 ms. Every "144 Hz" result on this
+page ran that way, and none was measured at a true 144 Hz
+([decisions.md](decisions.md), "GPU spike").
 
 **What fails, and why.**
 - **Mount and memory.** These are the cost of creating 10,000 rows' worth of JS objects in an
@@ -595,8 +600,8 @@ The language benchmarks of milestone 3b, with thresholds agreed before they ran.
   interpreter's loop 44%, creating properties 15%, garbage collection 9%.
 - **Missed refreshes.** These are the core's, not JS's: frames never wait for JS. With 30,000
   nodes, the core rebuilds the display list (about 18 ms) and the renderer encodes it (about
-  20 ms) every frame. With 1,000 rows, those take about 4.7 ms a frame, near 144 Hz's 6.9 ms
-  budget. Culling, an incremental display list and layer caching come in M3c, the core's
+  20 ms) every frame. With 1,000 rows, those take about 4.7 ms a frame, near the 6.2 ms budget
+  of those runs, and 144 Hz's 6.9 ms. Culling, an incremental display list and layer caching come in M3c, the core's
   frame cost ([`architecture.md`](architecture.md), "Roadmap").
 - **The update path itself passes**: the turn with 100 writes, 1,000 text updates in a turn,
   and the update delay.
@@ -618,11 +623,23 @@ WAYLAND_DISPLAY=<headless sway> build/release/bench/bench_ui_live [--rows=N] [--
 ### Tracked targets
 
 The failed thresholds aren't relaxed. Each is a target a later milestone must meet, with the
-same benchmark:
+same benchmark. For M3c, the gate has moved from missed refreshes to late frames, a measure that
+doesn't depend on the compositor:
 
 | Measure | Current result | Threshold | Expected in |
 | --- | --- | --- | --- |
 | B2 mount, 10,000 rows (`list10k`, JS) | about 450 ms | ≤ 300 ms | M4: virtualized lists and lighter row objects |
 | B2 JS heap per row after mounting | 3.3 KB | ≤ 2 KB | M4: lighter row objects, and a store that creates per-item signals lazily, only for values that are read |
-| B2 missed refreshes, 10,000 rows streaming | about 24 fps whatever the refresh rate | 0 missed at 60 Hz, ≤ 0.5% at 144 Hz | M3c: the core's frame cost |
-| B2 missed refreshes, 1,000 rows at 144 Hz | about 26% missed | ≤ 0.5% | M3c: the core's frame cost |
+| B2 late frames, 10,000 rows streaming | about 24 fps whatever the refresh rate | 0 late at 60 Hz, ≤ 0.5% at 144 Hz | M3c: the core's frame cost |
+| B2 late frames, 1,000 rows at 144 Hz | about 26% of refreshes missed, at about 160 Hz | ≤ 0.5% | M3c: the core's frame cost |
+
+**A late frame** is one whose core and render work, up to submit, finishes after its deadline: one
+refresh period after its frame callback, so 16.7 ms at 60 Hz and 6.9 ms at 144 Hz. The two current
+results are end-to-end missed refreshes, from before this change, so they show the size of the
+problem rather than the same measure. M3c's benchmark reports:
+- the share of late frames at 60 and 144 Hz, which is the gate;
+- the time from frame callback to `FRAME_BEGIN`, beside it, which shows delays in pacing.
+
+End-to-end runs on a real 144 Hz display validate the result but don't gate it. Windows on lavapipe
+aren't judged by these or by the spike's frame-time criterion: what they miss is CPU contention in
+a software renderer ([decisions.md](decisions.md), "GPU spike").
